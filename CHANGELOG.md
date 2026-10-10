@@ -9,7 +9,7 @@
 - Stronger secret redaction on every platform, including credentials typed in a command, and restored tool results come back intact.
 - `kill-stale` only acts when it can prove a session is not the one it runs in, and only on your own sessions.
 
-Thanks to @alexgr-agent for four pull requests, and to @rexplx, @Reetryyy, @hexsprite and @reach4thelasers for the reports.
+Thanks to @rexplx, @Reetryyy, @hexsprite and @reach4thelasers for the reports.
 
 ## [5.13.36] - 2026-10-08
 
