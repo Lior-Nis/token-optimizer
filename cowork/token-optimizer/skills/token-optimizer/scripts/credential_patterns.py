@@ -1158,7 +1158,7 @@ _PATTERN_ANCHORS = {
 # os.environ['X'], Optional[str]), a $VAR / ${VAR} / $(cmd) reference, an empty
 # string, and the operators ==, => and :=.
 #
-# Lead decision (briefs/redact-key-rule.md): before a COLON the keyword KEY only
+# Before a COLON the keyword KEY only
 # counts inside a compound (api_key, x-api-key, SECRET_KEY, apiKey), so React
 # "key: item.id", JSON "key": "user_id", "primary key: id", "monkey: banana" and
 # "hotkey: ctrl+k" stay readable. With "=" bare KEY=value is still hidden.
@@ -1172,7 +1172,7 @@ _PATTERN_ANCHORS = {
 # The optional opening quote is taken atomically (lookahead plus backreference):
 # when a skip rule rejects the value after the quote, the engine must not retry
 # with the quote counted as part of the value (that would redact max_tokens="4096"
-# and re-wrap a placeholder). The TS engines backtrack there; see the r2a report.
+# and re-wrap a placeholder). The TS engines backtrack there.
 #
 # Cost follows the keyword hits, not the words: str.find per keyword (C speed)
 # locates candidates and the regex is tried only there.
