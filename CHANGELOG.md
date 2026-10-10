@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.13.37] - 2026-10-11
+
+- Slim desktop status bar: one compact line by default, unfold for detail, with a link to the full dashboard.
+- Advice from your own usage: the dashboard measures whether a different compact window or a 1 hour subagent cache would pay on your history, and says so either way. Nothing is changed for you.
+- Context % you can trust: the desktop bar follows `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and compaction counts match what happened.
+- Lighter and clearer on Windows: hooks start fewer helper processes, the health check counts real sessions only, and printed commands paste into cmd, PowerShell and Git Bash.
+- Stronger secret redaction on every platform, including credentials typed in a command, and restored tool results come back intact.
+- `kill-stale` only acts when it can prove a session is not the one it runs in, and only on your own sessions.
+
+Thanks to @alexgr-agent for four pull requests, and to @rexplx, @Reetryyy, @hexsprite and @reach4thelasers for the reports.
+
 ## [5.13.36] - 2026-10-08
 
 - Up-to-date model prices: haiku_5_5, sonnet_5_5.
