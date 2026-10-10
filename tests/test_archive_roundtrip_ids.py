@@ -1,4 +1,4 @@
-"""Archive id and round-trip fidelity (sweep findings F7, F9a, F9b, F9c).
+"""Archive id and round-trip fidelity.
 
 F7  The Codex backfill keyed entries with a lossy sanitizer, so ``a b``, ``a.b``
     and ``a_b`` all landed on ``a_b`` and the later outputs were silently dropped.

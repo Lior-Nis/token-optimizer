@@ -283,13 +283,13 @@ def test_override_interpreter_keeps_cwd(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# An exported ``cd`` shell function must not reach the hook's stdout (finding 4),
-# and the launcher must never leave a directory it cannot return to (finding 9).
+# An exported ``cd`` shell function must not reach the hook's stdout,
+# and the launcher must never leave a directory it cannot return to.
 # ---------------------------------------------------------------------------
 
 # These drive the launcher through ``bash -c`` wrappers, remove the current
 # directory from under a process, and chmod 000 it: POSIX semantics. On Windows
-# runners ``bash`` also resolves to the WSL stub (see final-r3 finding 1).
+# runners ``bash`` also resolves to the WSL stub.
 posix_only = pytest.mark.skipif(
     os.name == "nt", reason="POSIX cwd/chmod semantics; bash is the WSL stub on Windows runners")
 

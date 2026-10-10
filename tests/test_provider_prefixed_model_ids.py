@@ -61,7 +61,7 @@ _1M = 1_000_000
 
 
 @pytest.mark.parametrize("model,expected", [
-    # the torture-report repro ids
+    # the reported repro ids
     ("anthropic/claude-haiku-4-5", _200K),
     ("bedrock/claude-sonnet-4-5", _200K),
     ("anthropic/claude-sonnet-4-6", _200K),

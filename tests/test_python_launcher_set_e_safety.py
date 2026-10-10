@@ -81,7 +81,7 @@ def _stuck_cache(tmp_path: Path) -> tuple[Path, str]:
 
 
 def test_unremovable_cache_record_never_aborts_the_launcher(tmp_path):
-    """Finding 3: 40 records, ``rm`` fails on the oldest -> still exec."""
+    """40 records, ``rm`` fails on the oldest -> still exec."""
     cache, path = _stuck_cache(tmp_path)
 
     done = _launch(tmp_path, _env(tmp_path, cache, path=path))

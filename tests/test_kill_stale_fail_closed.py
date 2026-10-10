@@ -54,7 +54,7 @@ def _arrange(monkeypatch, measure, sessions, nt=False):
     return killed
 
 
-# --- Finding 2: POSIX ancestry unknown means nothing is terminated -----------
+# --- POSIX ancestry unknown means nothing is terminated -----------
 
 def test_posix_ancestor_pids_is_none_when_ps_is_unreadable(monkeypatch):
     measure = _load_measure()
@@ -104,7 +104,7 @@ def test_kill_stale_still_terminates_when_posix_ancestry_is_readable(monkeypatch
     assert killed == [4001]  # 4000 is the conversation this command runs inside of
 
 
-# --- Finding 10c: Windows chain with a missing intermediate pid is unknown ---
+# --- Windows chain with a missing intermediate pid is unknown ---
 
 def test_windows_ancestor_pids_is_none_when_an_intermediate_parent_is_missing():
     measure = _load_measure()
@@ -141,7 +141,7 @@ def test_windows_ancestor_pids_stops_quietly_at_a_dead_root_parent():
     assert measure._windows_ancestor_pids(9999, names=names) == {9998}
 
 
-# --- Finding 10b: os.kill raising OSError on a pid that just exited ----------
+# --- os.kill raising OSError on a pid that just exited ----------
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX branch")
 def test_kill_loop_survives_oserror_and_continues(monkeypatch, capsys):
@@ -164,7 +164,7 @@ def test_kill_loop_survives_oserror_and_continues(monkeypatch, capsys):
     assert "PID 4000 could not be signalled" in out
 
 
-# --- Finding 10d: only processes owned by the current user -------------------
+# --- only processes owned by the current user -------------------
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owner column")
 def test_posix_collector_asks_ps_for_the_uid_and_records_it(monkeypatch):

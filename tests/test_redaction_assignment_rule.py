@@ -97,7 +97,7 @@ def test_keyword_dense_input_is_linear():
         assert time.perf_counter() - t0 < 2.0, blob[:12]
 
 
-# Rows where this engine and the TS engines behave differently on purpose (r2a report).
+# Rows where this engine and the TS engines behave differently on purpose.
 # Python keeps these because earlier Python tests pin them; TS hides the value.
 PYTHON_ONLY_KEPT = [
     "https://x.com/s?monkey=SOMEVALUE",   # "key" inside another word is not a name

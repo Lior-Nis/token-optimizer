@@ -1,4 +1,4 @@
-"""Finding 10a (sweep r3d): git_context._run_git must pass creationflags=_NO_WINDOW.
+"""git_context._run_git must pass creationflags=_NO_WINDOW.
 
 Under a detached parent a flag-less console spawn opens a visible window on Windows.
 """
@@ -31,7 +31,7 @@ def measure():
 
 
 
-# --- Finding 10a -------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def test_git_context_run_git_uses_no_window_flag(measure, monkeypatch, tmp_path):

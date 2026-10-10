@@ -1,4 +1,4 @@
-"""Finding 7 (sweep r3d): read-cache-stats, structure-proof and read-cache-clear must print on Windows.
+"""read-cache-stats, structure-proof and read-cache-clear must print on Windows.
 
 The child was spawned with creationflags=_NO_WINDOW and no std streams, so on Windows its
 output went to a hidden console or NULL handles. The fix hands it the parent's streams
@@ -43,7 +43,7 @@ class _FileLikeStream(io.StringIO):
 
 
 
-# --- Finding 7 ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def test_stdio_kwargs_pass_usable_streams_on_windows(measure, monkeypatch):

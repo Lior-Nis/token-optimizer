@@ -1,4 +1,4 @@
-"""Child stdio fallbacks for the Windows detached child (final-r3 findings 5, 6, 10h, 10i).
+"""Child stdio fallbacks for the Windows detached child.
 
 Windows-only behaviour is checked with fakes here (the real-handle case needs a
 Windows host: see tests/test_windows_detached_child_e2e.py). Nothing here touches
@@ -49,7 +49,7 @@ class _NoFileno:
         pass
 
 
-# --- finding 5: unusable stream gets DEVNULL when another one is usable -----
+# --- unusable stream gets DEVNULL when another one is usable -----
 
 def test_run_py_stdio_kwargs_devnull_for_missing_stream(monkeypatch):
     run = _load_run_py()
@@ -138,7 +138,7 @@ def test_utf8_io_reexec_nothing_passed_when_nothing_usable(monkeypatch):
     assert not {"stdin", "stdout", "stderr"} & set(cap)
 
 
-# --- finding 5: a failed Popen leaves a trace in the existing diagnostics log
+# --- a failed Popen leaves a trace in the existing diagnostics log
 
 def test_run_py_logs_when_popen_raises(monkeypatch, tmp_path):
     run = _load_run_py()
@@ -163,7 +163,7 @@ def test_run_py_logs_when_popen_raises(monkeypatch, tmp_path):
     assert "Popen" in logged[0] and "handle is invalid" in logged[0]
 
 
-# --- finding 6: no creation flag when a console is already attached ----------
+# --- no creation flag when a console is already attached ----------
 
 def test_utf8_io_reexec_drops_flag_when_stdout_is_tty(monkeypatch):
     cap = _utf8_io_nt_reexec(
@@ -183,7 +183,7 @@ def test_utf8_io_reexec_keeps_detached_when_stdout_missing(monkeypatch):
     assert cap["creationflags"] == _DETACHED_PROCESS
 
 
-# --- finding 10h: stale comments ---------------------------------------------
+# --- stale comments ---------------------------------------------
 
 def test_run_py_has_no_phantom_ctrl_c_self_terminate_claim():
     text = (HOOKS / "run.py").read_text(encoding="utf-8")
@@ -196,7 +196,7 @@ def test_dispatch_tests_not_skipped_on_windows():
     assert "not Windows-safe" not in text
 
 
-# --- finding 10i: echoed override value is capped ------------------------------
+# --- echoed override value is capped ------------------------------
 
 def test_unknown_runtime_value_is_capped_and_repr(monkeypatch, capsys):
     import runtime_env

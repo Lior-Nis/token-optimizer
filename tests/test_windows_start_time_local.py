@@ -1,4 +1,4 @@
-"""Finding 10f (sweep r3d): Windows start times print in local time, as POSIX does."""
+"""Windows start times print in local time, as POSIX does."""
 
 import importlib.util
 import sys
@@ -29,7 +29,7 @@ def measure():
 
 
 
-# --- Finding 10f -------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def _local_expected(utc_dt):

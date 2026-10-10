@@ -1,4 +1,4 @@
-"""Finding 10e (sweep r3d): the per-pid Windows start-time fallback uses ToString('o'),
+"""the per-pid Windows start-time fallback uses ToString('o'),
 which has seven fractional digits. datetime.fromisoformat rejects that on Python 3.9/3.10.
 """
 
@@ -31,7 +31,7 @@ def measure():
 
 
 
-# --- Finding 10e -------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 SEVEN_DIGIT = "2026-10-10T09:00:00.1234567+02:00"
