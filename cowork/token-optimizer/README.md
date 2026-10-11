@@ -76,6 +76,17 @@ Works on ten AI coding tools, with Devin next on the roadmap:
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer in a Claude Code terminal: the quick scan, what runs automatically on every turn, and a 30-day savings report" width="800">
 </p>
 
+## A Status Bar Inside the Claude Desktop App
+
+<p align="center">
+  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="The Token Optimizer status bar inside the Claude desktop app: Clawd reacts to the session while quality, context, cache and usage limits update live" width="720"></a>
+  <br><sub>A 30-second preview. <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">Watch the full film with sound</a> (50 seconds).</sub>
+</p>
+
+Claude Code now lets a plugin add its own piece of interface, called a mod. Token Optimizer uses one to put your session's health right above the prompt: a quality grade, how full the context is, how long the cache stays warm, and both usage limits. One plain sentence tells you what needs attention, and one button fixes it. Clawd, the small orange mascot, acts out what the session is doing, so you can tell at a glance whether Claude is reading, editing, waiting for your OK, or done.
+
+It comes with the plugin, nothing extra to install. [Everything the bar does](#desktop-status-bar).
+
 ## Install
 
 **Claude Code (recommended):**
@@ -625,13 +636,6 @@ python3 measure.py setup-quality-bar --uninstall
 </details>
 
 ## Desktop Status Bar
-
-<p align="center">
-  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="The Token Optimizer status bar inside the Claude desktop app: Clawd reacts to the session while quality, context, cache and usage limits update live" width="720"></a>
-  <br><sub>A 30-second preview. <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">Watch the full film with sound</a> (50 seconds).</sub>
-</p>
-
-**A live status bar inside the Claude desktop app.** Claude Code now lets a plugin add its own piece of interface, called a mod. Token Optimizer uses one to put your session's health right above the prompt: a quality grade, how full the context is, how long the cache stays warm, and both usage limits. One plain sentence tells you what needs attention, and one button fixes it. Clawd, the small orange mascot, acts out what the session is doing, so you can tell at a glance whether Claude is reading, editing, waiting for your OK, or done.
 
 Using the Claude desktop app? The status bar comes with the Token Optimizer plugin: once it is installed, the bar appears above your prompt. Nothing extra to install.
 
