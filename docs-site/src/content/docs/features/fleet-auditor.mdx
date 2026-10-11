@@ -11,7 +11,7 @@ Most people run more than one agent system, and each one bills you separately. F
 
 Fleet Auditor detects installed agent systems (Claude Code, Codex, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw), collects token usage from each, runs waste-pattern detection, and reports recommended fixes with monthly savings estimates. It frames savings as recurring, because an idle heartbeat that burns $5 a month keeps burning until you fix it.
 
-It reads usage, never message content. The scan parses session metadata and token counts, prices them against a local pricing table, and produces findings. It never opens the text of your conversations.
+The scan opens local session files and parses their records to extract metadata, tool/error signals, and token counts. The stored fleet metrics are not a copy of the whole conversation, but the scanner does read transcript records; it is inaccurate to promise it never opens conversation files.
 
 When a model's pricing is not in the local table, it reports the token waste confidently and says the dollar impact depends on current pricing rather than inventing a number. Findings below 0.4 confidence are suppressed.
 
@@ -59,7 +59,7 @@ Always available as the `/fleet-auditor` skill. It is invoked on demand and stay
 
 ## How to turn it on and off
 
-Nothing to disable. Fleet Auditor is a skill that runs only when you invoke it and reads usage metadata you already have. It changes no configuration, opens no message content, and issues no model calls.
+Nothing to disable. Fleet Auditor is a skill that runs only when you invoke it and reads usage metadata you already have. It changes no host configuration and issues no model calls, but scans local transcript records and writes its fleet database/dashboard.
 
 The fixes it recommends are yours to apply. Acting on a finding is always a separate, deliberate step.
 
@@ -98,7 +98,7 @@ On a non-Claude runtime, prefix the runtime, for example `TOKEN_OPTIMIZER_RUNTIM
 
 ## Risk rating
 
-None. Fleet Auditor reads usage metadata, prices it, and reports. It never reads message content, changes config, or calls a model. The remedies it recommends are yours to apply.
+None. Fleet Auditor reads usage metadata, prices it, and reports. It reads local session records and writes analysis stores, but does not change host config or call a model. The remedies it recommends are yours to apply.
 
 ## Related environment variables
 

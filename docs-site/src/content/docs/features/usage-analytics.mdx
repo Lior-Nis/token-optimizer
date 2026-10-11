@@ -5,13 +5,13 @@ description: "Read how your sessions actually behave over time: trends, measured
 
 import { Aside } from '@astrojs/starlight/components';
 
-Usage analytics turn the session data Token Optimizer already collects into answers about how you work: which sessions cost the most, what your compression has saved, which models and skills you actually use, and whether any running sessions have gone stale. Every report reads from the local history database and changes nothing.
+Usage analytics turn the session data Token Optimizer already collects into answers about how you work: which sessions cost the most, what your compression has saved, which models and skills you actually use, and whether any running sessions have gone stale. Reports use local transcripts and analysis stores. Collection/refresh can update local state, pricing-tier can write settings, and kill-stale can end processes.
 
 ## What it does
 
 Each time a session ends, Token Optimizer parses its transcript and ingests the result into a local SQLite history database (`trends.db`). Usage analytics query that store. They surface patterns you cannot see from a single session: cost drifting up week over week, a skill that loads on every start but never gets used, a model you reach for more than you meant to.
 
-The analytics split into two jobs. The reporting commands (`trends`, `savings`, `conversation`, `pricing-tier`) answer "how have my sessions behaved." The session-health commands (`health`, `kill-stale`) answer "are my running sessions in a clean state right now." Both read data you already have; neither runs the model.
+The analytics split into two jobs. The reporting commands (`trends`, `savings`, `conversation`, `pricing-tier`) answer "how have my sessions behaved." The session-health commands (`health`, `kill-stale`) answer "are my running sessions in a clean state right now." Neither runs a model, but `kill-stale` ends eligible processes when invoked without `--dry-run`, and `pricing-tier <tier>` writes the persistent pricing choice. They are not all read-only.
 
 ## Trends
 
@@ -60,9 +60,15 @@ python3 measure.py conversation --json
 
 Cost figures depend on the pricing tier, covered next.
 
+## Model-specific price cards
+
+The engine loads the bundled `pricing/prices.json` once at import, with built-in tables as fallback. A malformed/missing file does not prevent reporting. Price changes can arrive in a release without editing this page; inspect the active tier and the per-turn report rather than assuming every model uses one flat rate.
+
+Haiku 5.5 uses the long-context card when the full per-request prompt (fresh input plus cache reads and writes) exceeds 100K tokens; that card is 5x its base rates. Other native-1M Claude models do not get that surcharge. GPT-5.6 Sol has a date-gated promotion before November 21, 2026 UTC. These are API-equivalent estimates, not proof of a subscription bill or savings caused by Token Optimizer.
+
 ## Pricing tier
 
-Every cost and savings figure is computed against a pricing tier. `pricing-tier` sets which one. Set it to match how you are billed so the dollar numbers in `savings`, `conversation`, and `trends` reflect your real rates.
+Every cost and savings figure is computed against a pricing tier. `pricing-tier` sets which one. Set it to match how you are billed so estimates use the matching rate table. They remain API-equivalent figures, not a verified bill.
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
@@ -70,7 +76,7 @@ python3 measure.py pricing-tier                  # show the current tier
 python3 measure.py pricing-tier vertex-global    # switch tiers
 ```
 
-Accepted tiers: `anthropic` (default), `vertex-global`, `vertex-regional`, and `bedrock`. The choice persists in `config.json`. Subscription is not a settable tier: it is a billing mode Token Optimizer detects on its own. On a subscription the meaningful unit is not dollars per token, it is **how much work fits inside the plan you already paid for**. A flat fee buys a rate-limit budget; every token Token Optimizer keeps out of context, and every turn it routes to a lighter model, is budget you get to spend on real work instead. That is why subscription reporting leads with **runway**, how much longer your 5-hour and 7-day windows last, rather than a per-token price. Runway converts to money the moment a window runs out, because finishing the work then means paying for overage or API calls on top of the subscription. See [Keep-Warm quota value](/features/keep-warm/#the-subscription-quota-value-story).
+Accepted tiers: `anthropic` (default), `vertex-global`, `vertex-regional`, and `bedrock`. The choice persists in `config.json`. Subscription is not a settable tier: it is a billing mode Token Optimizer detects on its own. On a subscription the meaningful unit is not dollars per token, it is **how much work fits inside the plan you already paid for**. A flat fee buys a rate-limit budget; every token Token Optimizer keeps out of context, and a user-selected turn moved to a lighter model, is budget you get to spend on real work instead. That is why subscription reporting leads with **runway**, how much longer your 5-hour and 7-day windows last, rather than a per-token price. Runway converts to money the moment a window runs out, because finishing the work then means paying for overage or API calls on top of the subscription. See [Keep-Warm quota value](/features/keep-warm/#the-subscription-quota-value-story).
 
 ## Session health
 
@@ -107,7 +113,7 @@ On demand. Every command here is a read or, in the single case of `kill-stale`, 
 
 ## Default state
 
-The reports (`trends`, `savings`, `conversation`, `pricing-tier`, `health`) are always available and read-only. Data collection that feeds them is on by default for plugin users through the SessionEnd hook. `kill-stale` never runs on its own.
+`trends`, `savings`, `conversation`, and `health` are reports. `pricing-tier` is read-only without an argument, but writes the selected tier when one is supplied. Data collection that feeds them is on by default for plugin users through the SessionEnd hook. `kill-stale` never runs on its own.
 
 Platform availability: the reports run anywhere Token Optimizer collects session history. Session health (running-process flags) is most complete on POSIX systems; on Windows without a process creation-time source, sessions are flagged `UNKNOWN_AGE` rather than mislabeled fresh. See the [capability matrix](/reference/capability-matrix/).
 

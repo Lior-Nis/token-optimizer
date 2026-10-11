@@ -14,7 +14,7 @@ Token waste comes in three kinds. Most tools fix one of them. Token Optimizer co
     A bloated CLAUDE.md, unused skills, duplicate system reminders, stale MEMORY.md, entries past line 200 the model never sees, dead MCP servers. Often the largest share in high-waste setups, and it compounds: a leaner prefix means a smaller cache-read bill on every turn that follows. Almost no other tool touches this.
   </Card>
   <Card title="Runtime" icon="bars">
-    Verbose command output, oversized MCP results, and re-read files that flood your context mid-session. This is the slice proxy compressors handle, covering roughly 15 to 25% of your context on a good day.
+    Verbose command output, oversized MCP results, and re-read files that flood your context mid-session. These are the tool-output surfaces a compressor can target.
   </Card>
   <Card title="Behavioral" icon="random">
     The habits that quietly burn tokens: letting the cache expire, compacting too late, looping on a failing approach, running Opus where Haiku would do, switching models mid-session and killing your cache. Some show up live within a session; others only emerge across many.
@@ -23,7 +23,7 @@ Token waste comes in three kinds. Most tools fix one of them. Token Optimizer co
 
 ### Why fixing one layer is not enough
 
-A command-output compressor covers 15 to 25% of your context on a good day. The other 75 to 85% sits in structural and behavioral waste, plus the 60 to 70% you lose on every compaction. Saving tokens on `git status` does not help if the next auto-compact wipes out the decision that made you run `git status` in the first place.
+A command-output compressor does not reduce every source of context use. Instruction overhead, historical workflow patterns, and continuity across compaction need separate treatment. Their shares depend on the session. Saving tokens on `git status` does not help if the next auto-compact wipes out the decision that made you run `git status` in the first place.
 
 ## How each kind is handled
 
@@ -34,13 +34,13 @@ A command-output compressor covers 15 to 25% of your context on a good day. The 
 
 **Runtime waste** is cut in real time by active compression: delta re-reads return only what changed, structure maps replace large-file re-reads with a skeleton, and bash output compression strips verbose CLI output down to the essentials. See [Active compression overview](/features/active-compression/).
 
-**Behavioral waste** is handled on two fronts. The in-session habits are caught automatically and in real time: loop detection breaks a retry loop before it burns more turns, quality nudges prompt a compact before decisions are lost, session continuity carries your work across compaction and crashes, and cache-safe Keep-Warm recovers prompt-cache re-write waste. The slower patterns that no single session can reveal are surfaced by Token Coach and Fleet Auditor, which read your history: quality trending down, sessions creeping longer, cache hit rates falling, cost per session climbing, and model switches that invalidate the cache. The day-to-day waste is fixed for you; the historical analysis is there when you want to go deeper. See [Quality nudges and loop detection](/features/quality-signals/), [Session continuity](/features/session-continuity/), and [Token Coach](/features/token-coach/).
+**Behavioral waste** is handled on two fronts. The in-session habits are caught automatically and in real time: loop detection warns about repeated failing tools, quality nudges prompt a compact before decisions are lost, session continuity carries your work across compaction and crashes, and Keep-Warm reports modeled prompt-cache re-write opportunities (production LLM pings are disabled). The slower patterns that no single session can reveal are surfaced by Token Coach and Fleet Auditor, which read your history: quality trending down, sessions creeping longer, cache hit rates falling, cost per session climbing, and model switches that invalidate the cache. Automatic features are adapter-dependent and advisory signals do not guarantee a fix; the historical analysis is there when you want to go deeper. See [Quality nudges and loop detection](/features/quality-signals/), [Session continuity](/features/session-continuity/), and [Token Coach](/features/token-coach/).
 
 ## What makes the approach different
 
 ### Fully local, zero dependencies, zero telemetry
 
-Pure Python standard library on Claude Code and Codex. TypeScript with zero runtime dependencies on OpenCode and OpenClaw. Nothing to `pip install`, no analytics endpoint, no phone-home. Every measurement is a local SQLite write to a file you own under your runtime home. You can inspect it, export it, or delete it.
+Pure Python standard library on Claude Code and Codex. TypeScript with zero runtime dependencies on OpenCode and OpenClaw. Nothing to `pip install`, no analytics endpoint, no phone-home. Measurements use local files under your runtime home (SQLite and JSON/JSONL, depending on the adapter). You can inspect it, export it, or delete it.
 
 ### Zero baseline context overhead
 
@@ -55,7 +55,7 @@ Token Optimizer runs as an external process. It does not inject always-on instru
 Active compression only pays off if the session survives compaction. Smart Compaction closes that loop: it checkpoints your decisions before auto-compact fires and restores them afterward. After a compaction, the model also knows what large tool outputs it already processed, so it does not re-read them from scratch. See [The compaction problem](/concepts/compaction-model/).
 
 <Aside type="tip">
-Every claim in the comparison table is tested against real sessions and a compression fixture suite you can run yourself. See [Benchmarks](/reference/benchmarks/) for the full methodology.
+The benchmark page separates measured compression fixtures, session estimates, and validation not yet run. Comparison claims about other tools need their own current sources. See [Benchmarks](/reference/benchmarks/) for the full methodology.
 </Aside>
 
 ## Next steps

@@ -1,43 +1,43 @@
 ---
 title: Trust and safety
-description: Token Optimizer is non-blocking, fully local, and cache-safe. What it does and does not do to your session, your data, and your context.
+description: Hook failure handling, intentional read denials, local measurement, network exceptions, and limits of recovery and quality scoring.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Token Optimizer touches your live work, so it is built to fail safe. Every hook is non-blocking, every change to your setup is backed up first, and nothing it does invalidates your prompt cache. This page is the honest account of where the risk is and where it is not.
+Token Optimizer touches your live work, so it is built to fail safe. Hook errors are designed to fail open, but successful read-cache and refetch guards can intentionally deny redundant calls. Local measurement and cache-safe injection are design properties, not a guarantee against every failure. This page is the honest account of where the risk is and where it is not.
 
-## It cannot break your session
+## Fail-open errors versus intentional denials
 
-All hooks run non-blocking with fail-open design. If a Token Optimizer script ever errors, your command runs normally. The script failing means you lose an optimization, never a turn.
+Hooks have execution budgets and error paths intended to let the original call continue. That is different from a successful guard: the default Read soft-block can deny an eligible redundant read, strict block can deny without a usable map, and refetch guards can deny a duplicate archived-result call. Ranged reads, edits, live-state exclusions, and other escape hatches bound those behaviors; they do not make every hook observational.
 
 - **Compression is toggleable.** Every active-compression feature can be turned off with a single command or environment variable. See [Active compression overview](/features/active-compression/).
-- **Checkpoints are additive.** They add session state to disk. They never edit or remove anything in your context.
-- **Quality scoring is read-only.** It measures the transcript and reports a number. It changes nothing.
+- **Checkpoints are additive.** They add session state to disk. Capture writes local state; restore can add that state to model context.
+- **Quality scoring is read-only.** It measures the transcript and reports a number. The score itself is an estimate; refresh writes a local cache and enabled warnings can add context.
 
-## It does not break the prompt cache
+## Cache-safe injection, not cache-lifetime control
 
 The prompt cache depends on a stable prefix. Any tool that edits or removes blocks already in your conversation invalidates the cache and costs you more on the next turns, not less.
 
-Token Optimizer never touches content already in your context. It works on new content entering your window through compression, and on the compaction boundary through checkpoints and restore. Your cache prefix stays intact, which saves you twice: less input per turn, and a smaller cache-read bill on every subsequent turn. See [Prompt cache economics](/concepts/cache-economics/).
+Token Optimizer never touches content already in your context. It works on new content entering your window through compression, and on the compaction boundary through checkpoints and restore. Additive hook notes do not rewrite the old prefix. Cache expiry, host behavior, model switches, and instruction-file changes can still cause misses; this does not keep the cache alive. See [Prompt cache economics](/concepts/cache-economics/).
 
 <Aside type="caution">
 Be careful with tools that claim to clean up your context mid-session. If they modify or remove existing conversation blocks, they break your cache. Re-sending a full prefix at uncached rates on the next 50 messages can wipe out whatever they saved.
 </Aside>
 
-## It does not degrade your context quality
+## Quality checks have limits
 
-Structural optimization removes only genuinely unused components: skills you never invoke, duplicate configs, orphaned memory entries. It never removes the conversation. The quality score actively tracks degradation, so if anything ever hurt quality, the number would show it. Most users see scores improve after optimization because the model has more room for real work.
+Structural optimization removes only genuinely unused components: skills you never invoke, duplicate configs, orphaned memory entries. It never removes the conversation. The quality score uses proxy signals, not a semantic proof that no needed detail was lost. Compression fixtures and live measurements cover particular workloads; inspect proposed structural changes and use the relevant feature escape hatch if context is missing.
 
 When the audit does change a file, it shows a before-and-after diff, backs up the original, and waits for your approval. It never deletes files; skills and configs are archived outside the skills directory so you can restore them. It also checks dependencies before archiving, because a skill, MCP server, or deny rule can be load-bearing for something else.
 
 ## Your data stays on your machine
 
-No analytics, no telemetry endpoint, no product data leaves your machine. Every measurement is a local SQLite row you own. You can inspect it, export it, or delete all of it.
+Normal measurement has no core analytics upload. Local stores include SQLite, JSON/JSONL, archives, and generated HTML, depending on the adapter. The separate Cowork probe/OTel setup can send to a configured collector; LAN dashboard binding exposes data to the chosen network.
 
-Network use is limited to install and update checks against GitHub or your package registry for the install method you chose. The script installer verifies every file against checksums fetched out-of-band from the release, so a compromised commit cannot swap both the code and the checksums. To skip release verification when you are offline or behind a proxy, set `TOKEN_OPTIMIZER_SKIP_VERIFY=1` deliberately.
+Install/update checks use GitHub or your chosen package registry. Manual desktop refresh invokes the host; the experimental Keep-Warm model-call path exists but production LLM pinging is disabled. The script installer verifies every file against checksums fetched out-of-band from the release, so a compromised commit cannot swap both the code and the checksums. To skip release verification when you are offline or behind a proxy, set `TOKEN_OPTIMIZER_SKIP_VERIFY=1` deliberately.
 
-To delete everything Token Optimizer has stored, or to see exactly what it keeps, see [Your data and privacy](/reference/data-and-privacy/).
+To inspect stores and the scope of each adapter's deletion commands, see [Your data and privacy](/reference/data-and-privacy/).
 
 ## Zero runtime dependencies
 

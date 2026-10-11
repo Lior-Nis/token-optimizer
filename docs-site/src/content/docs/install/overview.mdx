@@ -24,9 +24,13 @@ On Claude Code the plugin lives in `~/.claude/plugins/marketplaces/alexgreensh-t
 | GitHub Copilot | CLI, beta | `bash install.sh --copilot` | [Copilot (CLI)](/install/copilot-cli/) |
 | GitHub Copilot | VS Code, beta | Same adapter, plus one manual settings step | [Copilot (VS Code)](/install/copilot-vscode/) |
 | Google Antigravity | CLI, app, IDE, beta | `bash install.sh --antigravity` | [Antigravity](/install/antigravity/) |
-| OpenCode | plugin | Add `"plugins": ["token-optimizer-opencode"]` to `opencode.json` on V2 after 1.2.0 is published; until then, use `install.sh --opencode` | [OpenCode](/install/opencode/) |
+| OpenCode | plugin | Add `"plugins": ["token-optimizer-opencode"]` to `opencode.json` on V2; use `plugin` (singular) on V1 | [OpenCode](/install/opencode/) |
 | OpenClaw | plugin | `openclaw plugins install github:alexgreensh/token-optimizer` | [OpenClaw](/install/openclaw/) |
 | Hermes | plugin, beta | `token-optimizer/install.sh --hermes` | [Hermes](/install/hermes/) |
+| Cursor | IDE and CLI, beta | `bash install.sh --cursor` | [Cursor](/install/cursor/) |
+| Grok Build | CLI, contract-only beta | `bash install.sh --grok` | [Grok Build](/install/grok/) |
+| Pi | Extension, experimental | `pi install git:github.com/alexgreensh/token-optimizer` (unverified end-to-end) | [Pi](/install/pi/) |
+| Cowork | Account-synced plugin, experimental | `bash install.sh --cowork` builds the upload payload | [Cowork](/platforms/cowork/) |
 
 ## Which surface do I have
 
@@ -47,6 +51,7 @@ Each platform serves its dashboard on its own port, so several can run at once w
 | Copilot | 24845 | `http://localhost:24845/token-optimizer` (verify) |
 | Cursor | 24846 | `http://localhost:24846/token-optimizer` (verify) |
 | Antigravity | 24847 | `http://localhost:24847/token-optimizer` |
+| Grok Build | 24848 | `http://localhost:24848/token-optimizer` |
 
 <Aside type="tip">
 After any install, run the platform's doctor command to confirm it wired up correctly. Each install page lists the exact doctor for that surface, and [Configuration](/reference/configuration/) covers every environment variable in one place.
@@ -54,4 +59,4 @@ After any install, run the platform's doctor command to confirm it wired up corr
 
 ## Zero dependencies
 
-Every Python adapter (Claude Code, Codex, Hermes, Copilot, Antigravity) is pure standard library. No `pip install`, no telemetry. The TypeScript plugins (OpenCode, OpenClaw) add nothing beyond their host runtime. Minimum Python is 3.9 for Claude Code and Codex, 3.x for Hermes, Copilot, and Antigravity.
+Every Python adapter (Claude Code, Codex, Hermes, Copilot, Cursor, Antigravity, Grok) is pure standard library. No `pip install`, no telemetry. The TypeScript plugins (OpenCode, OpenClaw) add nothing beyond their host runtime. The main installer checks for Python 3.9+; the Antigravity route also rejects older candidates. Some adapter routes check only that Python exists, not a precise minimum. The repository CI matrix covers Python 3.11-3.14, so use a tested interpreter rather than assuming every 3.x release works. Pi uses its host extension runtime.

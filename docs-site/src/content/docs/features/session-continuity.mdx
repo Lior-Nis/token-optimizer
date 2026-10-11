@@ -17,7 +17,7 @@ The shared idea is breadcrumb continuity: leave a trail of cheap, structured mar
 
 ## Cold-Resume-Lean
 
-Cold-Resume-Lean rebuilds context for a cold or forgotten session at zero LLM cost. It reads checkpoints and the session log, joins them, and emits a lean block you can inject directly. No summarization model runs, so reopening a stale session costs nothing beyond the file reads.
+Cold-Resume-Lean rebuilds context for a cold or forgotten session at zero LLM cost. It reads checkpoints and the session log, joins them, and emits a lean block you can inject directly. No summarization model runs, so reconstruction makes no paid model call. Pasting or restoring the resulting block still adds input tokens to the new session.
 
 Run it with no session argument to list candidate sessions, or with a number or session ID to emit a block:
 
@@ -38,12 +38,12 @@ claude "$(cd ~/.claude/skills/token-optimizer/scripts && python3 measure.py resu
 Cold-Resume-Lean works across Claude Code, Codex, OpenClaw, and OpenCode, so the same reconstruction reopens a session no matter which surface created it.
 
 <Aside type="tip" title="Why it is free">
-Reconstruction is pure file work: read the checkpoints, read the session log, join them, format the block. There is no model call, so a forgotten session costs nothing to reopen and you never pay the prefix re-write you were trying to avoid.
+Reconstruction is pure file work: read the checkpoints, read the session log, join them, format the block. There is no model call, so reconstruction has no model-call cost. The lean block still has an input-token cost when used; it avoids reloading the entire old prefix, not every cache write.
 </Aside>
 
 ## Prompt continuity (the automatic hint)
 
-The prompt-continuity hook runs on every user prompt. It checks whether your prompt matches the topic of a prior session and, if it does, injects a lean context hint through the hook's `additionalContext` channel. The match is keyword-based and the hook runs under an 8-second wall-clock budget, so a miss costs nothing and never delays your turn.
+The prompt-continuity hook runs on every user prompt. It checks whether your prompt matches the topic of a prior session and, if it does, injects a lean context hint through the hook's `additionalContext` channel. The match is keyword-based and the hook runs under an 8-second wall-clock budget, so work is bounded, but a hook can still use time within that budget.
 
 This is the hands-off path: you start typing about yesterday's work, and the relevant breadcrumb appears without you running a command. It fires automatically through the UserPromptSubmit hook when the plugin is installed.
 
@@ -104,17 +104,18 @@ Checkpoint telemetry (`checkpoint-stats`) is off until you set `TOKEN_OPTIMIZER_
 
 Cold-Resume-Lean, `continue-last`, and `list-checkpoints` are read-only commands you invoke by hand. There is nothing to disable; just do not run them.
 
-The automatic prompt-continuity hint comes from the prompt-continuity hook. To stop it, remove the UserPromptSubmit continuity hook through the same path that installs the smart-compaction hooks:
+The automatic prompt-continuity hint comes from the prompt-continuity hook. To stop it, remove its UserPromptSubmit wiring from the same install source that provides it. `setup-smart-compact --uninstall` removes capture/restore hooks, not the prompt-continuity hook:
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
-python3 measure.py setup-smart-compact --uninstall
+# Plugin users: disable/uninstall the plugin, or adjust its hook configuration.
+# Script users: remove the prompt-continuity UserPromptSubmit entry in settings.json.
 ```
 
-To quiet the fresh-session nudge without removing hooks, raise its quality floor so it rarely qualifies, for example `TOKEN_OPTIMIZER_FRESH_NUDGE_QUALITY=0`.
+To quiet the fresh-session nudge without removing hooks, lower its quality threshold so it rarely qualifies, for example `TOKEN_OPTIMIZER_FRESH_NUDGE_QUALITY=0`.
 
 <Aside type="note" title="Removing checkpoint data">
-Uninstalling the hooks leaves existing checkpoints on disk. To delete all local Token Optimizer data including checkpoints, use `purge`. See [your data and privacy](/reference/data-and-privacy/).
+Uninstalling the hooks leaves existing checkpoints on disk. For Python-managed checkpoint deletion, inspect `purge` first; its list is not universal adapter coverage. See [your data and privacy](/reference/data-and-privacy/).
 </Aside>
 
 ## Defaults and thresholds

@@ -9,7 +9,7 @@ All hook paths use `${CLAUDE_PLUGIN_ROOT}` so they stay portable across machines
 
 ## Hook trigger table
 
-Twenty-six triggers fire across eleven hook events.
+The plugin registers eleven hook events. Several events use a consolidated runner, which dispatches the logical actions below under one shared budget.
 
 | Hook event | Fires | What it does |
 |---|---|---|
@@ -20,7 +20,7 @@ Twenty-six triggers fire across eleven hook events.
 | `PreCompact` | `dynamic-compact-instructions` | Injects mode-aware PRESERVE/DROP guidance into the compact prompt |
 | `PreCompact` | `compact-capture` | Saves a session checkpoint before compaction |
 | `PreCompact` | `read_cache.py --clear` | Clears the per-session read cache |
-| `SessionStart` | `ensure-health` (async) | Self-heals config drift, installs the status line if the slot is empty, and keeps the cached `subagentPromptCacheTtl` payoff verdict fresh for the advise-only recommendation (a missing or day-old verdict starts a detached background scan; the hook itself never scans, and never writes the key -- only `TOKEN_OPTIMIZER_SUBAGENT_CACHE_1H=1` opts in to that) |
+| `SessionStart` | `ensure-health` (inside runner) | Self-heals config drift, installs the status line if the slot is empty, and keeps the cached `subagentPromptCacheTtl` payoff verdict fresh for the advise-only recommendation (a missing or day-old verdict starts a detached background scan; the hook itself never scans, and never writes the key -- only `TOKEN_OPTIMIZER_SUBAGENT_CACHE_1H=1` opts in to that) |
 | `SessionStart` | `quality-cache --force` | Pre-populates the quality score for the status line |
 | `SessionStart: compact` | `compact-restore --compact` | Restores the full checkpoint after a compaction |
 | `SessionStart` | `compact-restore --new-session-only` | Injects a keyword-matched checkpoint on a fresh session |
@@ -29,14 +29,16 @@ Twenty-six triggers fire across eleven hook events.
 | `Stop` | `keepwarm-arm` | Arms Keep-Warm for the paused session (pinging is gated by consent) |
 | `SessionEnd` | `session-end-flush` (async) | Collects sessions into the history database and regenerates the dashboard |
 | `StopFailure` | `compact-capture --trigger stop-failure` | Saves a checkpoint on a stop failure (crash or timeout) |
+| `UserPromptSubmit` | run-once SessionStart fallback | Carries ensure-health, forced quality-cache warm, and fresh-session restore for Cowork; no-ops after native SessionStart has marked them done |
 | `UserPromptSubmit` | `quality-cache --warn` | Updates the quality score and warns if it dropped |
 | `UserPromptSubmit` | `prompt-continuity` | Injects a topic-matched hint from a prior session |
 | `UserPromptSubmit` | `verbosity-steer` | Injects a lean-output steer when the context is already deep |
-| `PostToolUse: Bash\|Read\|Glob\|Grep\|Agent\|mcp__.*` | `archive_result.py` | Archives large tool results to disk so they survive compaction |
-| `PostToolUse: Bash\|Read\|Grep\|Glob\|mcp__.*` | `context_intel.py` | Summarizes large outputs into the Session Knowledge Store (shadow only) |
+| `PostToolUse: Bash\|PowerShell\|Read\|Glob\|Grep\|Agent\|mcp__.*` | `archive_result.py` | Archives large tool results to disk so they survive compaction |
+| `PostToolUse: Bash\|PowerShell\|Read\|Grep\|Glob\|Edit\|Write\|MultiEdit\|NotebookEdit\|mcp__.*` | `context_intel.py` | Summarizes large outputs into the Session Knowledge Store (shadow only) |
 | `PostToolUse: Edit\|Write\|MultiEdit\|NotebookEdit` | `read_cache.py --invalidate` | Invalidates stale read-cache entries after a write |
-| `PostToolUse: (all tools)` | `quality-cache --throttle-only` | Refreshes the quality score and runs the cohort tripwire evaluation |
-| `PostToolUseFailure: Bash` | `posttooluse_runner.py` (failure branch) | Archives failed Bash output uncompressed so the error text survives |
+| `PostToolUse: Bash` | `bash_compress_hook.py` | Compresses eligible build/test output after execution, archives the original, and checks repeated-command thrash |
+| `PostToolUse: registered tools` | `quality-cache --throttle-only` | Refreshes the quality score and runs the cohort tripwire evaluation |
+| `PostToolUseFailure: Bash\|PowerShell` | `posttooluse_runner.py` (failure branch) | Archives failed Bash/PowerShell output without compressing away errors |
 | `PostCompact` | `quality-cache --force` | Re-populates the quality score after compaction |
 | `CwdChanged` | `read_cache.py --clear` | Clears the read cache on a directory change |
 
@@ -92,4 +94,4 @@ Or use the environment overrides documented in [Configuration](/reference/config
 
 ## Other platforms
 
-Hook events differ by platform. Codex installs 3 to 5 events depending on the chosen profile (`balanced`, `quiet`, `telemetry`, `aggressive`) and has no `PreCompact` or `StopFailure` equivalent, so it approximates compaction survival with compact-prompt guidance plus Stop checkpoints. OpenCode uses its own hook names (`chat.message`, `tool.execute.before`, `tool.execute.after`, and several experimental hooks). Hermes injects a context nudge via `pre_llm_call` only. Copilot gates each hook power on a per-version capability map. See the [capability matrix](/reference/capability-matrix/) and [Platform support](/platforms/overview/) for the per-platform breakdown.
+Hook events differ by platform. Codex installs 1 to 6 events depending on the chosen profile (`aggressive` by default, `balanced`, `quiet`, or `telemetry`); optional Bash PreToolUse adds an event. The installed adapter has no `PreCompact` or `StopFailure` equivalent, so it approximates compaction survival with compact-prompt guidance plus Stop checkpoints. OpenCode uses its own hook names (`chat.message`, `tool.execute.before`, `tool.execute.after`, and several experimental hooks). Hermes injects a context nudge via `pre_llm_call` only. Copilot gates each hook power on a per-version capability map. See the [capability matrix](/reference/capability-matrix/) and [Platform support](/platforms/overview/) for the per-platform breakdown.

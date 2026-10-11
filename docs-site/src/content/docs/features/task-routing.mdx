@@ -31,7 +31,9 @@ A recommendation you have to translate is a recommendation you will not use. `ro
 | Claude Code | haiku, sonnet, opus | thinking budget (native) |
 | Codex | gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol | `model_reasoning_effort` (native) |
 | OpenCode | your configured models | prompt directive (advisory) |
-| Hermes | haiku, sonnet, opus | prompt directive (advisory) |
+| Hermes | haiku, sonnet, opus (or active-model hint) | prompt directive (advisory) |
+| Cowork | haiku, sonnet, opus | thinking budget (native) |
+| Cursor, Antigravity, Grok | generic small, standard, large fallback; no native ladder configured | prompt directive (advisory) |
 | GitHub Copilot | gpt-5.4-mini, gpt-5.4, gpt-5.5, gpt-5.6-sol | prompt directive (advisory) |
 
 The same question on Codex returns `gpt-5.6-luna` at `low` `model_reasoning_effort` for the typo and `gpt-5.6-sol` at `high` for a production migration. Where a platform has no native reasoning control, effort comes back as an explicit directive to state in the prompt, which is the honest answer rather than a knob that does not exist.
@@ -100,7 +102,7 @@ None. `route` reads your task text and the detected platform and prints a recomm
 
 ## Platform availability
 
-All supported platforms: Claude Code, Codex, OpenCode, Hermes, and GitHub Copilot. See the [capability matrix](/reference/capability-matrix/).
+The Python routing command has native tables for Claude Code/Cowork, Codex, OpenCode, Hermes, and Copilot. Cursor, Antigravity, and Grok fall back to a generic advisory ladder. Pi does not expose this Python command as its extension interface. See the [capability matrix](/reference/capability-matrix/).
 
 ## Related
 

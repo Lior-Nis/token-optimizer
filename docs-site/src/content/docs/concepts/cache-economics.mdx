@@ -39,7 +39,7 @@ There are two ways to deal with the re-write penalty, and Token Optimizer offers
 
 **Behavioral: measure it and change when you resume.** The cache TTL watchdog analyzes your history and reports how many tokens you re-wrote because a session resumed after the window expired, broken down per provider. Often the cheapest fix is simply resuming sooner, or batching your work so you do not let the cache go cold mid-task. See [Cache TTL watchdog](/features/cache-watchdog/).
 
-**Automated: keep the cache warm.** Keep-Warm pings the cache just before expiry, at roughly a tenth of the prefix cost and capped per pause, so a resume stays warm instead of triggering a full re-write. It is opt-in, gated behind consent, and protected by a tripwire that turns it off if the pings ever stop paying for themselves. See [Keep-Warm](/features/keep-warm/).
+**Modeled automation and manual refresh.** Keep-Warm measures whether refreshes could pay, with consent and a tripwire around its experimental ping path. Production LLM pings are disabled even after enable; the watcher alone does not refresh the cache. The desktop Keep warm button is a separate explicit action. See [Keep-Warm](/features/keep-warm/).
 
 ## What this means on a subscription
 

@@ -13,7 +13,7 @@ The dashboard renders one self-contained HTML file with four panels: Overview (a
 
 After every session, the SessionEnd hook regenerates the dashboard data so the page is current the next time you open it. You do not have to rerun the audit by hand.
 
-The Coach view carries a "From your own usage" section: the daily usage-recommendations record (compact window and subagent cache lifetime), one card per recommendation with the measured numbers, the exact command, and a Wins row once you acted on an earlier recommendation and the measurement moved. It reads the same local record as `measure.py recommendations` -- the page never scans for it, and Token Optimizer never changes either setting.
+The Coach view carries a "From your own usage" section: the daily usage-recommendations record (compact window and subagent cache lifetime), one card per recommendation with the measured numbers, the exact command, and a Wins row once you acted on an earlier recommendation and the measurement moved. It reads the same local record as `measure.py recommendations` -- the page never scans for it, and the daily advice path never writes either setting. Separate explicit subagent-cache enable or its automation opt-in can set the TTL; compact-window advice does not write autoCompactWindow.
 
 ## When it runs
 
@@ -32,7 +32,7 @@ cd ~/.claude/skills/token-optimizer/scripts
 python3 measure.py setup-daemon --uninstall
 ```
 
-During an uninstall, `python3 measure.py purge --force` stops the daemon and deletes its data in one step. See [your data and privacy](/reference/data-and-privacy/).
+During an uninstall, `python3 measure.py purge --confirm --force` stops the daemon and deletes its data in one step. See [your data and privacy](/reference/data-and-privacy/).
 
 ## Commands
 
@@ -109,7 +109,7 @@ Low. The default localhost bind keeps the page private to your machine. The only
 
 ## Platform availability
 
-Generated on all platforms. The persistent daemon is supported on macOS (launchd) and Windows (scheduled task). Codex, Hermes, and Copilot regenerate dashboard data through their own session-end rollups; prefix commands with the runtime selector.
+Generated on all platforms. The shared Python daemon supports macOS (launchd), Linux (systemd), and Windows (scheduled task). Pi is a separate extension without this Python daemon. Codex, Hermes, and Copilot regenerate dashboard data through their own session-end rollups; prefix commands with the runtime selector.
 
 ## Related pages
 

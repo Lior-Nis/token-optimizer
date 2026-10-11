@@ -1,0 +1,40 @@
+---
+title: Grok Build
+description: "Contract-only beta for Grok Build: five hooks, local token accounting, host costs when complete, and a shared dashboard on port 24848."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Contract-only beta">
+The adapter is implemented against Grok Build's documented hook/session contract. It has not been verified against a live Grok host. A synthetic doctor probe checks the installed bridge, not real model behavior. Native Windows hook installation is refused because persisted commands use POSIX quoting; use a supported POSIX environment.
+</Aside>
+
+## Data and hooks
+
+The adapter reads Grok session usage/signals and maintains a local in-flight tally for crash recovery. Complete host `costUsdTicks` values are converted at 10 billion ticks per USD. Incomplete or partial costs are marked unknown, not free; Token Optimizer does not invent a savings headline from them. `contextWindowTokens` is authoritative when present, with a 256K fallback.
+
+The installer owns `<grok-home>/hooks/token-optimizer.json` and a copied payload under `<grok-home>/token-optimizer/plugin/`; it does not replace another plugin's hook file.
+
+| Event | Adapter action |
+|---|---|
+| SessionStart | Initialize token tally and sweep stale locks; passive stdout ignored |
+| UserPromptSubmit | Session bookkeeping |
+| PreToolUse (Bash) | Eligible command rewrite through the shared compressor |
+| PostToolUse | Token tally and context-growth nudge |
+| Stop | Throttled rollup and dashboard refresh |
+
+Compression remains contract-tested, not live-verified. The adapter does not replace native compaction. SessionStart and allowing UserPromptSubmit stdout are ignored under its contract, so this bridge does not promise a continuity restore at those seams. Nudges can use a tool-call proxy (30 and 80 calls); they are not exact occupancy readings.
+
+## Run and verify
+
+Follow [Grok Build install](/install/grok/). Every Python command uses the Grok runtime:
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-doctor --probe
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-summary
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py dashboard --serve
+```
+
+The shared dashboard serves at `http://localhost:24848/token-optimizer`. The home defaults to `~/.grok`; `TOKEN_OPTIMIZER_GROK_HOME` overrides only Token Optimizer's view, ahead of host `GROK_HOME`. See [Configuration](/reference/configuration/) and the [CLI reference](/reference/cli/#grok-build).
+
+The shared engine reserves port 24848, but the foreign-runtime guard blocks `setup-daemon` for Grok. Use the foreground dashboard command above; do not confuse a port assignment with a working persistent install command.

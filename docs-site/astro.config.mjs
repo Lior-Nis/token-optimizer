@@ -135,6 +135,8 @@ export default defineConfig({
             { label: "OpenClaw", slug: "install/openclaw" },
             { label: "Hermes", slug: "install/hermes" },
             { label: "Cursor", slug: "install/cursor" },
+            { label: "Grok Build", slug: "install/grok" },
+            { label: "Pi", slug: "install/pi" },
           ],
         },
         {
@@ -149,6 +151,8 @@ export default defineConfig({
             { label: "OpenClaw", slug: "platforms/openclaw" },
             { label: "Hermes", slug: "platforms/hermes" },
             { label: "Cursor", slug: "platforms/cursor" },
+            { label: "Grok Build", slug: "platforms/grok" },
+            { label: "Pi", slug: "platforms/pi" },
             { label: "Cowork", slug: "platforms/cowork" },
           ],
         },

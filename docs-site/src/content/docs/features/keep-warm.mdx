@@ -1,22 +1,28 @@
 ---
 title: Keep-Warm
-description: "An opt-in cache-read ping for API-billed sessions. It keeps a paused prefix alive past its TTL so a later resume reads the cache instead of paying the full prefix re-write."
+description: "Keep-Warm watches pauses and models cache-refresh value. The macOS scheduler is implemented, but production LLM pings remain disabled; manual desktop refresh is separate."
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-When a session pauses longer than its prompt-cache TTL and then resumes, the whole prefix is re-written at the cache-write rate, roughly 1.25 to 2 times the prefix cost on re-entry. A Keep-Warm ping reads the entry instead of writing it, refreshing the TTL at roughly a tenth of the prefix cost. On sessions with a pause-and-resume rhythm, that turns a recurring re-write into a recoverable saving.
+When a session pauses longer than its prompt-cache TTL and then resumes, the whole prefix is re-written at the cache-write rate, roughly 1.25 to 2 times the prefix cost on re-entry. A Keep-Warm ping reads the entry instead of writing it, refreshing the TTL at roughly a tenth of the prefix cost. That is the modeled economics, not the normal production behavior below.
+
+<Aside type="caution" title="Current shipped behavior: measurement, not automatic pinging">
+The watcher, forecasts, pause records, ledger, and reports are implemented, but the token-spending LLM ping ships disabled. `keepwarm-enable` records consent and can install the macOS scheduler; it does not remove that production ping gate. A normal tick returns `llm-ping-disabled` instead of issuing a model request. The internal dogfood escape hatch is not a supported user setup step. Read the ping economics below as the modeled/experimental path, not a promise of automatic cache refresh.
+
+The Keep-Warm scheduler is implemented for macOS only. Linux and Windows report an unsupported scheduling gap; the Windows dashboard scheduled task is a different feature. The manual desktop **Keep warm** button is separate and runs only when clicked.
+</Aside>
 
 ## What it does
 
 Prompt caches expire on a timer. Anthropic's API cache holds a prefix for about an hour (five minutes on the shorter window). Step away past the timer and the next turn re-writes the entire cached prefix from scratch.
 
-Keep-Warm watches sessions that have paused and, when one is about to lapse, fires a small cache-read ping that refreshes the TTL before it expires. The prefix stays warm, so when you come back the resume reads the cache at the cheap rate rather than re-writing it at the expensive one.
+Keep-Warm watches paused sessions and evaluates whether a cache refresh could pay. Its modeled ping path would refresh the prefix before expiry, but normal production ticks stop at the disabled-LLM-ping gate; watching alone does not keep a cache warm.
 
 This is the one feature that can spend tokens on your behalf, so it is opt-in, gated by consent, and capped. Everything else in Token Optimizer is measurement or context shaping. Keep-Warm is the exception that touches your bill, and it is built to be honest about it.
 
 <Aside type="caution" title="Spends tokens, opt-in only">
-Keep-Warm is the only Token Optimizer feature that issues model calls. It is off until you explicitly enable it, it asks for consent on first run, and it refuses to run on subscription billing where a ping would burn quota for no dollar benefit.
+The experimental ping path spends tokens, requires consent, and normally refuses subscription billing. In the shipped production path, even enabling consent does not turn on LLM pings. Manual desktop refresh is separate and also uses the host.
 </Aside>
 
 ## API billing only
@@ -25,11 +31,11 @@ Keep-Warm runs only on API-billed sessions, where a cache read is genuinely chea
 
 `keepwarm-enable` checks billing mode and will not arm pinging on a subscription. Subscription users get the [quota-value story](#the-subscription-quota-value-story) instead, which measures the right currency for that plan.
 
-Keep-Warm requires `ANTHROPIC_API_KEY` to be set, since the ping is an API call.
+Billing detection recognizes `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` and stored host auth state. That billing classification is not proof that production LLM pinging is enabled.
 
-## The 10-command surface
+## Commands
 
-Keep-Warm is one feature with ten verbs. They split into control, the automatic loop, consent, and reporting.
+Keep-Warm has control, watcher, consent, and reporting verbs. They split into control, the automatic loop, consent, and reporting.
 
 ### Control
 
@@ -43,7 +49,7 @@ python3 measure.py keepwarm-disable    # terminal opt-out
 
 ### The automatic loop
 
-Three pieces drive pinging without your involvement once enabled.
+Three pieces record pauses and evaluate modeled ping decisions. The production ping gate still applies.
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
@@ -52,7 +58,7 @@ python3 measure.py keepwarm-tick --dry-run       # the brain: decide whether to 
 python3 measure.py keepwarm-scheduler status     # install | uninstall | status
 ```
 
-`keepwarm-arm` fires on the Stop hook for every plugin user and just records that a session paused. It is token-free and does not ping; actual pinging stays gated by consent. `keepwarm-tick` is the brain, run by the scheduler every five minutes: it evaluates armed sessions and fires a ping only for those that are eligible (time since pause, projected expiry, tripwire). `keepwarm-scheduler` manages the macOS launchd agent that runs the tick.
+`keepwarm-arm` fires on the Stop hook for every plugin user and just records that a session paused. It is token-free and does not ping; actual pinging stays gated by consent. `keepwarm-tick` is the brain, run by the scheduler every five minutes: it evaluates armed sessions (time since pause, projected expiry, tripwire), but the production LLM-ping gate prevents a model request. `keepwarm-scheduler` manages the macOS launchd agent that runs the tick.
 
 Use `keepwarm-tick --dry-run` to see exactly which sessions would be pinged and why, without firing anything.
 
@@ -89,11 +95,11 @@ cd ~/.claude/skills/token-optimizer/scripts
 python3 measure.py keepwarm-quota-value --json
 ```
 
-Pinging itself still stays off on subscription billing. The quota-value report is the measurement instrument; it does not change the gate.
+Normal production pinging stays disabled. Subscription billing is also refused by the normal consent path; the CLI-only `--limits-lab` experiment is not the product default and does not bypass the LLM-ping gate. The quota-value report is the measurement instrument; it does not change the gate.
 
 ## Honesty mechanisms
 
-Keep-Warm is engineered so it cannot quietly cost you more than it saves.
+The experimental path records spend and has guards; modeled savings are not a guarantee of net benefit.
 
 - **Consent before firing.** Pinging requires explicit `keepwarm-enable`. The arm hook records pauses but never pings without consent.
 - **Spend ledger and NET reporting.** `keepwarm-report` shows pings, spend, realized savings, and the NET (savings minus ping cost) over 7 and 30 days, so the headline is what you actually netted, not gross savings.
@@ -103,13 +109,13 @@ Keep-Warm is engineered so it cannot quietly cost you more than it saves.
 
 ## Default state
 
-Off. Keep-Warm does not ping until you run `keepwarm-enable`. The `keepwarm-arm` hook fires on Stop for plugin users to record pauses, but recording is token-free and does not ping. Reporting commands (`forecast`, `backfill`, `report`, `quota-value`, `consent-status`) are always available and read-only.
+Off. Even after `keepwarm-enable`, normal production ticks do not ping because the LLM-ping gate remains disabled. The `keepwarm-arm` hook fires on Stop for plugin users to record pauses, but recording is token-free and does not ping. Reporting commands are available without enabling pinging. `backfill` reads history and can write its promotion sidecar; it is not strictly read-only.
 
-Platform availability: the pinging loop and scheduler target Claude Code on macOS (launchd) and Windows (scheduled task). See the [capability matrix](/reference/capability-matrix/).
+Platform availability: the pinging loop and scheduler target Claude Code on macOS (launchd); Linux/Windows scheduler installation is not implemented. See the [capability matrix](/reference/capability-matrix/).
 
 ## How to turn it on and off
 
-To enable (API billing, macOS shown):
+To enable watcher consent and scheduling (API billing, macOS shown; not production pinging):
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
@@ -132,7 +138,7 @@ python3 measure.py keepwarm-scheduler uninstall
 |---|---|---|
 | Feature state | off | Opt-in via `keepwarm-enable` |
 | Billing requirement | API only | Refuses on subscription |
-| Tick interval | ~5 minutes | macOS launchd / Windows scheduled task |
+| Tick interval | ~5 minutes | macOS launchd only |
 | Arm hook cost | token-free | Records pause, never pings |
 | Ping cost | ~0.1x prefix | Versus 1.25-2x for a cold re-write |
 | Cache TTL refreshed | ~1 hour (5 min short window) | Anthropic API cache |
@@ -144,32 +150,32 @@ The Claude desktop status bar (part of the Token Optimizer plugin) has a **Keep 
 
 | | Keep-Warm daemon | Keep warm button |
 |---|---|---|
-| Runs | automatically, on a timer | only when you click |
+| Runs | watcher on a timer; production LLM pings disabled | only when you click |
 | Billing | API billing only | any plan |
 | Offered | while armed | only while the cache is still warm and its lifetime has been measured |
-| After expiry | keeps going until the tripwire stops it | disappears when the cache expires |
-| Cost | cache-read pings, tracked in `keepwarm-report` | a small amount of your usage per click; it tells you how many tokens it re-read from the cache |
+| After expiry | watcher evaluates sessions; no production ping | disappears when the cache expires |
+| Cost | no production LLM ping; experimental spend tracked in `keepwarm-report` | a small amount of your usage per click; it tells you how many tokens it re-read from the cache |
 
 The daemon stays API-billing only and its consent rules are unchanged. The button never fires on its own. See [the desktop status bar](/features/status-line/#the-desktop-status-bar).
 
 ## Risk rating
 
-Low, by design, and the only feature that spends tokens. The risks are managed: consent gates firing, the NET-aware report and tripwire prevent runaway spend, and subscription billing is refused outright. The failure mode of a ping is a small wasted spend, capped by the tripwire and visible in `keepwarm-report`. If the tick or scheduler fails, no ping fires and you fall back to ordinary cold resumes.
+Production ticks do not issue LLM pings. Experimental pings and manual desktop refresh can spend tokens; consent, reporting, and tripwires limit the automatic experimental path but do not guarantee savings. The failure mode of a ping is a small wasted spend, capped by the tripwire and visible in `keepwarm-report`. If the tick or scheduler fails, no ping fires and you fall back to ordinary cold resumes.
 
 ## Related environment variables
 
-- `ANTHROPIC_API_KEY` (required for pinging)
+- `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (host billing/auth hints; not a production ping-enable switch)
 
 Defined with defaults in the [configuration reference](/reference/configuration/#keep-warm).
 
 ## Platform availability
 
-Claude Code on macOS and Windows for the pinging loop and scheduler. Reporting commands run anywhere Token Optimizer does. See the [capability matrix](/reference/capability-matrix/).
+Claude Code on macOS for the implemented scheduler; production token-spending pings remain disabled. Reporting commands run anywhere Token Optimizer does. See the [capability matrix](/reference/capability-matrix/).
 
 ## Related
 
 - [Cache TTL watchdog](/features/cache-watchdog/): `cache-report` measures the expiry waste Keep-Warm targets, before you decide to ping.
-- [Subagent prompt cache](/features/subagent-cache/): the 1-hour TTL for subagent prefixes, recommended (never set) with your own numbers; under the explicit opt-in it still self-reverts if it does not pay.
+- [Subagent prompt cache](/features/subagent-cache/): the 1-hour TTL for subagent prefixes, advise-only by default, with explicit enable and automation opt-ins; under the explicit opt-in it still self-reverts if it does not pay.
 - [Cache economics](/concepts/cache-economics/): why a cold resume costs 1.25-2x the prefix.
 - [Your data and privacy](/reference/data-and-privacy/): consent state and how to reset it.
 - [Configuration](/reference/configuration/): Keep-Warm variables and consent keys.

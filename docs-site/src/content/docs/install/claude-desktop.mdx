@@ -40,7 +40,7 @@ With the line unfolded (the arrow beside Clawd), the last thing on it is a plain
 
 ## The cache countdown
 
-The countdown is an estimate, because Claude does not publish the exact expiry. It assumes 1 hour on Claude plans and 5 minutes on the API, and is measured from the session itself when possible.
+The countdown prefers the native Claude Code `prompt_cache` object when bridged by the terminal status line (v2.1.251+). Otherwise it falls back to a session-anchored estimate: 1 hour on Claude plans or 5 minutes on the API. Native cache state covers the main conversation, not subagents.
 
 ## Settings
 
@@ -61,4 +61,4 @@ Add `"TOKEN_OPTIMIZER_STATUS_BAR": "0"` to the `env` block of `~/.claude/setting
 ## See also
 
 - [The quality status line](/features/status-line/) for the terminal version.
-- [Keep-Warm](/features/keep-warm/) for the automatic, API-billed daemon.
+- [Keep-Warm](/features/keep-warm/) for watcher/reporting and the separate modeled ping path (production LLM pings disabled).

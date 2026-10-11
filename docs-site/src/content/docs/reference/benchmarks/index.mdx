@@ -13,7 +13,7 @@ questions. They are never added together or compared as if they were one claim.
   <LinkCard
     title="Terminal-Bench floor"
     href="/reference/benchmarks/terminal-bench/"
-    description="The full 81-task Terminal-Bench 2 suite, plugin on vs off, 373 trials. Cost −14.3% and input tokens −17.8% on the sealed 57-task cohort, intervals excluding zero. Only 1 of 6 levers fires, so it is the least to expect."
+    description="The full 81-task Terminal-Bench 2 suite, plugin on vs off, 373 trials. Cost −14.3% and input tokens −17.8% on the sealed 57-task cohort, intervals excluding zero. Only 1 of 6 levers fires, not a guarantee for every future workload."
   />
   <LinkCard
     title="Controlled A/B"
@@ -31,21 +31,21 @@ questions. They are never added together or compared as if they were one claim.
 
 Most of what a coding assistant pays for is not your question. It is the tool output, file contents
 and earlier turns that get resent on every call. Token Optimizer works on that overhead with six
-levers, all automatic. A benchmark can only measure the levers its tasks give something to do.
+levers, with automatic compression and separately chosen routing. A benchmark can only measure the levers its tasks give something to do.
 
 | Lever | What it does | Terminal-Bench | Controlled A/B | Real month |
 |---|---|:---:|:---:|:---:|
 | Tool-output compression | Long command output is archived to disk and replaced with a short stub; the full text is one call away | fires | fires | fires |
 | Cross-turn dedup | Content that would be resent unchanged on the next turn is sent once | idle | idle | fires |
 | Delta-read | Re-reading a file you just edited returns only what changed | idle | tested, inconclusive | fires |
-| Structure-map skeletons | A very large first read arrives as signatures and imports, full file archived | idle | idle | fires |
+| Structure-map skeletons | Re-reads use bounded maps; current first-read retarget keeps the opened file full and adds related-file skeletons | idle | idle | fires |
 | Checkpoint-restore | When a long session compacts, decisions and files in play are restored instead of re-read | idle | idle | fires |
-| Model routing | Routine turns can run on a lighter model | idle | idle | fires |
+| Model routing | Advice supports a user/agent choice of a lighter model; the route command does not switch it automatically | idle | idle | fires |
 | **Levers active** | | **1 of 6** | **1 of 6** | **6 of 6** |
 
 Terminal-Bench tasks are short, single-shot terminal jobs: the agent rarely re-reads a file, never
 runs long enough to compact, and the model is held fixed. The controlled A/B holds the model fixed
-and runs short sessions by design. Both are floors. Real coding fires all six.
+and runs short sessions by design. These benchmark workloads exercise fewer mechanisms. Other workloads may use more; they do not establish a universal savings floor.
 
 ## Trust tiers
 
@@ -62,12 +62,12 @@ Prompt-cache savings (`cache_read`) are never claimed as standalone Token Optimi
 cache is free infrastructure. Where an estimate uses cache-read rates, it is priced at the rate the
 turn actually paid, and it stops at the session's next real compaction.
 
-## What it never breaks
+## Safety checks and recovery limits
 
 Saving tokens is only worth something if the assistant still knows what it needs to know, your
 prompt cache still works, and nothing sensitive gets mangled. Three checks cover that.
 
-**Your prompt cache stays warm.** Compression that rewrites content already in the cached prefix
+**Stable-prefix behavior is measured separately from cache lifetime.** Compression that rewrites content already in the cached prefix
 forces the model to re-bill that prefix. Token Optimizer archives to a stable stub instead, so the
 cached prefix stays intact. In long sessions (more than 50 messages) the cache-hit rate is slightly
 higher with archives on than off:
@@ -77,8 +77,7 @@ higher with archives on than off:
 | With Token Optimizer archives | 0.969 |
 | Without | 0.958 |
 
-**The full output is always one step away.** Nothing is thrown away. Every compressed result is
-archived first and can be expanded on demand, so a stub is never the only copy.
+**Recovery is bounded.** Stored copies are credential-redacted, size-capped, and subject to retention. Eligible MCP results have retrieval pointers; archiving does not universally replace all tools inline. See [Tool archives](/features/tool-result-archive/) for the exact current contract.
 
 **87 safety fixtures, all passing.** Each fixture is a real piece of output with a must-preserve
 list, a must-not-contain list (which catches hallucination), and a minimum compression ratio. A

@@ -17,9 +17,13 @@ Token waste comes in three kinds. Most tools address one. This page defines each
 
 For how Token Optimizer audits and scores each kind, see [How it works](/concepts/how-it-works/).
 
+<Aside type="caution" title="Historical third-party comparison">
+Third-party cells below come from the dated source audit noted after the tables, not a new October 2026 verification of each vendor. Treat them as that historical comparison; consult current first-party material before an adoption decision. Token Optimizer cells have been reconciled with the current source, but the benchmark results retain their published snapshot scope.
+</Aside>
+
 ## Compression coverage
 
-Headroom, RTK, and JFrog Boost all compress bash and command output. That single surface covers roughly 15-25% of the context a typical session wastes. The table below shows the full output stack and what each tool reaches. Status: 🟢 supported, 🟡 partial, 🔴 not supported.
+Headroom, RTK, and JFrog Boost all compress bash and command output. Its share of context use depends on the workload. The table below shows the full output stack and what each tool reaches. Status: 🟢 supported, 🟡 partial, 🔴 not supported.
 
 | Compression surface | Token Optimizer | Headroom | RTK | Boost |
 |---|---|---|---|---|
@@ -27,9 +31,9 @@ Headroom, RTK, and JFrog Boost all compress bash and command output. That single
 | **Search / grep output** | 🟢 Web, grep, and search results condensed to top hits plus a count; 500 lines → 20 | 🔴 | 🔴 | — |
 | **Tabular and JSON output** (jq, yq, csvtool, mlr, CSV, YAML, TOML) | 🟢 Value-preserving columnar compression | 🟢 SmartCrusher | 🔴 | — |
 | **File re-reads, delta mode** (changed files read again this session) | 🟢 Serves only the unified diff; 2,000-token re-read → ~50 tokens | 🔴 | 🔴 | — |
-| **File re-reads, structure map** (large code files read repeatedly) | 🟢 v2: the opened file served in full, related files skeletonized with a one-hop reference graph, 20+ languages via optional tree-sitter; 720KB → 250 tokens | 🔴 | 🔴 | — |
-| **Large tool results** (Bash/Read/Grep/MCP output over 4K chars) | 🟢 Archived to disk, replaced by an inline pointer the model can expand on demand or find by full-text search (`expand --search`) | 🔴 | 🔴 | — |
-| **Model output verbosity** (lean-output nudge at high context fill) | 🟢 Cache-safe tiered steering (savings estimated, not metered) | 🔴 | 🔴 | 🔴 |
+| **File re-reads, structure map** (large code files read repeatedly) | 🟢 Re-read substitution uses bounded skeletons; first-read retarget keeps the opened file full and maps related files. Extra grammars require tree-sitter opt-in | 🔴 | 🔴 | — |
+| **Large tool results** (Bash/Read/Grep/MCP output over 4K chars) | 🟢 Credential-redacted recovery copy; eligible MCP output replaced by preview/pointer. Agent results stay inline; archives cap at 5MB. `expand --search` finds stored results | 🔴 | 🔴 | — |
+| **Model output verbosity** (lean-output nudge at high context fill) | 🟢 Cache-safe tiered steering; zero savings at firing, later output comparison when available | 🔴 | 🔴 | 🔴 |
 | **Structural context** (configs, skills, MCP, MEMORY.md, before the session starts) | 🟢 Per-component audit: unused skills, dead MCP, stale memory, each scored | 🔴 | 🔴 | 🔴 |
 
 RTK and Boost reach the first surface. Headroom reaches the first and the third. Token Optimizer covers all eight, and that is before the behavioral and compaction savings the others do not attempt.
@@ -42,32 +46,32 @@ The table covers the six tools most often compared to Token Optimizer. Status: �
 |---|---|---|---|---|---|---|
 | Tool output compression | 🟢 111 commands across 22 pattern families, credential-safe, toggleable, user-extensible via TOML | 🟢 SmartCrusher, CodeCompressor, Kompress-v2, image compression | 🟢 100+ command filters | 🟢 Command-aware filters | 🟢 Sandbox + summary | 🔴 |
 | No command rewriting required | 🟢 Hook-wired on Bash, Read, Agent, and MCP; fires automatically | 🟢 Transparent proxy | 🟢 Hook-based rewrite | 🟢 `boost init` wires supported agents; terminal use can be prefixed | 🟡 Automatic on hook-capable platforms | N/A Native command |
-| Full original recoverable after compression | 🟢 Raw archived before compression, retrievable with `expand`; failing commands are never compressed at all | 🟢 Reversible retrieval | 🟡 Full output saved on command failure | 🟢 Vendor documents command-output recovery | — | N/A Does not compress |
+| Full original recoverable after compression | 🟡 Capped credential-redacted archive retrievable while retained; no universal byte-exact recovery | 🟢 Reversible retrieval | 🟡 Full output saved on command failure | 🟢 Vendor documents command-output recovery | — | N/A Does not compress |
 | Register a custom command filter | 🟢 Custom TOML filters (`command-filters.toml`, additive + exclude, compose with the 111 built-ins, safety-gated, fail-open) | — | 🟢 Custom TOML filters | 🟢 TOML filters for your own CLIs | — | N/A |
-| User-tunable configuration | 🟢 137 code-referenced `TOKEN_OPTIMIZER_*` names, explicitly split into user-facing and internal controls; additive archive allowlist; `.contextignore` | 🟢 Documented configuration | 🟢 `config.toml` and environment controls | 🟢 Filter TOML | 🟢 Documented configuration | N/A |
-| Re-read file skeletons | 🟢 Structure map v2 on repeat reads: opened file served full, related files skeletonized, one-hop reference graph, PageRank-ranked symbols, 20+ languages via optional tree-sitter; fail-open, full original retrievable | 🔴 | 🔴 | — | 🔴 | 🔴 |
+| User-tunable configuration | 🟢 Supported controls with adapter-specific defaults; archive exemptions and `.contextignore`; internal markers are not user settings | 🟢 Documented configuration | 🟢 `config.toml` and environment controls | 🟢 Filter TOML | 🟢 Documented configuration | N/A |
+| Re-read file skeletons | 🟢 Repeat reads use bounded maps; first-read retarget keeps the target full and maps related files. Reference graph and PageRank; tree-sitter opt-in adds grammars | 🔴 | 🔴 | — | 🔴 | 🔴 |
 | Tabular/JSON compression | 🟢 Value-preserving columnar | 🟢 SmartCrusher | 🔴 | — | 🟡 Generic summary | 🔴 |
 | Read dedup and delta diffs | 🟢 Re-reads serve diff only | 🔴 | 🔴 | — | 🔴 | 🔴 |
 | Session continuity | 🟢 Progressive checkpoints before compaction + restore after, cross-session hints, cold-resume, tool-output digest; measured ~3.9M tokens / ~$19 recovered in a 30-day snapshot (checkpoint restores + lean resumes) | 🔴 | 🔴 | — | 🟡 Session guide only | 🔴 |
 | Model routing and behavioral coaching | 🟢 12 detectors, subagent cost breakdown, anti-patterns | 🔴 | 🔴 | — | 🔴 | 🟡 Basic suggestions |
 | Per-task model and effort advice | 🟢 `route` recommends the tier and effort a task needs, before you spend | — | — | — | — | — |
 | Historical trend analysis | 🟢 30-day trends, quality/cost/cache/duration correlation, model-switch detection | 🔴 | 🔴 | — | 🔴 | 🔴 |
-| Loop and spin detection | 🟢 Catches behavioral loops before they burn | 🔴 | 🔴 | — | 🔴 | 🔴 |
+| Loop and spin detection | 🟢 Warns on repetition/failures; does not guarantee termination | 🔴 | 🔴 | — | 🔴 | 🔴 |
 | Context quality scoring | 🟢 7-signal quality score with grades | 🔴 | 🔴 | — | 🔴 | 🟡 Capacity % only |
 | Structural waste audit | 🟢 Per-component (CLAUDE.md, skills, MCP, memory) | 🔴 | 🔴 | 🔴 | 🔴 | 🟡 Summary only |
 | CLAUDE.md and MEMORY.md health | 🟢 8 auditors + attention-curve scoring | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 |
 | Measures if compression helped | 🟢 Local telemetry, before/after tokens, dollar savings | 🔴 | 🟡 `rtk gain` (token counts only) | 🟡 `boost report`, vendor-side | 🔴 | 🔴 |
-| End-to-end agent task-outcome benchmark | 🟡 Controlled A/B on 7 real tasks (output tokens, two models) + measured real-session with/without savings; task pass-rate study not yet run | — | — | 🟢 Vendor reports Terminal-Bench 2.0 with the same pass rate and ~12% lower cost | — | N/A |
+| End-to-end agent task-outcome benchmark | 🟢 Published Terminal-Bench 2 and controlled A/B results; see benchmark pages for cohorts and limitations, not a universal savings guarantee | — | — | 🟢 Vendor reports Terminal-Bench 2.0 with the same pass rate and ~12% lower cost | — | N/A |
 | Fleet-level cross-agent analysis | 🟢 | 🔴 | 🔴 | — | 🔴 | 🔴 |
 | Cache-safe | 🟢 Never modifies existing context prefix | 🟡 Proxy mode rewrites in-flight | 🟢 Pre-shell only | 🟢 Pre-shell only | 🟡 MCP overhead | 🟢 |
-| Zero baseline context overhead | 🟢 External process, no context injection | 🔴 Injects instructions | 🟢 Shell-level only | 🟢 Shell-level only | 🔴 MCP server overhead | 🟢 Native |
+| Zero baseline context overhead | 🟢 No mandatory always-on instruction block; event warnings/restores can inject context | 🔴 Injects instructions | 🟢 Shell-level only | 🟢 Shell-level only | 🔴 MCP server overhead | 🟢 Native |
 | Zero runtime dependencies | 🟢 Pure stdlib (Python/TypeScript) | 🟡 Python + Rust + optional model | 🟢 Single Rust binary | 🟢 Single binary | 🟡 SQLite adapter required | 🟢 N/A |
-| Zero telemetry | 🟢 Nothing leaves the machine | 🟡 Anonymous aggregate telemetry, opt-in via `HEADROOM_TELEMETRY`, off by default | 🟡 Opt-in | 🔴 Beta Agreement §6 covers commands invoked, command arguments, exit codes, duration, CI attributes, IP | 🟡 Varies | 🟢 |
+| Zero telemetry | 🟢 No core analytics upload; optional Cowork collector/host refresh has separate network use | 🟡 Anonymous aggregate telemetry, opt-in via `HEADROOM_TELEMETRY`, off by default | 🟡 Opt-in | 🔴 Beta Agreement §6 covers commands invoked, command arguments, exit codes, duration, CI attributes, IP | 🟡 Varies | 🟢 |
 | Signed and checksum-verified install | 🟢 `CHECKSUMS.sha256` on every release, verified at install; CI fails a release that cannot be installed | — | — | 🔴 `install.sh` verifies neither a checksum nor a signature on either download path | — | N/A |
-| Multi-platform | 🟢 Claude Code, VS Code, Codex, OpenClaw, OpenCode, Hermes, Copilot, Cursor; Cowork experimental (unverified on a live build) | 🟢 Claude Code, Cursor, Codex, Aider, Copilot | 🟢 15 integrations | 🟡 Cursor, Claude Code, Copilot, Codex CLI | 🟢 17 integrations | 🔴 Claude Code only |
+| Multi-platform | 🟢 Claude Code, VS Code, Codex, OpenClaw, OpenCode; beta Hermes/Copilot/Cursor/Antigravity/Grok and experimental Pi/Cowork | 🟢 Claude Code, Cursor, Codex, Aider, Copilot | 🟢 15 integrations | 🟡 Cursor, Claude Code, Copilot, Codex CLI | 🟢 17 integrations | 🔴 Claude Code only |
 
 <Aside type="note">
-An em dash means the capability was not verified from first-party material in the 2026-07-26 source audit (Boost's first-party material re-verified 2026-08-26); it is not a claim that the capability is absent. This page scores command-output compression only; JFrog Boost's separately-shipped BoostGraph, a local code-map its agent queries on request, is a different capability and out of scope here. Boost's "pre-shell" and "shell-level" cells are sourced from its documented wrapper form (`boost <command>`); the mechanism `boost init` uses to wire an agent is not described in its first-party material. Token Optimizer's compression claims are tested against real sessions and an 87-fixture suite. For methodology and reproducible commands, see [Benchmarks](/reference/benchmarks/).
+A dash means the capability was not verified from first-party material in the 2026-07-26 source audit (Boost's first-party material re-verified 2026-08-26); it is not a claim that the capability is absent. This page scores command-output compression only; JFrog Boost's separately-shipped BoostGraph, a local code-map its agent queries on request, is a different capability and out of scope here. Boost's "pre-shell" and "shell-level" cells are sourced from its documented wrapper form (`boost <command>`); the mechanism `boost init` uses to wire an agent is not described in its first-party material. Token Optimizer's compression claims are tested against real sessions and an 87-fixture suite. For methodology and reproducible commands, see [Benchmarks](/reference/benchmarks/).
 </Aside>
 
 ## What `/context` shows versus what Token Optimizer does

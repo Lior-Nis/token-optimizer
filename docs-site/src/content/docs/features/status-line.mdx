@@ -25,6 +25,9 @@ The grade is the same context-quality score documented in [quality scoring](/con
 
 ## Where the numbers come from
 
+Paths shown as `~/.claude/token-optimizer/` are legacy script-install paths. Plugin installs resolve state under their plugin-data identity; use the runtime's reported data directory rather than creating a second legacy copy.
+
+
 The fill percentage comes from the data Claude Code hands the status line on every render. The quality grade comes from a small cache file that Token Optimizer's hooks keep updated.
 
 A UserPromptSubmit hook recomputes the quality score on a roughly two-minute throttle and writes it to `~/.claude/token-optimizer/quality-cache-<session_id>.json`. The status line reads that file on each render. Because the cache is refreshed on a throttle rather than every keystroke, the status line applies a five-minute staleness guard: past that age it marks the grade with `~` rather than showing a frozen number as if it were live.
@@ -114,7 +117,7 @@ The terminal status line above has a sibling for the Claude desktop app. Token O
 
 Buttons: **Clean up** compacts with Token Optimizer's guidance. **Start fresh** asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message. **Keep warm** is a manual cache refresh, covered in [Keep-Warm](/features/keep-warm/#the-manual-keep-warm-button).
 
-The cache countdown is an estimate, since Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Hide the bar with `TOKEN_OPTIMIZER_STATUS_BAR=0`, or keep Clawd still with `TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE=0`, in your settings `env`. Install steps and requirements are in [Claude desktop app](/install/claude-desktop/).
+The cache countdown prefers Claude Code's native `prompt_cache` object (v2.1.251+), bridged by the terminal status line: TTL, expiry, and warm/cold state describe the main conversation, not subagents. When that bridge is unavailable, it falls back to a transcript-based estimate: 1 hour on Claude plans or 5 minutes on the API. Native and estimated sources are distinguished; no countdown is shown without an anchor. Use the -/+ size control for a remembered one-line/full choice, or `TOKEN_OPTIMIZER_STATUS_BAR_SIZE=slim` for the initial desktop and terminal size. Hide the bar with `TOKEN_OPTIMIZER_STATUS_BAR=0`, or keep Clawd still with `TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE=0`, in your settings `env`. Install steps and requirements are in [Claude desktop app](/install/claude-desktop/).
 
 ## Risk rating
 

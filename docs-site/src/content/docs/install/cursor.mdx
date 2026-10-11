@@ -5,7 +5,7 @@ description: "Install Token Optimizer for Cursor via a shallow clone. It read-me
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Cursor support is in beta. Hooks are observed at runtime rather than version-gated, and the doctor proves which events fire on your build. Native-Windows hooks are refused. The install path depends on whether you already have Token Optimizer on this machine.
+Cursor support is in beta. Hooks are observed at runtime rather than version-gated, and the doctor reports readiness and observed events; a synthetic probe validates installed command execution, not live host firing. Native-Windows hooks are refused. The install path depends on whether you already have Token Optimizer on this machine.
 
 ## Prerequisites
 
@@ -57,7 +57,7 @@ Install from WSL or a POSIX shell. The installer refuses native Windows: the per
 TOKEN_OPTIMIZER_RUNTIME=cursor python3 skills/token-optimizer/scripts/measure.py cursor-doctor --probe
 ```
 
-`cursor-doctor --probe` replays the documented payloads through the installed hook `command`, proving which of the six events fire, and names the active token source. To preview the install without writing anything:
+`cursor-doctor --probe` replays the documented payloads through the installed hook `command`, checking how the six installed commands handle synthetic payloads, not proving the host fires them, and names the active token source. To preview the install without writing anything:
 
 ```bash
 bash install.sh --cursor --dry-run

@@ -15,7 +15,7 @@ Follow the [Codex (CLI)](/install/codex-cli/) install. The `codex-install` comma
 
 There are no documented capability differences between Codex Desktop and Codex CLI. Every engine command works identically with the `TOKEN_OPTIMIZER_RUNTIME=codex` prefix.
 
-One surface detail: the `telemetry` hook profile adds PostToolUse rows that render in Desktop. If you want those rows visible, install with the telemetry profile:
+The `aggressive` default includes prompt, subagent, and silent Bash PostToolUse hooks. To keep only Stop plus Bash PostToolUse bookkeeping, use `telemetry`. Its name does not mean visible Desktop rows:
 
 ```bash
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --profile telemetry

@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 Quality signals are the read-only alerting and metadata layer. The four features on this page add short notes or structured data to the session in real time, fired by hooks, with no content removed or rewritten.
 
-Two are user-visible alerters: Quality Nudges warn when the session is degrading, Loop Detection flags when the model is stuck. Two are internal infrastructure: Activity Mode classifies what kind of work the session is doing, and Decision Extraction captures decisions in real time so they survive compaction. All four are on by default and run across all supported platforms.
+Two are user-visible alerters: Quality Nudges warn when the session is degrading, Loop Detection flags when the model is stuck. Two are internal infrastructure: Activity Mode classifies what kind of work the session is doing, and Decision Extraction captures decisions in real time so they survive compaction. These defaults describe Claude Code. Other adapters carry only the signals their hook and session formats support; do not assume every feature runs on every platform.
 
 ## What each feature does
 
@@ -35,7 +35,7 @@ All four run automatically via hooks. No manual invocation is needed.
 
 ## Default state
 
-All four features are on by default on all supported platforms. No setup is required after installation.
+The four features are enabled on the reference Claude Code path after hook installation. On Codex, prompt and PostToolUse coverage depends on the installed profile. Other adapters have narrower signal sets.
 
 ## How to turn off
 
@@ -47,7 +47,7 @@ Quality Nudges and Loop Detection can be disabled. Activity Mode and Decision Ex
 TOKEN_OPTIMIZER_QUALITY_NUDGES=0
 ```
 
-Set in your shell profile or `.env` file. See the [configuration reference](/reference/configuration/) for where env vars are read.
+Set in your shell environment or Claude Code's settings `env` block. Token Optimizer does not load an arbitrary project `.env` file automatically. See the [configuration reference](/reference/configuration/) for where env vars are read.
 
 **Quality Nudges: CLI disable**
 
@@ -80,7 +80,7 @@ Check current status of the quality-cache hook and signal features:
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
-python3 measure.py quality-cache status
+python3 measure.py quality current
 ```
 
 Check session signal statistics (nudge count, loop count, decisions stored):
@@ -127,7 +127,7 @@ python3 measure.py v5 enable loop_detection
 
 ## Risk rating
 
-**None.** The entire signal layer is read-only. Quality Nudges and Loop Detection add short inline notes. Activity Mode writes a local classification. Decision Extraction writes to a local SQLite database. No content is removed, rewritten, or sent anywhere. All writes are to local files you own.
+**Low.** The signal layer does not apply host configuration fixes, but it writes local state and adds model-visible context. Quality Nudges and Loop Detection add short inline notes. Activity Mode writes a local classification. Decision Extraction writes to a local SQLite database. No content is removed, rewritten, or sent anywhere. All writes are to local files you own.
 
 <Aside type="note" title="No content modification">
 Quality signals are the lowest-risk feature group in Token Optimizer. They observe and annotate. If you disable Quality Nudges and Loop Detection, you lose the early-warning layer but nothing else changes. Activity Mode and Decision Extraction continue regardless.
@@ -148,9 +148,10 @@ Full env var list with accepted values and load order: [configuration reference]
 |---|---|---|---|---|
 | Claude Code | Full | Full | Full | Full |
 | Codex | Partial (quality-cache runs, hook surface differs) | Partial | Full | Full |
-| Others | Verify | Verify | Full | Full |
+| OpenCode | Native gated warnings | Native message-loop detector | Native tracking | Native capture |
+| Others | Adapter-specific | Adapter-specific | Adapter-specific | Adapter-specific |
 
-Codex has a different hook surface for `UserPromptSubmit`-based features. The quality-cache hook fires, but timing and trigger behavior may differ from Claude Code. Activity Mode and Decision Extraction use `PostToolUse`, which is consistent across platforms.
+Codex has a different hook surface for `UserPromptSubmit`-based features. The quality-cache hook fires, but timing and trigger behavior may differ from Claude Code. The adapters do not all share the Python PostToolUse runner, so Activity Mode and Decision Extraction are not guaranteed by a host merely having an event with that name.
 
 See the [capability matrix](/reference/capability-matrix/) for a full platform breakdown.
 
