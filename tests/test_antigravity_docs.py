@@ -15,7 +15,7 @@ def test_readme_names_antigravity_install_and_works_on():
     assert "install.sh --antigravity" in readme
     # The works-on list is a logo grid, so the name lives in the tile markup.
     assert "<b>Google Antigravity</b> (beta)" in readme
-    assert "docs/assets/platforms/antigravity.svg" in readme
+    assert "skills/token-optimizer/assets/platforms/antigravity.svg" in readme
 
 
 def test_docs_site_pages_exist():
