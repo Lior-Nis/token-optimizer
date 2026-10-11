@@ -21,11 +21,11 @@ The audit is manual only. Nothing triggers it automatically. Run it when you wan
 
 ## Default state
 
-Both commands are always available after installation, on every platform. No feature flag or environment variable enables or disables them.
+The `measure.py report` and `quick` commands are available on the shared Python engine; adapter-specific reports can be narrower. OpenCode/OpenClaw use their own TypeScript tools and Pi its extension commands. No feature flag or environment variable enables or disables them.
 
 ## How to turn off
 
-The audit is a read-only measurement tool. It writes no files and changes no configuration. There is nothing to disable.
+The audit is a read-only measurement tool. It does not apply configuration fixes. `quick` does write an automatic drift snapshot and can refresh local analysis state. There is nothing to disable.
 
 ## Commands
 
@@ -78,7 +78,7 @@ TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py report
 |---|---|
 | Token estimate basis | Calibrated, CJK-aware (about 3.3 chars per token for code) |
 | Trigger | Manual only |
-| Writes to disk | None |
+| Writes to disk | `quick` auto-saves a drift snapshot; reports do not apply host configuration fixes |
 
 ## Risk rating
 
@@ -90,7 +90,7 @@ None gate the audit itself. To override the detected context window for the run,
 
 ## Platform availability
 
-Available on all supported surfaces: Claude Code CLI and VS Code, Codex CLI and Desktop, Copilot CLI and VS Code, Hermes, OpenClaw, and OpenCode. The runtime prefix selects the platform whose configuration is scanned.
+The full setup-component audit is the Claude Code reference path and is adapted for Codex. Other Python runtimes block these Claude-targeting CLI verbs and use explicit adapter reporting; OpenCode/OpenClaw use their own tools, and Pi a separate extension. A runtime prefix is not a guarantee that every CLAUDE.md/MCP audit exists on that host.
 
 ## Related pages
 

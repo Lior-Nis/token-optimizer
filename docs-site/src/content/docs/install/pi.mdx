@@ -1,0 +1,50 @@
+---
+title: Pi
+description: "Install and verify the experimental Pi extension, then choose measurement, continuity, and archive opt-ins separately."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Unverified Git-source install">
+The commands below are the shipped package route, but end-to-end Git installation has not been verified. A local checkout and RPC extension-load smoke test are the current test coverage. Project-local installations require Pi's project trust.
+</Aside>
+
+## Install and update
+
+```bash
+pi install git:github.com/alexgreensh/token-optimizer
+# Or test a local checkout:
+pi install ./pi
+pi update --extensions
+```
+
+The root package manifest loads only the Pi extension; it does not auto-load the other runtime skills.
+
+## Verify before enabling
+
+Inside Pi:
+
+```text
+/token-optimizer
+/token-optimizer doctor
+/token-optimizer enable
+```
+
+The extension starts off. Continuity and archiving require their own opt-ins even after measurement is enabled. See [Pi capabilities and limits](/platforms/pi/) before enabling either, especially for sensitive outputs.
+
+## Uninstall
+
+```text
+/token-optimizer disable
+/token-optimizer purge all
+```
+
+Purge is optional: it removes extension-managed data, not Pi session history. Then remove the same source you installed:
+
+```bash
+pi remove git:github.com/alexgreensh/token-optimizer
+# If installed from a local checkout instead:
+pi remove ./pi
+```
+
+Pi uses `TOKEN_OPTIMIZER_PI_HOME` as the complete data directory (default `~/.pi/agent/token-optimizer`), not the Python runtime selector. See [Configuration](/reference/configuration/).

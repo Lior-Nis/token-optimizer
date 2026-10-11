@@ -1,11 +1,11 @@
 ---
 title: CLAUDE.md injection
-description: "inject-routing and inject-coach write data-driven advice into CLAUDE.md as managed blocks with a 48-hour TTL, so the guidance is present where Claude reads it and removes itself before it goes stale."
+description: "inject-routing and inject-coach write data-driven advice into CLAUDE.md as managed blocks with a 48-hour TTL, so the guidance is present where Claude reads it and can be removed by a staleness check after its TTL."
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-Advice only helps if Claude sees it. CLAUDE.md injection writes Token Optimizer's recommendations directly into your CLAUDE.md as a managed block, so model-routing and coaching guidance is in the file Claude loads every session. The block carries a 48-hour TTL and removes itself once stale, so old advice never lingers.
+Advice only helps if Claude sees it. CLAUDE.md injection writes Token Optimizer's recommendations directly into your CLAUDE.md as a managed block, so model-routing and coaching guidance is in the file Claude loads every session. The block carries a 48-hour TTL. Expiry is not a timer: `check-staleness` must run to remove expired text, so a block can linger if no check runs.
 
 ## What it does
 
@@ -25,11 +25,11 @@ A managed block is data-driven, so it is only as good as the data behind it. Aft
 
 `check-staleness` reads the timestamp in a managed block and removes the block if it has passed the 48-hour window. This keeps CLAUDE.md from accumulating expired advice that costs tokens every session while no longer being true.
 
-You can check a specific section or let it sweep the managed blocks it knows about (`COACH`, `MODEL_ROUTING`).
+No section argument checks COACH only. Pass `MODEL_ROUTING` explicitly to check that block.
 
 ## When it fires
 
-Injection is manual or hook-driven, never automatic on its own. You run `inject-routing` or `inject-coach` when you want the block written. `check-staleness` runs when you call it, or on a hook if you set one up with `setup-coach-injection`. The setup command installs the injection-and-staleness loop so the block refreshes and expires without you thinking about it.
+Injection is manual in the current command dispatch; you may wire your own hook, but the setup verb alone does not do that. You run `inject-routing` or `inject-coach` when you want the block written. `check-staleness` runs when you call it, or from a hook you separately configure. The shipped `setup-coach-injection` dispatch writes the COACH block once; it does not install a recurring hook or scheduler. Run `check-staleness` explicitly (COACH by default; specify MODEL_ROUTING for that block).
 
 ## Default state
 
@@ -37,21 +37,21 @@ Off, opt-in, on Claude Code and Codex (where the target is AGENTS.md). Nothing i
 
 ## How to turn it on and off
 
-To turn it on, run the inject command once, or install the managed loop:
+To write the COACH block once, run the setup alias:
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
-python3 measure.py setup-coach-injection          # install the inject + staleness loop
+python3 measure.py setup-coach-injection          # write the COACH block once
 ```
 
-To turn it off and remove the loop:
+To remove the COACH block from the default candidate instruction files:
 
 ```bash
 cd ~/.claude/skills/token-optimizer/scripts
 python3 measure.py setup-coach-injection --uninstall
 ```
 
-To remove a block right now without uninstalling, run `check-staleness`, which deletes any managed block past its TTL, or delete the fenced managed block from CLAUDE.md by hand. The markers make it safe to remove: everything between them is Token Optimizer's, everything outside is yours.
+To remove an expired block, run `check-staleness` for the relevant section, or delete the fenced managed block from CLAUDE.md by hand. The markers make it safe to remove: everything between them is Token Optimizer's, everything outside is yours.
 
 ## Exact commands
 
@@ -62,16 +62,16 @@ python3 measure.py inject-routing                  # write the routing block to 
 python3 measure.py inject-coach --dry-run          # preview the coaching block
 python3 measure.py inject-coach                    # write the coaching block
 python3 measure.py inject-coach --file PATH         # target a non-default file
-python3 measure.py check-staleness                  # remove any managed block past 48h
+python3 measure.py check-staleness                  # remove COACH if past 48h
 python3 measure.py check-staleness MODEL_ROUTING    # check one section
-python3 measure.py setup-coach-injection            # install the managed loop
+python3 measure.py setup-coach-injection            # write the COACH block once
 python3 measure.py setup-coach-injection --uninstall
 ```
 
 <Steps>
 1. **Preview.** Run the inject command with `--dry-run` and read the block.
 2. **Write.** Run it without `--dry-run` to write the managed block into CLAUDE.md.
-3. **Let it expire.** `check-staleness` removes the block after 48 hours, or install `setup-coach-injection` to automate the refresh-and-expire loop.
+3. **Check expiry.** Run `check-staleness` to remove an expired block. Repeat setup when you want fresh advice. No timer runs merely because the block has a TTL.
 </Steps>
 
 On Codex, the target is AGENTS.md. Prefix the runtime, for example `TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py inject-routing --dry-run`.
@@ -84,11 +84,11 @@ On Codex, the target is AGENTS.md. Prefix the runtime, for example `TOKEN_OPTIMI
 | Block TTL | 48 hours | `check-staleness` removes a block past this. |
 | Default target | CLAUDE.md (AGENTS.md on Codex) | Override with `--file PATH`. |
 | Preview | `--dry-run` | Prints the block without writing. |
-| Managed sections | COACH, MODEL_ROUTING | The blocks staleness sweeps. |
+| Managed sections | COACH, MODEL_ROUTING | Check each section explicitly. |
 
 ## Risk rating
 
-Low. These commands write to your CLAUDE.md, which is the one thing the read-only features do not do. The risk is contained three ways: `--dry-run` lets you preview, the managed markers mean removal never touches your own content, and the 48-hour TTL means a forgotten block expires on its own. Run the dry-run first and the change is fully visible before it lands.
+Low. These commands write to your CLAUDE.md, which is the one thing the read-only features do not do. The risk is contained three ways: `--dry-run` lets you preview, the managed markers mean removal never touches your own content, and the 48-hour TTL lets a later staleness check identify a forgotten block. Run the dry-run first and the change is fully visible before it lands.
 
 ## Related environment variables
 

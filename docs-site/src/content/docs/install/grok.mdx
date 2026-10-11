@@ -1,0 +1,43 @@
+---
+title: Grok Build
+description: "Install the contract-only beta Grok adapter from a checkout, verify its payload, and remove only its own hooks."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Beta, not live-host verified">
+The Grok adapter is contract-tested. Native Windows installation is refused: its hook commands use POSIX shell quoting. Keep the checkout in place, since background rollup uses a locator for its `measure.py`.
+</Aside>
+
+## Install
+
+From a clone of `alexgreensh/token-optimizer`:
+
+```bash
+bash install.sh --grok
+# Or install just the adapter hooks/payload:
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-install --dry-run
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-install
+```
+
+The installer writes its own `<grok-home>/hooks/token-optimizer.json` and copies the bridge modules to `<grok-home>/token-optimizer/plugin/`. Re-run after updating the checkout. It preserves other hook files.
+
+## Verify and dashboard
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-doctor --probe
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-summary
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py dashboard --serve
+```
+
+The doctor checks binary discovery, safe home resolution, payload integrity, hook wiring, stored session shapes, and synthetic probe behavior. A passing synthetic probe does not establish real host hook firing. The dashboard port is 24848.
+
+## Uninstall
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=grok python3 skills/token-optimizer/scripts/measure.py grok-uninstall
+```
+
+The adapter uninstall removes only its own hooks and payload; session data stays. See [Grok Build capabilities](/platforms/grok/) for token/cost limits and [Configuration](/reference/configuration/) for home overrides.
+
+The shared engine reserves port 24848, but the foreign-runtime guard blocks `setup-daemon` for Grok. Use the foreground dashboard command above; do not confuse a port assignment with a working persistent install command.

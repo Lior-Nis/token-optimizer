@@ -23,9 +23,9 @@ On the next start, restore runs in one of two variants. After a compaction, the 
 
 ### Progressive checkpoints
 
-Progressive checkpoints save more often as a session gets riskier, not on a fixed timer. Two conditions raise the stakes: context fill climbing toward the window limit, and the quality score dropping. When either crosses its threshold, a checkpoint is written so that a compaction or crash at a bad moment still has a recent recovery point.
+Progressive checkpoints save more often as a session gets riskier, not on a fixed timer. On the Python core, context fill crossing 20%, 35%, 50%, 65%, or 80% writes a checkpoint so that a compaction or crash at a bad moment still has a recent recovery point.
 
-Progressive behavior is governed by `TOKEN_OPTIMIZER_PROGRESSIVE_CHECKPOINTS`. The exact fill and quality thresholds are platform-tuned (verify). See the [configuration reference](/reference/configuration/#checkpoints-and-continuity) for the variable.
+Progressive behavior is governed by `TOKEN_OPTIMIZER_PROGRESSIVE_CHECKPOINTS`. The Python core uses those five fill bands and the checkpoint cooldown (90 seconds by default); a jump across several bands captures the highest crossed band and marks lower ones covered. Other adapters have their own capture paths. See the [configuration reference](/reference/configuration/#checkpoints-and-continuity) for the variable.
 
 ### Milestone checkpoints
 
@@ -124,7 +124,7 @@ The verdict lives in the shared daily record that `recommendations`, `quick`, `d
 | Auto-capture triggers | PreCompact, Stop, StopFailure | Plus milestone on `Agent`/`Task` fan-out |
 | Milestone name (fan-out) | `pre-fanout` | Duplicate-guarded per milestone |
 | Restore variants | full (after compaction), keyword-matched (fresh) | Chosen automatically by SessionStart |
-| Progressive checkpoints | platform-tuned (verify) | Gated by fill % and quality drop |
+| Progressive checkpoints (Python core) | 20/35/50/65/80% fill | Highest uncaptured band; checkpoint cooldown applies |
 | Activity modes | code, debug, review, infra, general | Detected from the last 10 tool calls |
 | Dynamic compact instructions | On (via hook) | Static is opt-in |
 

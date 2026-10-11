@@ -1,20 +1,20 @@
 ---
 title: Tool result archive and expand
-description: "Large tool results are written to disk and replaced inline with a short pointer, so they survive compaction and the model can pull back the full output on demand with expand."
+description: "Large tool results get a capped, credential-redacted recovery copy. Eligible MCP results get an inline preview/pointer, retrievable with expand."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The tool result archive saves large tool outputs to disk and leaves a short pointer in their place, so a big result is not lost when the session compacts and the model can retrieve the full text whenever it needs it.
+The tool result archive saves a capped, credential-redacted recovery copy of large tool outputs. Eligible MCP results get an inline preview/pointer; other covered tools keep their original inline output. Retrieval remains possible while the stored copy survives retention.
 
 ## What it does
 
-A single large tool result, a 200KB grep or a long file read, can be discarded the next time the session compacts, taking information the model still needed with it. The archive prevents that. When a tool returns a result at or above 4,096 characters, the PostToolUse hook writes the full output to disk keyed by its `tool_use_id`, then leaves a compact pointer in the live context. The pointer carries an inline hint the model can act on: it names the `expand` command and the id to retrieve the full result later.
+A single large tool result, a 200KB grep or a long file read, can be discarded the next time the session compacts, taking information the model still needed with it. The archive prevents that. When a tool returns a result at or above 4,096 characters, the PostToolUse hook writes a bounded, credential-redacted copy to disk keyed by its `tool_use_id`, then, for eligible MCP tools, replaces the inline result with a preview and retrieval pointer. Bash/PowerShell, Read, Glob, Grep, and Agent results are archived for recovery without this general MCP replacement; Bash compression has its own output-replacement path. The pointer carries an inline hint the model can act on: it names the `expand` command and the id to retrieve the full result later.
 
-This is a durability feature, not primarily a savings feature. The pointer is smaller than the original, so there is an incidental context reduction, but the purpose is keeping large results recoverable across compaction rather than shrinking them. The full output stays on disk and out of the live window until the model explicitly asks for it back.
+This is a durability feature, not primarily a savings feature. The pointer is smaller than the original, so there is an incidental context reduction, but the purpose is keeping large results recoverable across compaction rather than shrinking them. The saved copy is credential-redacted. Results above 5,242,880 characters are truncated with a visible marker, so `expand` cannot recover the discarded tail. Agent results and exempt MCP tools keep their full inline output; their archive copy is still available for recovery.
 
 <Aside type="note" title="Durability, not savings">
-Archiving moves a large result to disk and replaces it with a recoverable pointer. Treat the token reduction as a side effect. The point is that a result you may need after `/compact` is still there, addressable by id, instead of gone.
+Archiving stores a recovery copy; eligible MCP results also get a preview/pointer. Treat the token reduction as a side effect. The point is that a result you may need after `/compact` is still there, addressable by id, instead of gone.
 </Aside>
 
 ## The model-actionable inline hint
@@ -25,7 +25,7 @@ When the model knows *what* it needs but not *which* archived result holds it, `
 
 ## When it fires
 
-Automatically, on the PostToolUse hook, for any tool result at or above the size threshold. It covers Bash, Read, Glob, Grep, Agent, and MCP results. Retrieval with `expand` is manual: it runs only when the model or you call it.
+Automatically, on the PostToolUse hook, for any tool result at or above the size threshold, subject to eligibility and safety guards. It covers Bash, PowerShell, Read, Glob, Grep, Agent, and MCP results. Eligible MCP output can be replaced; archive exemptions keep the inline result intact. Retrieval with `expand` is manual: it runs only when the model or you call it.
 
 ## Default state
 
@@ -76,7 +76,10 @@ TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py expand --list
 | Setting | Value |
 |---|---|
 | Archive threshold | Results at or above 4,096 characters |
-| Tools covered | Bash, Read, Glob, Grep, Agent, MCP |
+| Tools covered | Bash, PowerShell, Read, Glob, Grep, Agent, MCP |
+| Saved-copy cap | 5,242,880 characters, with a truncation marker |
+| Aggregate limits | 1,000 files / 100 MiB by default; oldest inactive sessions first |
+| Inline replacement | Eligible non-exempt MCP tools; Agent results are archive-only |
 | Trigger | Automatic on PostToolUse |
 | Retrieval | Manual (`expand`) |
 | Auto-purge | After 24 hours, applied when the hook writes a new archive or the session-end worker runs |
@@ -84,7 +87,7 @@ TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py expand --list
 
 ## Risk rating
 
-Low. The archive writes the full result to a local file before replacing it inline, so the data is never destroyed, only relocated and made addressable. The realistic failure is the model not retrieving an archived result it needed, which the inline hint is built to prevent by naming the exact `expand` command and id. Automatic and manual cleanup share the 24-hour default; a result you still need beyond that window should be saved out of the archive explicitly.
+Low. The archive writes the full result to a local file before replacing it inline, with credential redaction and a size cap; redacted credentials and a tail beyond the cap cannot be recovered. The realistic failure is the model not retrieving an archived result it needed, which the inline hint is built to prevent by naming the exact `expand` command and id. Automatic and manual cleanup share the 24-hour default; a result you still need beyond that window should be saved out of the archive explicitly.
 
 ## Related environment variables
 

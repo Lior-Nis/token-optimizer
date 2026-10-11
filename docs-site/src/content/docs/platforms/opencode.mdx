@@ -33,6 +33,7 @@ These features work natively.
 - Quality scoring, 7 signals with per-family MRCR curves
 - Smart Compaction, mode-aware
 - Session continuity and checkpoints
+- Quality/fresh-session/lean-output nudges and message-loop detection, gated by native feature options
 - Dashboard, via the `token_dashboard` tool
 - Cost tracking across the supported model set
 
@@ -40,9 +41,8 @@ Feature toggles and retention thresholds are configured in `opencode.jsonc` or t
 
 ## Not yet ported
 
-These features are not in the OpenCode plugin. Each is blocked on a plugin-API surface OpenCode does not yet provide.
+The native plugin does not implement these shared Python features; this is an implementation gap, not a verified global statement about the upstream API.
 
-- Quality Nudges and Loop Detection, which need a session-visible notification surface
 - Bash output compression, which needs a tool-input mutation hook
 - Context Intel Promotion, the post-compaction tool-output digest
 - MCP tool introspection, which is Claude Code specific
@@ -50,7 +50,7 @@ These features are not in the OpenCode plugin. Each is blocked on a plugin-API s
 - Memory Health audit, Attention Optimizer, and the JSONL trim and dedup tools
 
 <Aside type="note">
-The OpenCode README claims full parity with the Claude Code plugin for the dual-score architecture and compaction, while the shared "not ported" list above is sourced from the OpenClaw notes. The exact OpenCode-specific overlap is not fully documented; treat the not-ported list as the conservative position. (verify)
+The OpenCode source computes warnings and appends them through the V1 `experimental.chat.system.transform` path (bridged to the V2 context hook). Do not reuse OpenClaw's not-ported list to describe OpenCode. Native nudges have their own gates and thresholds; Python toggle names are not universal.
 </Aside>
 
 ## Runtime

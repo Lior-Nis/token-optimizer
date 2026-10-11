@@ -1,0 +1,24 @@
+---
+title: Pi
+description: "Experimental Pi extension: off by default, local active-branch usage, separate opt-ins for continuity and redacted tool archives."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The Git-source install has not been tested end to end. Tests cover synthetic Pi session entries and an RPC extension-load smoke test, not live native compaction or model inference. Do not treat this as verified parity with Claude Code.
+</Aside>
+
+The Pi extension is separate from the Python adapters. It does not change your model, replace native compaction, or trim tool outputs. Measurement is off until `/token-optimizer enable`. Local model usage comes from the active Pi branch; cost coverage distinguishes native, estimated, and unpriced calls. The native cost is a subtotal, not a complete bill, and savings are not invented.
+
+## Separate opt-ins
+
+- **Measurement:** `/token-optimizer enable`; stop with `/token-optimizer disable`.
+- **Continuity:** `/token-optimizer continuity on` stores redacted goal markers and presents review candidates after native compaction. Inspect with `/token-optimizer continuity candidates`; only `/token-optimizer continuity accept` opts into reinjection. Accepted candidates do change model context.
+- **Tool archive:** `/token-optimizer archive on` stores redacted results up to 64 KiB each, approximately 10 MiB or 1,024 files total (best-effort across concurrent processes). The model still receives full results. Unknown secret formats can escape screening; avoid sensitive output. List with `/token-optimizer archives`, recover with `/token-optimizer recover POINTER`.
+
+Disabling does not erase archives/checkpoints. Pruning defaults to seven days; `/token-optimizer purge all` deletes extension-managed files, not Pi session history.
+
+Data defaults to `~/.pi/agent/token-optimizer`; override the complete data directory with `TOKEN_OPTIMIZER_PI_HOME`. Pi is not a supported `TOKEN_OPTIMIZER_RUNTIME` value for `measure.py`.
+
+Follow [Pi install](/install/pi/) and run `/token-optimizer doctor` for diagnostics.

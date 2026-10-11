@@ -84,4 +84,4 @@ TOKEN_OPTIMIZER_RUNTIME=copilot python3 measure.py copilot-doctor
 
 ## Dashboard
 
-The Copilot daemon port is 24845. Whether `setup-daemon` is wired for Copilot is not documented in the Copilot sources; the shared engine assigns the port. (verify)
+The Copilot daemon port is 24845. The shared engine assigns the port, but its foreign-runtime guard blocks `setup-daemon` on Copilot; the port map alone is not a supported persistent installation route.

@@ -42,14 +42,16 @@ This step is required. It writes the hooks to `~/.codex/hooks.json`, which Codex
 
 ### Hook profiles
 
-`codex-install` defaults to the `balanced` profile. Pass `--profile` to pick another based on how much hook activity you want.
+`codex-install` defaults to `aggressive`. Pass `--profile` to choose event coverage. Compact-prompt guidance is installed separately on every profile unless `--skip-compact-prompt` is set.
 
-| Profile | What it installs | Noise level |
+Bash PreToolUse rewriting is off on all profiles; opt in with `--enable-bash-compression`. `--no-subagent-hooks` removes subagent coverage. The PostToolUse hook is Bash-only and silent: it records thrash/archive state but does not emit Codex-unsupported `updatedToolOutput`.
+
+| Profile | Events installed | Behavior |
 |---|---|---|
-| `balanced` (default) | SessionStart + UserPromptSubmit + Stop + compact prompt | Low, 3 hook events |
-| `quiet` | Stop only | Minimal, 1 hook event |
-| `telemetry` | Balanced + PostToolUse | Medium, visible rows in Desktop |
-| `aggressive` | All hooks including experimental Bash PreToolUse | High, full coverage |
+| `aggressive` (default) | SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, PostToolUse (Bash), Stop | Silent by default, 6 events |
+| `balanced` | SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop | 5 events |
+| `quiet` | Stop | 1 event |
+| `telemetry` | PostToolUse (Bash), Stop | Silent bookkeeping, 2 events |
 
 Install with a specific profile:
 
@@ -100,7 +102,12 @@ Remove the dashboard daemon, then remove the plugin via the Codex `/plugins` men
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py setup-daemon --uninstall
 ```
 
-To strip the hooks, delete the Token Optimizer entries from `~/.codex/hooks.json` (or the per-project file if you scoped it).
+Remove only Token Optimizer's managed hooks with:
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --uninstall
+# For a project-scoped install, also pass --project "$PWD".
+```
 
 <Aside type="note">
 Codex uses `AGENTS.md` where Claude Code uses `CLAUDE.md`, and keeps memory under `~/.codex/memories/`. A few Claude Code features are approximated on Codex because of upstream hook gaps. See the [Codex platform reference](/platforms/codex/) for the full list.

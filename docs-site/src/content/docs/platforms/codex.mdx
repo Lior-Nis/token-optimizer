@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 Codex runs the Token Optimizer engine through its own hook API. Quality scoring, cost tracking, the dashboard, and session continuity all work. A few Claude Code features are approximated or unavailable because the Codex hook API exposes less than Claude Code's, and each gap is named below with its upstream cause.
 
-Codex CLI and Codex Desktop share one adapter. There is no separate Desktop install. The `telemetry` hook profile adds PostToolUse rows that render in Desktop.
+Codex CLI and Codex Desktop share one adapter. There is no separate Desktop install. The `aggressive` default includes silent Bash PostToolUse bookkeeping; `telemetry` installs only that bookkeeping and Stop. Neither profile promises visible Desktop rows.
 
 ## Supported surfaces
 
@@ -35,23 +35,25 @@ Codex uses different config and memory conventions, and the adapter follows them
 | Config file | `CLAUDE.md` | `AGENTS.md` |
 | Memory system | `MEMORY.md` plus project memory dirs | `~/.codex/memories/**/*.md` |
 | Model routing advice | Opus, Sonnet, Haiku per agent | Intelligence levels plus GPT-5.x model selection |
-| Hook install | Auto on plugin install, 8 events | `codex-install` command, global by default, 4 profiles, 3 to 5 events |
+| Hook install | Auto on plugin install, 11 events | `codex-install` command, global by default, 4 profiles, 1 to 6 events before optional flags |
 | Compact lifecycle | PreCompact and PostCompact capture and restore | Compact-prompt guidance plus Stop checkpoints |
-| Tool result archive | PostToolUse archives immediately | Stop-time backfill from JSONL, or PostToolUse on the telemetry profile |
+| Tool result archive | PostToolUse archives immediately | Stop-time backfill from JSONL, plus Bash PostToolUse on telemetry/aggressive profiles |
 | Dashboard refresh | SessionEnd hook plus daemon at 24842 | Stop hook plus daemon at 24843 |
 
 The Token Coach reads `AGENTS.md` and the Codex memory directories, and its routing advice speaks in GPT-5.x intelligence levels and model choices rather than the Claude model tiers.
 
 ## Hook profiles
 
-Codex hooks install through `codex-install`. Pick a profile by how much surface noise you want.
+Codex hooks install through `codex-install`. The default is `aggressive`; profiles select event coverage, not visible Desktop noise. Compact-prompt guidance is installed separately on every profile unless you pass `--skip-compact-prompt`.
 
-| Profile | Installs | Noise |
+Bash command rewriting remains off on every profile. Add `--enable-bash-compression` to install a Bash PreToolUse hook; it uses `updatedInput` and is inert on builds that ignore that field. `--enable-prompt-hooks`, `--enable-hot-path-hooks`, and `--enable-subagent-hooks` add coverage to a smaller profile; `--no-subagent-hooks` omits subagent hooks even on balanced/aggressive.
+
+| Profile | Events installed | Behavior |
 |---|---|---|
-| `balanced` (default) | SessionStart, UserPromptSubmit, Stop, compact prompt | Low, 3 events |
-| `quiet` | Stop only | Minimal, 1 event |
-| `telemetry` | Balanced plus PostToolUse | Medium, visible rows in Desktop |
-| `aggressive` | All hooks including experimental Bash PreToolUse | High, full coverage |
+| `aggressive` (default) | SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, PostToolUse (Bash), Stop | Silent by default, 6 events |
+| `balanced` | SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop | 5 events |
+| `quiet` | Stop | 1 event |
+| `telemetry` | PostToolUse (Bash), Stop | Silent bookkeeping, 2 events |
 
 ```bash
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --profile quiet
@@ -78,7 +80,7 @@ TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py 
 |---|---|---|
 | Smart Compaction | Approximated through compact-prompt guidance plus Stop checkpoints | No PreCompact or PostCompact hook in Codex |
 | Crash recovery | Approximated with Stop plus the compact prompt | No StopFailure hook in Codex |
-| Bash output compression | Experimental opt-in only | Codex hooks cannot rewrite tool input silently |
+| Bash output compression | Experimental opt-in only | Command rewriting requires explicit `--enable-bash-compression`; host must honor `updatedInput` |
 | Cache-write TTL breakdown | Cached input shown, no 1h or 5m split | Codex logs do not expose cache-write TTL fields |
 | Skill usage telemetry | Partial, from limited log signals | Codex logs do not expose every skill invocation event |
 
@@ -118,7 +120,8 @@ Token Optimizer tracks these Codex model prices for cost figures.
 
 | Model | Input ($/1M) | Cached ($/1M) | Output ($/1M) |
 |---|---|---|---|
-| GPT-5.6 Sol | $5.00 | $0.50 | $30.00 |
+| GPT-5.6 Sol (promotion before 2026-11-21 UTC) | $4.00 | $0.40 | $20.00 |
+| GPT-5.6 Sol (standard from 2026-11-21 UTC) | $5.00 | $0.50 | $30.00 |
 | GPT-5.6 Terra | $2.00 | $0.20 | $12.00 |
 | GPT-5.6 Luna | $0.20 | $0.02 | $1.20 |
 | GPT-5.5 | $5.00 | $0.50 | $30.00 |
@@ -127,7 +130,7 @@ Token Optimizer tracks these Codex model prices for cost figures.
 | GPT-5.3-Codex | $1.75 | $0.175 | $14.00 |
 | GPT-5.2 | $1.75 | $0.175 | $14.00 |
 
-These are API-equivalent estimates, not ChatGPT subscription credits or plan limits.
+These are shipped engine API-equivalent estimates, not ChatGPT subscription credits or plan limits. Bundled price cards can update the table; Sol has a date-gated promotion. The engine applies long-context cards per request above 272K prompt tokens where a card exists, rather than pricing a whole session at that rate.
 
 ## Auto-update
 

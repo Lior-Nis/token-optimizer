@@ -5,7 +5,7 @@ description: "Platform support: Token Optimizer ships a native adapter per platf
 
 import { Aside } from '@astrojs/starlight/components';
 
-Token Optimizer runs natively on eight coding surfaces. Each platform gets its own adapter built against that platform's real hook API, not a lowest-common-denominator wrapper. Where an upstream API cannot do something, the page for that platform names the gap and the reason instead of pretending parity.
+Token Optimizer has adapters for the coding platforms below, plus a separate experimental Pi extension. Each platform gets its own adapter built against that platform's real hook API, not a lowest-common-denominator wrapper. Where an upstream API cannot do something, the page for that platform names the gap and the reason instead of pretending parity.
 
 ## Supported platforms
 
@@ -21,9 +21,11 @@ Claude Code is the reference platform. Every feature ships there first, and ever
 | [GitHub Copilot](/platforms/copilot/) | CLI, VS Code | Beta |
 | [Cursor](/platforms/cursor/) | IDE (Composer), CLI | Beta |
 | [Google Antigravity](/platforms/antigravity/) | CLI, App, IDE | Beta |
+| [Grok Build](/platforms/grok/) | CLI | Contract-only beta; live host unverified |
+| [Pi](/platforms/pi/) | Extension | Experimental; opt-in measurement, unverified Git-source install |
 | [Cowork](/platforms/cowork/) | Plugin, org console or personal upload | Experimental |
 
-Claude Cowork runs the same Claude Code engine in a VM, so it is not a separate runtime. It reaches Cowork sessions through the org plugin console rather than a local install, and it runs the hook subset that fires in Cowork. It is experimental and not yet verified on a live build. See the [Cowork page](/platforms/cowork/) for the distribution path and the hook set.
+Claude Cowork runs the same Claude Code engine in a VM, so it is not a separate runtime. It reaches Cowork sessions through the org plugin console rather than a local install, and it packages an intended hook subset for probe verification in Cowork. It is experimental and not yet verified on a live build. See the [Cowork page](/platforms/cowork/) for the distribution path and the hook set.
 
 The VS Code companion extension that surfaces Claude Code data also runs in Cursor and Windsurf, because both are VS Code forks. That covers the editor status bar only. A standalone Cursor adapter with its own hook integration now ships in beta (see the [Cursor page](/platforms/cursor/)); a standalone Windsurf adapter remains on the roadmap, not shipped.
 

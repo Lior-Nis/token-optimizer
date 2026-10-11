@@ -11,7 +11,7 @@ A large model does not read your CLAUDE.md evenly. It attends hardest to the beg
 
 `attention-score` reads a markdown file (CLAUDE.md by default) and classifies each section by its position. Sections in the first 30% or the last 30% sit in the high-attention zone; sections between the 30% and 70% marks sit in the low-attention zone. It then finds your critical rules, the lines containing NEVER, ALWAYS, MUST, CRITICAL, IMPORTANT, or NON-NEGOTIABLE, and scores how many of them land in the high zone versus the low one.
 
-A score of 100 means every critical rule sits where the model reads hardest. A low score means rules you care about are buried in the middle, where they carry the least weight.
+A score of 100 means the heuristic places every detected critical rule in its high-position bands; it is not a measured attention probability. A low score means rules you care about are buried in the middle, where they carry the least weight.
 
 `attention-optimize` proposes a reordering that moves critical sections into the high-attention zones. By default it only proposes; it shows the new order without touching the file. Pass `--apply` and it backs up the file, then writes the reordered version.
 
@@ -24,7 +24,7 @@ A score of 100 means every critical rule sits where the model reads hardest. A l
 | High (recency) | Last 30% | Strong. The model reads the closing hardest. |
 
 <Aside type="note" title="This is the same bias behind memory truncation">
-The first-and-last preference is a property of how large models read long context. The [line-200 MEMORY.md cutoff](/features/memory-health/) is the strictest application of the same bias: position decides whether content lands at all, and where it lands decides how much weight it carries.
+The first-and-last preference is a property of how large models read long context. The [line-200 MEMORY.md cutoff](/features/memory-health/) is a separate host loading limit, not evidence that the attention-score heuristic measures a model's actual attention.
 </Aside>
 
 ## When to use it
@@ -59,13 +59,13 @@ python3 measure.py attention-optimize --apply          # back up, then write the
 3. **Apply.** Run `attention-optimize --apply` to back up and write the reordered file, then re-score to confirm.
 </Steps>
 
-On Codex, the default target is AGENTS.md. Prefix the runtime, for example `TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py attention-score`.
+The current attention commands default to the resolved Claude-home CLAUDE.md even on Codex. Pass the intended AGENTS.md path explicitly, for example `TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py attention-score ./AGENTS.md`; the runtime prefix alone does not change this default.
 
 ## Defaults and thresholds
 
 | Setting | Default | Notes |
 |---|---|---|
-| Default target | CLAUDE.md (AGENTS.md on Codex) | Pass a path to score any file. |
+| Default target | Resolved Claude-home CLAUDE.md | Pass an explicit AGENTS.md path on Codex, or a path to score any file. |
 | High zone | first 30% and last 30% | Where the model attends hardest. |
 | Low zone | 30% to 70% | The "lost in the middle" band. |
 | Optimize mode | dry-run | `--apply` required to write. |

@@ -9,7 +9,7 @@ Every prompt-cache provider sets a TTL. When a session resumes after that window
 
 ## What it does
 
-A prompt cache stores your conversation prefix so each turn does not re-send it at full price. The store has a TTL: Anthropic's API cache entries last about an hour, with a shorter five-minute window. Resume inside the window and you pay the cache-read rate. Resume after it and the whole prefix is re-written at the cache-write rate, which runs 1.25 to 2 times the read cost.
+A prompt cache stores your conversation prefix so each turn does not re-send it at full price. The store has a TTL: Anthropic's API cache entries last about an hour, with a shorter five-minute window. Resume inside the window and you pay the cache-read rate. Resume after it and the whole prefix is re-written at the cache-write rate, which runs 1.25 to 2 times the fresh-input price, or 12.5 to 20 times the cache-read price.
 
 `cache-report` scans your session history for exactly this pattern: resumes that landed after the TTL lapsed, and the tokens that were re-written as a result. It reports the waste per provider, because TTLs and rates differ across Anthropic, Vertex, and Bedrock.
 
@@ -34,7 +34,7 @@ The report breaks down TTL waste per provider and surfaces the sessions where ex
 
 A **behavioral** remedy changes how you work: resume sooner, batch a paused thread back within the TTL, or close a session you will not return to instead of letting it lapse and re-write later. These cost nothing and carry no risk.
 
-An **API** remedy spends to keep the prefix warm: a Keep-Warm ping reads the cache before it expires, refreshing the TTL at roughly a tenth of the prefix cost. This recovers waste on a genuine pause-and-resume rhythm, but it issues model calls, so it is opt-in and API-billing only. See [Keep-Warm](/features/keep-warm/).
+A **refresh** remedy can spend tokens to keep the prefix warm. Keep-Warm models that tradeoff, but automatic production LLM pings are disabled; enabling its watcher does not recover the modeled waste. The desktop manual refresh is a separate action that spends usage only when clicked. See [Keep-Warm](/features/keep-warm/).
 
 <Aside type="tip" title="Measure before you ping">
 Run `cache-report` first. If your TTL waste is small or concentrated in sessions you could simply resume sooner, the behavioral fix is free. Reach for Keep-Warm only when the report shows recurring expiry on sessions you genuinely pause and return to.
@@ -78,8 +78,8 @@ Runs anywhere Token Optimizer collects session history (Claude Code, Codex, Copi
 
 ## Related
 
-- [Keep-Warm](/features/keep-warm/): the API remedy that pings the cache before it expires.
-- [Subagent prompt cache](/features/subagent-cache/): measures whether a one-hour subagent cache TTL pays on your history and recommends it; never sets it for you.
+- [Keep-Warm](/features/keep-warm/): the API remedy designed to ping the cache before it expires. Its pings are disabled in production builds.
+- [Subagent prompt cache](/features/subagent-cache/): measures whether a one-hour subagent cache TTL pays on your history and recommends it by default; explicit enable or the automation opt-in can set it.
 - [Cache economics](/concepts/cache-economics/): why a lapsed prefix costs 1.25-2x to re-write.
 - [Usage and session analytics](/features/usage-analytics/): trends, savings, and per-turn cost.
 - [Configuration](/reference/configuration/): pricing tiers and provider rates.

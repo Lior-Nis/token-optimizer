@@ -11,7 +11,7 @@ The Manage tab turns off the skills and MCP servers that the audit flags as expe
 
 Skills and MCP servers each add token overhead to every session: skill metadata loads on start, and MCP servers contribute their full tool schema. The audit identifies the heaviest contributors. The Manage tab, and its CLI equivalents, let you disable a contributor in one action so it stops loading, then restore it later when you need it.
 
-Disabling a skill moves it out of the skills directory to a backup location, so nothing is deleted. Disabling an MCP server removes its entry from `settings.json`. Both actions are reversible, and both apply to new tool calls without restarting the session.
+Disabling a skill moves it out of the skills directory to a backup location, so nothing is deleted. Disabling an MCP server removes its entry from `settings.json`. Both actions are reversible. Host reload behavior determines when they take effect; do not assume an existing session immediately unloads its skills or MCP catalog.
 
 ## When to use it
 
@@ -19,7 +19,7 @@ Use it after the audit shows a skill or MCP server costing more overhead than it
 
 ## Default state
 
-The toggles are always available on every platform. Nothing is disabled until you disable it. There is no automatic toggling: Token Optimizer never turns a skill or server off on your behalf.
+The Python management toggles are available on Claude Code and Codex. Other adapters do not inherit them merely by having a dashboard. Nothing is disabled until you disable it. There is no automatic toggling: Token Optimizer never turns a skill or server off on your behalf.
 
 ## How to turn off
 
@@ -78,7 +78,7 @@ A disabled skill is archived, not deleted. The files move to a backup directory 
 |---|---|
 | Skill disable mechanism | Move to backup directory (reversible) |
 | MCP disable mechanism | Remove entry from `settings.json` (reversible) |
-| Effect timing | New tool calls; no session restart needed |
+| Effect timing | Host-dependent; reload/restart may be needed |
 | Automatic toggling | Never |
 
 ## Risk rating
