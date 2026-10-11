@@ -1,5 +1,9 @@
 from pathlib import Path
 import sys
+import os
+import pytest
+pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Native Windows unsupported by production design (installer refuses os.name != posix); tests gated accordingly.')
+
 SCRIPTS=Path(__file__).resolve().parents[1]/'skills/token-optimizer/scripts'
 sys.path.insert(0,str(SCRIPTS))
 
@@ -64,3 +68,21 @@ def test_genuine_devin_cli_discovery(tmp_path,monkeypatch):
     assert 'Triggers: user' in shown.stdout
     assert 'Triggers: user, model' not in shown.stdout
     assert str(d.skill_dir()) in shown.stdout
+
+
+@pytest.mark.parametrize('kind', ['XDG_CONFIG_HOME', 'TOKEN_OPTIMIZER_DEVIN_HOME'])
+def test_valid_inside_home_override_is_honored(tmp_path, monkeypatch, kind):
+    import devin_state as state
+    import devin_install as install
+    override = tmp_path / 'custom-config'
+    monkeypatch.setenv(kind, str(override))
+    expected = override / 'devin' if kind == 'XDG_CONFIG_HOME' else override
+    assert state.home() == expected
+    install.install()
+    assert (expected / 'skills' / 'token-optimizer-output' / 'SKILL.md').is_file()
+    assert (expected / 'token-optimizer' / 'consent.json').is_file()
+    capture = state.prepare_capture()
+    assert capture.is_relative_to(expected / 'token-optimizer')
+    assert not (tmp_path / '.config' / 'devin').exists()
+    install.uninstall()
+    assert not (expected / 'skills' / 'token-optimizer-output').exists()

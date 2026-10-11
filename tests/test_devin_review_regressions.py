@@ -4,6 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 import pytest
+import os
+import pytest
+pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Native Windows unsupported by production design (installer refuses os.name != posix); tests gated accordingly.')
+
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/token-optimizer/scripts'
 sys.path.insert(0, str(SCRIPTS))
 
@@ -96,7 +100,9 @@ def test_hostile_printable_home_quotes(tmp_path,monkeypatch):
     assert shlex.quote(str(home/'.config/devin/token-optimizer/plugin/devin_compress.py')) in text
 
 def test_shell_dry_run_no_claude_prerequisite(tmp_path):
-    env=dict(os.environ,HOME=str(tmp_path),TOKEN_OPTIMIZER_RUNTIME='devin')
+    env=dict(os.environ, **{'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path),
+                         'CLAUDE_CONFIG_DIR': str(tmp_path),
+                         'TOKEN_OPTIMIZER_RUNTIME': 'devin'})
     env.pop('XDG_CONFIG_HOME',None);env.pop('TOKEN_OPTIMIZER_DEVIN_HOME',None)
     run=subprocess.run(['bash',str(SCRIPTS.parents[2]/'install.sh'),'--devin','--dry-run'],env=env,capture_output=True)
     assert run.returncode==0,run.stderr
@@ -111,13 +117,16 @@ def test_doctor_missing_dependency_fails(tmp_path,monkeypatch):
 def test_doctor_imported_and_shadow_skills(tmp_path,monkeypatch):
     import devin_doctor as doctor
     monkeypatch.setenv('HOME',str(tmp_path));monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / '.claude'))
     for name in ('.claude/skills/token-optimizer/SKILL.md','.devin/skills/token-optimizer-output/SKILL.md'):
         p=tmp_path/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('foreign')
     assert len(doctor.diagnose()['warnings'])>=2
 
 @pytest.mark.parametrize('command',['dashboard','quick','setup-hook','cleanup-duplicate-hooks','trends','savings','quality'])
 def test_shared_dispatch_blocks_claude(command,tmp_path):
-    env=dict(os.environ,HOME=str(tmp_path),TOKEN_OPTIMIZER_RUNTIME='devin')
+    env=dict(os.environ, **{'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path),
+                         'CLAUDE_CONFIG_DIR': str(tmp_path),
+                         'TOKEN_OPTIMIZER_RUNTIME': 'devin'})
     run=subprocess.run([sys.executable,str(SCRIPTS/'measure.py'),command],env=env,capture_output=True,timeout=15)
     assert b'Devin' in run.stdout and b'will not' in run.stdout
     assert not (tmp_path/'.claude').exists()
@@ -435,3 +444,60 @@ def test_forged_exact_digest_temp_record_refused(tmp_path,monkeypatch):
     pending=d.state.data_dir()/'pending-install.json';pending.write_text(json.dumps({'owner':d.MARKER,'files':files}));pending.chmod(0o600)
     with pytest.raises(OSError):d.install()
     assert foreign.read_text()=='unrelated private note'
+
+
+def test_ambient_overrides_are_isolated(tmp_path):
+    from conftest import _devin_isolated_env
+    ambient = {'HOME': '/foreign/home', 'USERPROFILE': '/foreign/profile',
+               'CLAUDE_CONFIG_DIR': '/foreign/claude',
+               'XDG_CONFIG_HOME': '/foreign/config',
+               'TOKEN_OPTIMIZER_DEVIN_HOME': '/foreign/devin'}
+    env = _devin_isolated_env(ambient, tmp_path)
+    assert env['HOME'] == env['USERPROFILE'] == str(tmp_path)
+    assert env['CLAUDE_CONFIG_DIR'] == str(tmp_path)
+    assert 'XDG_CONFIG_HOME' not in env and 'TOKEN_OPTIMIZER_DEVIN_HOME' not in env
+    assert ambient['XDG_CONFIG_HOME'] == '/foreign/config'
+    code = ('import sys;sys.path.insert(0,sys.argv[1]);import devin_state as s;'
+            'print(s.home());s.enable_consent()')
+    child_env = dict(os.environ)
+    child_env.update(env)
+    for key in ('XDG_CONFIG_HOME', 'TOKEN_OPTIMIZER_DEVIN_HOME'):
+        child_env.pop(key, None)
+    run = subprocess.run([sys.executable, '-c', code, str(SCRIPTS)],
+                         env=child_env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert str(tmp_path / '.config' / 'devin') in run.stdout
+    assert not (tmp_path / '.claude' / 'settings.json').exists()
+
+
+def test_inherited_runtime_config_is_isolated(tmp_path):
+    from conftest import _devin_isolated_env
+    ambient = dict(os.environ, TOKEN_OPTIMIZER_RUNTIME='cursor',
+                   DEVIN_CONFIG_DIR='/foreign/runtime-config')
+    env = _devin_isolated_env(ambient, tmp_path)
+    assert 'TOKEN_OPTIMIZER_RUNTIME' not in env and 'DEVIN_CONFIG_DIR' not in env
+    env['TOKEN_OPTIMIZER_RUNTIME'] = 'devin'
+    run = subprocess.run([sys.executable, str(SCRIPTS / 'measure.py'), 'setup-hook'],
+                         env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert 'Devin' in run.stdout and 'will not' in run.stdout
+    assert not (tmp_path / '.claude' / 'settings.json').exists()
+
+
+def test_real_interpreter_trust_is_not_bypassed(tmp_path, devin_real_python):
+    import shutil
+    from py_trust import py_trust_reason
+    trusted, _ = devin_real_python
+    untrusted = tmp_path / 'untrusted-python'
+    shutil.copy2(trusted, untrusted)
+    untrusted.chmod(0o777)
+    reason = py_trust_reason(str(untrusted))
+    assert reason is not None and 'world-writable' in reason
+    run = subprocess.run([str(untrusted), str(SCRIPTS / 'devin_install.py'),
+                          'install', '--dry-run'], capture_output=True, text=True)
+    assert run.returncode == 1 and 'no trusted Python interpreter' in run.stderr, reason
+    untrusted.chmod(0o700)
+    assert py_trust_reason(str(untrusted)) is None
+    run = subprocess.run([str(untrusted), str(SCRIPTS / 'devin_install.py'),
+                          'install', '--dry-run'], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr

@@ -2,6 +2,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
 import sys
+import os
+import pytest
+pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Native Windows unsupported by production design (installer refuses os.name != posix); tests gated accordingly.')
+
 SCRIPTS=Path(__file__).resolve().parents[1]/'skills/token-optimizer/scripts'
 sys.path.insert(0,str(SCRIPTS))
 
