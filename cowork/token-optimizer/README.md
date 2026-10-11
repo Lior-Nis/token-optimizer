@@ -76,6 +76,35 @@ Works on ten AI coding tools, with Devin next on the roadmap:
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer in a Claude Code terminal: the quick scan, what runs automatically on every turn, and a 30-day savings report" width="800">
 </p>
 
+## What You Get
+
+**Runs automatically, every session, you do nothing:**
+
+- 🔄 **Smart Compaction**: checkpoints before auto-compact, restores after
+- 🗄️ **Session Continuity**: cross-session hints, cold-resume, checkpoint scoring
+- 📦 **Active Compression**: 9 features, all on by default (delta diffs, skeletons, bash/search compression, lean-output nudges, quality nudges, loop detection, activity mode, decision extraction)
+- 📊 **Quality Scoring**: 7 signals, real-time, letter grades S–F
+- 🗃️ **Session Database**: SQLite, 15 tables, full audit trail, zero network
+- 🔍 **Progressive Disclosure**: large outputs archived, expand on demand
+- 🧠 **Context Intel Digest**: post-compaction re-orientation without re-reads
+- 🔀 **Model Routing Nudges**: steers to the right tier for the task
+
+**When you ask for it:**
+
+- 🩺 `/token-optimizer`: full audit with guided fixes
+- 📈 `/token-coach`: 30-day trend analysis with specific fixes
+- ⚡ `quick`: 10-second health check
+- 🎯 `route`: the model and effort this task actually needs, before you spend
+- 🔧 `doctor`: installation check
+- 💰 `savings`: dollar savings report
+- 📋 `report`: per-component token breakdown
+- 🌐 `dashboard`: open the full dashboard
+- 📝 `memory-review`: MEMORY.md structural audit
+- 📂 `expand`: retrieve archived tool result
+- 🔙 `resume-lean`: reopen a cold session
+
+Install, run `/token-optimizer` once, everything else runs automatically.
+
 ## A Status Bar Inside the Claude Desktop App
 
 <p align="center">
@@ -216,35 +245,6 @@ Quickest path (Claude Code plugin install):
 ```
 
 </details>
-
-## What You Get
-
-**Runs automatically, every session, you do nothing:**
-
-- 🔄 **Smart Compaction**: checkpoints before auto-compact, restores after
-- 🗄️ **Session Continuity**: cross-session hints, cold-resume, checkpoint scoring
-- 📦 **Active Compression**: 9 features, all on by default (delta diffs, skeletons, bash/search compression, lean-output nudges, quality nudges, loop detection, activity mode, decision extraction)
-- 📊 **Quality Scoring**: 7 signals, real-time, letter grades S–F
-- 🗃️ **Session Database**: SQLite, 15 tables, full audit trail, zero network
-- 🔍 **Progressive Disclosure**: large outputs archived, expand on demand
-- 🧠 **Context Intel Digest**: post-compaction re-orientation without re-reads
-- 🔀 **Model Routing Nudges**: steers to the right tier for the task
-
-**When you ask for it:**
-
-- 🩺 `/token-optimizer`: full audit with guided fixes
-- 📈 `/token-coach`: 30-day trend analysis with specific fixes
-- ⚡ `quick`: 10-second health check
-- 🎯 `route`: the model and effort this task actually needs, before you spend
-- 🔧 `doctor`: installation check
-- 💰 `savings`: dollar savings report
-- 📋 `report`: per-component token breakdown
-- 🌐 `dashboard`: open the full dashboard
-- 📝 `memory-review`: MEMORY.md structural audit
-- 📂 `expand`: retrieve archived tool result
-- 🔙 `resume-lean`: reopen a cold session
-
-Install, run `/token-optimizer` once, everything else runs automatically.
 
 ## How It's Different
 

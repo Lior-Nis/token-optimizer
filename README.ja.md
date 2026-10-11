@@ -76,6 +76,46 @@ Devinがロードマップの次です。
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer クイックスキャン" width="800">
 </p>
 
+## 何が得られるか
+
+**毎セッション自動で動き、あなたは何もしない:**
+
+- 🔄 **スマート圧縮(Smart Compaction)**: 自動圧縮前にチェックポイント、後に復元
+- 🗄️ **セッション継続性(Session Continuity)**: セッション間ヒント、コールドリジューム、チェックポイント採点
+- 📦 **アクティブ圧縮(Active Compression)**: 9機能、すべてデフォルトオン(delta diff、スケルトン、bash/検索圧縮、リーン出力ナッジ、品質ナッジ、ループ検出、アクティビティモード、意思決定抽出)
+- 📊 **品質スコアリング(Quality Scoring)**: 7シグナル、リアルタイム、S〜Fの文字等級
+- 🗃️ **セッションデータベース(Session Database)**: SQLite、15テーブル、完全な監査証跡、ゼロネットワーク
+- 🔍 **プログレッシブ開示(Progressive Disclosure)**: 大きな出力はアーカイブ、要求時に展開
+- 🧠 **コンテキストインテル要約(Context Intel Digest)**: 圧縮後の再読込なしの再位置づけ
+- 🔀 **モデルルーティングナッジ(Model Routing Nudges)**: タスクに合ったティアへ誘導
+
+**あなたが求めたとき:**
+
+- 🩺 `/token-optimizer`: ガイド付き修正を伴う完全監査
+- 📈 `/token-coach`: 具体的な修正を伴う30日トレンド分析
+- ⚡ `quick`: 10秒ヘルスチェック
+- 🎯 `route`: お金を使う前に、このタスクが実際に必要とするモデルとeffort
+- 🔧 `doctor`: インストールチェック
+- 💰 `savings`: ドル節約レポート
+- 📋 `report`: コンポーネント別トークン内訳
+- 🌐 `dashboard`: 完全ダッシュボードを開く
+- 📝 `memory-review`: MEMORY.md構造監査
+- 📂 `expand`: アーカイブされたツール結果を取得
+- 🔙 `resume-lean`: コールドセッションを再開
+
+インストールして`/token-optimizer`を一度実行すれば、あとはすべて自動で動きます。
+
+## Claudeデスクトップアプリ内のステータスバー
+
+<p align="center">
+  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="Claudeデスクトップアプリ内のToken Optimizerステータスバー：品質、コンテキスト、キャッシュ、利用上限がリアルタイムで更新され、Clawdがセッションに反応します" width="720"></a>
+  <br><sub>30秒のプレビュー。 <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">音声付きのフルムービーを見る</a>（50秒）。</sub>
+</p>
+
+Claude Codeでは、プラグインが独自のインターフェース要素を追加できるようになりました。これをmodと呼びます。Token Optimizerはmodを使って、プロンプトのすぐ上にセッションの状態を表示します。品質グレード、コンテキストの使用率、キャッシュが保持される残り時間、そして2つの利用上限です。いま注意すべきことを一文で伝え、ボタン1つで対処できます。小さなオレンジ色のマスコットClawdがセッションの動きを演じるので、Claudeが読んでいるのか、編集しているのか、許可を待っているのか、完了したのかが一目でわかります。
+
+プラグインに含まれているため、追加のインストールは不要です。[詳しくはこちら](https://token-optimizer.dev/install/claude-desktop/)。
+
 ## インストール
 
 **Claude Code(推奨):**
@@ -168,35 +208,6 @@ Token Optimizerは付加的で可逆です。すべてのランタイムに、�
 ```
 
 </details>
-
-## 何が得られるか
-
-**毎セッション自動で動き、あなたは何もしない:**
-
-- 🔄 **スマート圧縮(Smart Compaction)**: 自動圧縮前にチェックポイント、後に復元
-- 🗄️ **セッション継続性(Session Continuity)**: セッション間ヒント、コールドリジューム、チェックポイント採点
-- 📦 **アクティブ圧縮(Active Compression)**: 9機能、すべてデフォルトオン(delta diff、スケルトン、bash/検索圧縮、リーン出力ナッジ、品質ナッジ、ループ検出、アクティビティモード、意思決定抽出)
-- 📊 **品質スコアリング(Quality Scoring)**: 7シグナル、リアルタイム、S〜Fの文字等級
-- 🗃️ **セッションデータベース(Session Database)**: SQLite、15テーブル、完全な監査証跡、ゼロネットワーク
-- 🔍 **プログレッシブ開示(Progressive Disclosure)**: 大きな出力はアーカイブ、要求時に展開
-- 🧠 **コンテキストインテル要約(Context Intel Digest)**: 圧縮後の再読込なしの再位置づけ
-- 🔀 **モデルルーティングナッジ(Model Routing Nudges)**: タスクに合ったティアへ誘導
-
-**あなたが求めたとき:**
-
-- 🩺 `/token-optimizer`: ガイド付き修正を伴う完全監査
-- 📈 `/token-coach`: 具体的な修正を伴う30日トレンド分析
-- ⚡ `quick`: 10秒ヘルスチェック
-- 🎯 `route`: お金を使う前に、このタスクが実際に必要とするモデルとeffort
-- 🔧 `doctor`: インストールチェック
-- 💰 `savings`: ドル節約レポート
-- 📋 `report`: コンポーネント別トークン内訳
-- 🌐 `dashboard`: 完全ダッシュボードを開く
-- 📝 `memory-review`: MEMORY.md構造監査
-- 📂 `expand`: アーカイブされたツール結果を取得
-- 🔙 `resume-lean`: コールドセッションを再開
-
-インストールして`/token-optimizer`を一度実行すれば、あとはすべて自動で動きます。
 
 ## 何が違うのか
 
