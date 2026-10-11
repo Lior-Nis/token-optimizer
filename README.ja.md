@@ -10,15 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases/latest"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=version&color=green" alt="最新安定バージョン"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases/latest"><img src="https://badgen.net/github/release/alexgreensh/token-optimizer?label=version&color=green" alt="最新安定バージョン"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://badgen.net/github/last-commit/alexgreensh/token-optimizer?label=last%20commit" alt="最終コミット"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2Fopenclaw%2Fpackage.json&query=%24.version&prefix=v&label=OpenClaw&color=brightgreen" alt="OpenClaw バージョン"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/opencode"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2Fopencode%2Fpackage.json&query=%24.version&prefix=v&label=OpenCode&color=58a6ff" alt="OpenCode バージョン"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/codex.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.codex-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Codex&color=orange" alt="Codex バージョン"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/hermes"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Hermes&color=0d9488" alt="Hermes バージョン"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/copilot.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Copilot&color=6e40c9&logo=githubcopilot&logoColor=white" alt="GitHub Copilot バージョン"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/cursor.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Cursor&color=0c0c0c&logo=cursor&logoColor=white" alt="Cursor バージョン"></a>
 </p>
 <p align="center">
   <img src="https://img.shields.io/badge/cuts%20context%20waste-3fb950" alt="コンテキストの無駄を削減">
@@ -39,6 +32,9 @@
   <a href="https://linkedin.com/in/alexgreensh"><img src="https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin&logoColor=white" alt="LinkedInでつながる"></a>
 </p>
 <p align="center">
+  <a href="https://trendshift.io/repositories/25856?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25856"><img src="https://trendshift.io/api/badge/repositories/25856" alt="alexgreensh/token-optimizer | Trendshift" width="250" height="55"></a>
+</p>
+<p align="center">
   <a href="https://github.com/sponsors/alexgreensh"><img src="https://img.shields.io/badge/%E2%99%A5%20Support%20this%20project%20to%20keep%20it%20open%20source-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="このプロジェクトをオープンソースに保つために支援する"></a>
 </p>
 
@@ -57,7 +53,24 @@ Token Optimizerは、AIコーディングアシスタントが無駄にするト
 
 **なぜHeadroomやRTKで済ませないのか?** どちらもコマンド出力を圧縮しますが、それはコンテキストの15〜25%しかカバーしません。Token Optimizerはそれに加えて残り75%をカバーします:膨張した設定、未使用のスキル、古いメモリ、圧縮ロス、モデルの誤ルーティング、振る舞いの無駄。すべての節約はキャッシュセーフで測定されます。ダッシュボードは毎セッション後に自動更新されます。
 
-**Claude Code**(CLIとVS Code)、**OpenCode**、**OpenClaw**、**Codex**、**Hermes**、**GitHub Copilot**、**Cursor**で動作します。Windsurfがロードマップの次です。
+<table align="center">
+  <tr>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="docs/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"><br><sub><b>Claude Code</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="docs/assets/platforms/codex.svg" width="72" height="72" alt="Codex"><br><sub><b>Codex</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="docs/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"><br><sub><b>OpenCode</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="docs/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"><br><sub><b>OpenClaw</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="docs/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"><br><sub><b>Hermes</b></sub></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="docs/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"><br><sub><b>GitHub Copilot</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="docs/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"><br><sub><b>Pi Coding Agent</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="docs/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"><br><sub><b>Cursor</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="docs/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"><br><sub><b>Google Antigravity</b> (beta)</sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="docs/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"><br><sub><b>Grok Build</b> (beta)</sub></a></td>
+  </tr>
+</table>
+
+Windsurfがロードマップの次です。
 
 <p align="center">
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer クイックスキャン" width="800">
