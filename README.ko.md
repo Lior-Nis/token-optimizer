@@ -76,6 +76,46 @@ Devin은 로드맵의 다음 순서입니다.
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 빠른 스캔" width="800">
 </p>
 
+## 제공되는 기능
+
+**매 세션 자동으로 실행되며, 사용자가 할 일은 없습니다:**
+
+- 🔄 **스마트 압축(Smart Compaction)**: 자동 압축 전 체크포인트, 이후 복원
+- 🗄️ **세션 연속성(Session Continuity)**: 세션 간 힌트, 콜드 리줌, 체크포인트 점수
+- 📦 **능동 압축(Active Compression)**: 9가지 기능, 모두 기본 켜짐 (델타 diff, 스켈레톤, bash/검색 압축, 간결 출력 넛지, 품질 넛지, 루프 감지, 활동 모드, 결정 추출)
+- 📊 **품질 점수(Quality Scoring)**: 7개 신호, 실시간, S~F 등급
+- 🗃️ **세션 데이터베이스(Session Database)**: SQLite, 15개 테이블, 전체 감사 추적, 네트워크 없음
+- 🔍 **점진적 공개(Progressive Disclosure)**: 큰 출력은 보관되고, 요청 시 펼침
+- 🧠 **컨텍스트 인텔 요약(Context Intel Digest)**: 압축 후 재읽기 없는 재정위치
+- 🔀 **모델 라우팅 넛지(Model Routing Nudges)**: 작업에 맞는 티어로 안내
+
+**요청할 때:**
+
+- 🩺 `/token-optimizer`: 가이드된 수정과 함께 전체 감사
+- 📈 `/token-coach`: 구체적 수정과 함께 30일 추세 분석
+- ⚡ `quick`: 10초 건강 검사
+- 🎯 `route`: 돈을 쓰기 전, 이 작업에 실제로 필요한 모델과 노력
+- 🔧 `doctor`: 설치 검사
+- 💰 `savings`: 달러 절감 보고서
+- 📋 `report`: 컴포넌트별 토큰 분석
+- 🌐 `dashboard`: 전체 대시보드 열기
+- 📝 `memory-review`: MEMORY.md 구조 감사
+- 📂 `expand`: 보관된 도구 결과 검색
+- 🔙 `resume-lean`: 콜드 세션 다시 열기
+
+설치하고 `/token-optimizer`를 한 번 실행하면, 나머지는 모두 자동으로 실행됩니다.
+
+## Claude 데스크톱 앱 안의 상태 표시줄
+
+<p align="center">
+  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="Claude 데스크톱 앱 안의 Token Optimizer 상태 표시줄: 품질, 컨텍스트, 캐시, 사용 한도가 실시간으로 갱신되고 Clawd가 세션에 반응합니다" width="720"></a>
+  <br><sub>30초 미리보기. <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">소리와 함께 전체 영상 보기</a> (50초).</sub>
+</p>
+
+이제 Claude Code에서는 플러그인이 자체 인터페이스 요소를 추가할 수 있으며, 이를 모드(mod)라고 합니다. Token Optimizer는 모드를 사용해 프롬프트 바로 위에 세션 상태를 보여줍니다. 품질 등급, 컨텍스트가 얼마나 찼는지, 캐시가 얼마나 더 유지되는지, 두 가지 사용 한도가 표시됩니다. 지금 주의할 점을 한 문장으로 알려주고, 버튼 하나로 해결합니다. 작은 주황색 마스코트 Clawd가 세션이 하는 일을 그대로 보여주므로, Claude가 읽는 중인지, 편집 중인지, 승인을 기다리는지, 끝났는지 한눈에 알 수 있습니다.
+
+플러그인에 포함되어 있어 따로 설치할 것이 없습니다. [자세히 보기](https://token-optimizer.dev/install/claude-desktop/).
+
 ## 설치
 
 **Claude Code (권장):**
@@ -168,35 +208,6 @@ Token Optimizer는 추가적이고 되돌릴 수 있습니다. 모든 런타임�
 ```
 
 </details>
-
-## 제공되는 기능
-
-**매 세션 자동으로 실행되며, 사용자가 할 일은 없습니다:**
-
-- 🔄 **스마트 압축(Smart Compaction)**: 자동 압축 전 체크포인트, 이후 복원
-- 🗄️ **세션 연속성(Session Continuity)**: 세션 간 힌트, 콜드 리줌, 체크포인트 점수
-- 📦 **능동 압축(Active Compression)**: 9가지 기능, 모두 기본 켜짐 (델타 diff, 스켈레톤, bash/검색 압축, 간결 출력 넛지, 품질 넛지, 루프 감지, 활동 모드, 결정 추출)
-- 📊 **품질 점수(Quality Scoring)**: 7개 신호, 실시간, S~F 등급
-- 🗃️ **세션 데이터베이스(Session Database)**: SQLite, 15개 테이블, 전체 감사 추적, 네트워크 없음
-- 🔍 **점진적 공개(Progressive Disclosure)**: 큰 출력은 보관되고, 요청 시 펼침
-- 🧠 **컨텍스트 인텔 요약(Context Intel Digest)**: 압축 후 재읽기 없는 재정위치
-- 🔀 **모델 라우팅 넛지(Model Routing Nudges)**: 작업에 맞는 티어로 안내
-
-**요청할 때:**
-
-- 🩺 `/token-optimizer`: 가이드된 수정과 함께 전체 감사
-- 📈 `/token-coach`: 구체적 수정과 함께 30일 추세 분석
-- ⚡ `quick`: 10초 건강 검사
-- 🎯 `route`: 돈을 쓰기 전, 이 작업에 실제로 필요한 모델과 노력
-- 🔧 `doctor`: 설치 검사
-- 💰 `savings`: 달러 절감 보고서
-- 📋 `report`: 컴포넌트별 토큰 분석
-- 🌐 `dashboard`: 전체 대시보드 열기
-- 📝 `memory-review`: MEMORY.md 구조 감사
-- 📂 `expand`: 보관된 도구 결과 검색
-- 🔙 `resume-lean`: 콜드 세션 다시 열기
-
-설치하고 `/token-optimizer`를 한 번 실행하면, 나머지는 모두 자동으로 실행됩니다.
 
 ## 차별성
 

@@ -76,6 +76,46 @@ Devin 是路线图的下一站。
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 快速扫描" width="800">
 </p>
 
+## 你得到什么
+
+**每个会话自动运行,你什么都不用做:**
+
+- 🔄 **智能压缩(Smart Compaction)**:自动压缩前检查点,之后恢复
+- 🗄️ **会话连续性(Session Continuity)**:跨会话提示、冷恢复、检查点评分
+- 📦 **主动压缩(Active Compression)**:9 项功能,全部默认开启(delta diff、骨架、bash/搜索压缩、精简输出提示、质量提示、循环检测、活动模式、决策提取)
+- 📊 **质量评分(Quality Scoring)**:7 个信号,实时,S–F 字母等级
+- 🗃️ **会话数据库(Session Database)**:SQLite,15 张表,完整审计追踪,零网络
+- 🔍 **渐进式披露(Progressive Disclosure)**:大输出归档,按需展开
+- 🧠 **上下文情报摘要(Context Intel Digest)**:压缩后无需重读的重新定位
+- 🔀 **模型路由提示(Model Routing Nudges)**:引导到适合任务的层级
+
+**你主动要求时:**
+
+- 🩺 `/token-optimizer`:带引导修复的完整审计
+- 📈 `/token-coach`:带具体修复的 30 天趋势分析
+- ⚡ `quick`:10 秒健康检查
+- 🎯 `route`:在你花钱之前,这个任务实际需要的模型和力度
+- 🔧 `doctor`:安装检查
+- 💰 `savings`:美元节省报告
+- 📋 `report`:按组件的 token 分解
+- 🌐 `dashboard`:打开完整仪表盘
+- 📝 `memory-review`:MEMORY.md 结构审计
+- 📂 `expand`:检索归档的工具结果
+- 🔙 `resume-lean`:重开一个冷会话
+
+安装,运行一次 `/token-optimizer`,其余全部自动运行。
+
+## Claude 桌面应用里的状态栏
+
+<p align="center">
+  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="Claude 桌面应用中的 Token Optimizer 状态栏：质量、上下文、缓存和用量限额实时更新，Clawd 会随会话做出反应" width="720"></a>
+  <br><sub>30 秒预览。 <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">观看带声音的完整影片</a>（50 秒）。</sub>
+</p>
+
+Claude Code 现在允许插件添加自己的界面元素，称为 mod。Token Optimizer 用它把会话的健康状况放在输入框正上方：质量等级、上下文已用多少、缓存还能保持多久，以及两项用量限额。一句话告诉你现在需要注意什么，一个按钮就能解决。橙色的小吉祥物 Clawd 会演出会话正在做的事，让你一眼看出 Claude 是在阅读、编辑、等待你的许可，还是已经完成。
+
+它随插件一起提供，无需额外安装。[了解详情](https://token-optimizer.dev/install/claude-desktop/)。
+
 ## 安装
 
 **Claude Code(推荐):**
@@ -168,35 +208,6 @@ Token Optimizer 是附加且可逆的。每个运行时都有干净的卸载,只
 ```
 
 </details>
-
-## 你得到什么
-
-**每个会话自动运行,你什么都不用做:**
-
-- 🔄 **智能压缩(Smart Compaction)**:自动压缩前检查点,之后恢复
-- 🗄️ **会话连续性(Session Continuity)**:跨会话提示、冷恢复、检查点评分
-- 📦 **主动压缩(Active Compression)**:9 项功能,全部默认开启(delta diff、骨架、bash/搜索压缩、精简输出提示、质量提示、循环检测、活动模式、决策提取)
-- 📊 **质量评分(Quality Scoring)**:7 个信号,实时,S–F 字母等级
-- 🗃️ **会话数据库(Session Database)**:SQLite,15 张表,完整审计追踪,零网络
-- 🔍 **渐进式披露(Progressive Disclosure)**:大输出归档,按需展开
-- 🧠 **上下文情报摘要(Context Intel Digest)**:压缩后无需重读的重新定位
-- 🔀 **模型路由提示(Model Routing Nudges)**:引导到适合任务的层级
-
-**你主动要求时:**
-
-- 🩺 `/token-optimizer`:带引导修复的完整审计
-- 📈 `/token-coach`:带具体修复的 30 天趋势分析
-- ⚡ `quick`:10 秒健康检查
-- 🎯 `route`:在你花钱之前,这个任务实际需要的模型和力度
-- 🔧 `doctor`:安装检查
-- 💰 `savings`:美元节省报告
-- 📋 `report`:按组件的 token 分解
-- 🌐 `dashboard`:打开完整仪表盘
-- 📝 `memory-review`:MEMORY.md 结构审计
-- 📂 `expand`:检索归档的工具结果
-- 🔙 `resume-lean`:重开一个冷会话
-
-安装,运行一次 `/token-optimizer`,其余全部自动运行。
 
 ## 不同之处
 
