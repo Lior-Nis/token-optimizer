@@ -23,7 +23,7 @@
     <rect x="72" y="70" width="700" height="30" rx="6" fill="#181825" stroke="#313244" stroke-width="1"/>
 
     <!-- Status bar content -->
-    <text x="86" y="90" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 4.6</text>
+    <text x="86" y="90" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 5.5</text>
     <text x="186" y="90" fill="#313244" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">|</text>
     <text x="198" y="90" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">my-project</text>
 
@@ -44,7 +44,7 @@
 
     <rect x="72" y="116" width="700" height="30" rx="6" fill="#181825" stroke="#313244" stroke-width="1"/>
 
-    <text x="86" y="136" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 4.6</text>
+    <text x="86" y="136" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 5.5</text>
     <text x="186" y="136" fill="#313244" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">|</text>
     <text x="198" y="136" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">my-project</text>
 
@@ -65,7 +65,7 @@
 
     <rect x="72" y="162" width="700" height="30" rx="6" fill="#181825" stroke="#313244" stroke-width="1"/>
 
-    <text x="86" y="182" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 4.6</text>
+    <text x="86" y="182" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 5.5</text>
     <text x="186" y="182" fill="#313244" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">|</text>
     <text x="198" y="182" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">my-project</text>
 
@@ -88,7 +88,7 @@
 
     <rect x="72" y="208" width="700" height="30" rx="6" fill="#181825" stroke="#f38ba8" stroke-width="1" opacity="0.6"/>
 
-    <text x="86" y="228" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 4.6</text>
+    <text x="86" y="228" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">Opus 5.5</text>
     <text x="186" y="228" fill="#313244" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">|</text>
     <text x="198" y="228" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13">my-project</text>
 
