@@ -330,3 +330,20 @@ A few verbs exist for compatibility or are called only by other code paths.
 | `session-end-flush-worker` | Internal background worker forked by `session-end-flush --defer`. Not called directly. |
 
 Internal libraries (`token_estimate.py`, `session_store.py`, `compression_log.py`, `injection.py`, `context_pressure.py`, `activity_tracker.py`) are imported by the engine and are not user-invoked commands. One exception is `outline.py PATH [--json]`, which renders a bounded structure-map outline for a file in Codex contexts where the read hook cannot substitute transparently.
+
+## Devin
+
+Set `TOKEN_OPTIMIZER_RUNTIME=devin` for shared measure commands.
+
+| Command | Action |
+|---|---|
+| `devin-install` | Install explicit user skill and record local data consent |
+| `devin-uninstall [--purge]` | Remove unchanged owned files; optional numeric-state purge |
+| `devin-doctor [--probe]` | Readiness, coexistence warnings and local filter probe |
+| `devin-summary` | Numeric output estimates, no provider totals or cost |
+| `devin-filter prepare` | Create new private stdout/stderr capture pair |
+| `devin-filter seal --capture PATH --exit-code N` | Snapshot a caller-asserted completed capture |
+| `devin-filter --stdout PATH --stderr PATH --exit-code N --session LABEL` | Filter sealed captures explicitly |
+| `devin-filter recover --capture-id ID --exit-code N` | Revalidate and recover originals without compression |
+
+The filter accepts fixed format hints: generic, git-status, git-log, listing, search, tests, build. Labels select shared compression patterns, never execute commands.

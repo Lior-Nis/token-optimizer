@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - Devin explicit output filter
+
+- Adds a POSIX, user-triggered Devin CLI skill and local captured-output filter, not automatic hooks.
+- Adds bounded private captures, integrity seals, checked opaque-ID recovery and numeric-only estimates.
+- Adds install/remove/doctor commands and scoped CLI/hosted docs. No live Devin instance verification or provider/ACU savings claim.
+
+
 ## [5.13.37] - 2026-10-11
 
 - Slim desktop status bar: one compact line by default, unfold for detail, with a link to the full dashboard.

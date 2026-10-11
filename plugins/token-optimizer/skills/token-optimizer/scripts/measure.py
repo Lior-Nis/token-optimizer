@@ -252,7 +252,7 @@ _CLAUDE_TARGET_CMDS = frozenset(
         # are NOT subcommands and stay unaffected. Verified: none of these 14 is
         # invoked as a top-level subcommand under opencode/copilot (the OpenCode
         # plugin is a native TS build; the Copilot bridge only shells out to
-        # `copilot-rollup`). See tests/test_foreign_runtime_scan_block.py.
+        # `copilot-rollup`). See the foreign-runtime dispatch regressions in tests/test_devin_review_regressions.py.
         "collect", "conversation", "quality", "health", "kill-stale",
         "drift", "coach", "trends", "savings", "snapshot", "compare",
         "git-context", "dashboard-diagnose", "validate-impact",
@@ -276,7 +276,7 @@ _OPENCODE_CLAUDE_TARGET_CMDS = _CLAUDE_TARGET_CMDS
 # before this, trends/savings/quality/drift/coach fell through to the
 # CLAUDE_DIR scan path in measure_components()/_find_all_jsonl_files() and
 # produced empty output against the wrong tree (the isolation leak).
-_FOREIGN_RUNTIMES = frozenset({"opencode", "copilot", "hermes", "cursor", "antigravity", "grok"})
+_FOREIGN_RUNTIMES = frozenset({"opencode", "copilot", "hermes", "cursor", "antigravity", "grok", "devin"})
 
 # Per-runtime exemptions: foreign-runtime subcommands that a NATIVE flow
 # invokes as a TOP-LEVEL subcommand AND that are runtime-aware (do not scan
@@ -389,6 +389,7 @@ def _foreign_audit_notice() -> None:
         "cursor": _cursor_audit_notice,
         "antigravity": _antigravity_audit_notice,
         "grok": _grok_audit_notice,
+        "devin": _devin_audit_notice,
     }
     handler = notices.get(detect_runtime())
     if handler is not None:
@@ -397,6 +398,13 @@ def _foreign_audit_notice() -> None:
         print(f"Token Optimizer — {runtime_name_for_humans()} runtime detected.")
         print("Claude-targeting commands are disabled here; they scan/modify ~/.claude.")
         print("Set TOKEN_OPTIMIZER_RUNTIME to force a specific runtime.")
+
+
+def _devin_audit_notice() -> None:
+    print("Token Optimizer - Devin CLI runtime detected.")
+    print("Claude-targeting commands will not run here or modify ~/.claude.")
+    print("Use devin-install, devin-doctor, devin-summary or devin-filter.")
+    print("No native dashboard, quality, savings or provider collector is available.")
 
 
 def _opencode_audit_notice() -> None:
@@ -55558,6 +55566,26 @@ if __name__ == "__main__":
     elif args[0] == "copilot-summary":
         _copilot_summary()
         sys.exit(0)
+    elif args[0] == "devin-install":
+        import devin_install
+        sys.exit(devin_install.main(["install"] + args[1:]))
+    elif args[0] == "devin-uninstall":
+        import devin_install
+        sys.exit(devin_install.main(["uninstall"] + args[1:]))
+    elif args[0] == "devin-doctor":
+        import devin_doctor
+        sys.exit(devin_doctor.main(args[1:]))
+    elif args[0] == "devin-summary":
+        import devin_state
+        try:
+            print(json.dumps(devin_state.summary(), indent=2))
+            sys.exit(0)
+        except (OSError, ValueError):
+            print("Devin local estimates unavailable; no provider usage inferred.", file=sys.stderr)
+            sys.exit(1)
+    elif args[0] == "devin-filter":
+        import devin_compress
+        sys.exit(devin_compress.main(args[1:]))
     elif args[0] == "cursor-doctor":
         import cursor_doctor
         sys.exit(cursor_doctor.main(args[1:]))

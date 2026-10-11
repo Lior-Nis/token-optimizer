@@ -53,7 +53,7 @@ Token Optimizer cuts the tokens your AI coding assistant wastes, keeps your work
 
 **Why not just use Headroom or RTK?** They compress command output, which covers 15-25% of your context. Token Optimizer covers that plus the other 75%: bloated configs, unused skills, stale memory, compaction loss, model misrouting, behavioral waste. Every saving is cache-safe and measured. The dashboard updates after every session, automatically.
 
-Works on ten AI coding tools, with Devin next on the roadmap:
+Works on the AI coding tools below, with an explicit [Devin output-filter beta](https://github.com/alexgreensh/token-optimizer/blob/main/devin/README.md):
 
 <table align="center">
   <tr>
