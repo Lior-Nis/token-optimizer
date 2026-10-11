@@ -13,7 +13,9 @@ REPO = Path(__file__).resolve().parent.parent
 def test_readme_names_antigravity_install_and_works_on():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "install.sh --antigravity" in readme
-    assert "**Google Antigravity**" in readme
+    # The works-on list is a logo grid, so the name lives in the tile markup.
+    assert "<b>Google Antigravity</b> (beta)" in readme
+    assert "skills/token-optimizer/assets/platforms/antigravity.svg" in readme
 
 
 def test_docs_site_pages_exist():

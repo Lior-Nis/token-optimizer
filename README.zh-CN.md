@@ -10,15 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases/latest"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=version&color=green" alt="最新稳定版本"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases/latest"><img src="https://badgen.net/github/release/alexgreensh/token-optimizer?label=version&color=green" alt="最新稳定版本"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://badgen.net/github/last-commit/alexgreensh/token-optimizer?label=last%20commit" alt="最近提交"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2Fopenclaw%2Fpackage.json&query=%24.version&prefix=v&label=OpenClaw&color=brightgreen" alt="OpenClaw 版本"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/opencode"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2Fopencode%2Fpackage.json&query=%24.version&prefix=v&label=OpenCode&color=58a6ff" alt="OpenCode 版本"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/codex.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.codex-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Codex&color=orange" alt="Codex 版本"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/hermes"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Hermes&color=0d9488" alt="Hermes 版本"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/copilot.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Copilot&color=6e40c9&logo=githubcopilot&logoColor=white" alt="GitHub Copilot 版本"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/cursor.md"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Falexgreensh%2Ftoken-optimizer%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&prefix=v&label=Cursor&color=0c0c0c&logo=cursor&logoColor=white" alt="Cursor 版本"></a>
 </p>
 <p align="center">
   <img src="https://img.shields.io/badge/cuts%20context%20waste-3fb950" alt="减少上下文浪费">
@@ -39,6 +32,9 @@
   <a href="https://linkedin.com/in/alexgreensh"><img src="https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin&logoColor=white" alt="在 LinkedIn 上联系"></a>
 </p>
 <p align="center">
+  <a href="https://trendshift.io/repositories/25856?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-25856"><img src="https://trendshift.io/api/badge/repositories/25856" alt="alexgreensh/token-optimizer | Trendshift" width="250" height="55"></a>
+</p>
+<p align="center">
   <a href="https://github.com/sponsors/alexgreensh"><img src="https://img.shields.io/badge/%E2%99%A5%20Support%20this%20project%20to%20keep%20it%20open%20source-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="支持本项目以保持开源"></a>
 </p>
 
@@ -57,7 +53,24 @@ Token Optimizer 砍掉你的 AI 编程助手浪费的 token，让你的工作在
 
 **为什么不直接用 Headroom 或 RTK?** 它们压缩命令输出，只覆盖你上下文的 15-25%。Token Optimizer 覆盖这部分加上另外 75%:臃肿的配置、未使用的 skill、陈旧的记忆、压缩损失、模型误路由、行为浪费。每一项节省都对缓存安全且经过测量。仪表盘在每个会话后自动更新。
 
-可在 **Claude Code**(CLI 和 VS Code)、**OpenCode**、**OpenClaw**、**Codex**、**Hermes**、**GitHub Copilot** 和 **Cursor** 上运行。Windsurf 是路线图的下一站。
+<table align="center">
+  <tr>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"><br><sub><b>Claude Code</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"><br><sub><b>Codex</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"><br><sub><b>OpenCode</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"><br><sub><b>OpenClaw</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"><br><sub><b>Hermes</b></sub></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"><br><sub><b>GitHub Copilot</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"><br><sub><b>Pi Coding Agent</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"><br><sub><b>Cursor</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"><br><sub><b>Google Antigravity</b> (beta)</sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"><br><sub><b>Grok Build</b> (beta)</sub></a></td>
+  </tr>
+</table>
+
+Windsurf 是路线图的下一站。
 
 <p align="center">
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 快速扫描" width="800">
