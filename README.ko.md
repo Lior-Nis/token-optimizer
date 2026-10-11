@@ -55,22 +55,22 @@ Token Optimizer는 AI 코딩 보조 도구가 낭비하는 토큰을 줄이고, 
 
 <table align="center">
   <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"><br><sub><b>Claude Code</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"><br><sub><b>Codex</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"><br><sub><b>OpenCode</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"><br><sub><b>OpenClaw</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"><br><sub><b>Hermes</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"></a><br><sub><b>Claude Code</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"></a><br><sub><b>Codex</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"></a><br><sub><b>OpenCode</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"></a><br><sub><b>OpenClaw</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"></a><br><sub><b>Hermes</b></sub></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"><br><sub><b>GitHub Copilot</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"><br><sub><b>Pi Coding Agent</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"><br><sub><b>Cursor</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"><br><sub><b>Google Antigravity</b> (beta)</sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"><br><sub><b>Grok Build</b> (beta)</sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"></a><br><sub><b>GitHub Copilot</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"></a><br><sub><b>Pi Coding Agent</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"></a><br><sub><b>Cursor</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"></a><br><sub><b>Google Antigravity</b> (beta)</sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"></a><br><sub><b>Grok Build</b> (beta)</sub></td>
   </tr>
 </table>
 
-Windsurf는 로드맵의 다음 순서입니다.
+Devin은 로드맵의 다음 순서입니다.
 
 <p align="center">
   <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 빠른 스캔" width="800">

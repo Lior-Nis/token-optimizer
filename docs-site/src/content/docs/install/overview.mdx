@@ -18,7 +18,7 @@ On Claude Code the plugin lives in `~/.claude/plugins/marketplaces/alexgreensh-t
 | Platform | Surface | Recommended command | Install page |
 |---|---|---|---|
 | Claude Code | CLI, all OS | `/plugin marketplace add alexgreensh/token-optimizer` | [Claude Code (CLI)](/install/claude-code-cli/) |
-| Claude Code | VS Code, Cursor, Windsurf | `code --install-extension token-optimizer-statusline-<version>.vsix` | [Claude Code (VS Code)](/install/claude-code-vscode/) |
+| Claude Code | VS Code, Cursor, Devin (formerly Windsurf) | `code --install-extension token-optimizer-statusline-<version>.vsix` | [Claude Code (VS Code)](/install/claude-code-vscode/) |
 | Codex | CLI | `codex plugin marketplace add alexgreensh/token-optimizer` | [Codex (CLI)](/install/codex-cli/) |
 | Codex | Desktop | Same adapter as CLI, no separate install | [Codex (Desktop)](/install/codex-desktop/) |
 | GitHub Copilot | CLI, beta | `bash install.sh --copilot` | [Copilot (CLI)](/install/copilot-cli/) |
@@ -35,7 +35,7 @@ On Claude Code the plugin lives in `~/.claude/plugins/marketplaces/alexgreensh-t
 ## Which surface do I have
 
 - **Claude Code in a terminal**: use [Claude Code (CLI)](/install/claude-code-cli/). The plugin install runs the engine and the hooks.
-- **Claude Code inside VS Code, Cursor, or Windsurf**: install the CLI plugin first, then add the [VS Code extension](/install/claude-code-vscode/) for the status bar. The extension surfaces what the plugin writes; it is not a standalone install.
+- **Claude Code inside VS Code, Cursor, or Devin (formerly Windsurf)**: install the CLI plugin first, then add the [VS Code extension](/install/claude-code-vscode/) for the status bar. The extension surfaces what the plugin writes; it is not a standalone install.
 - **Codex Desktop**: install the [Codex CLI](/install/codex-cli/) hooks. Desktop loads the same `~/.codex/hooks.json`, so nothing extra installs. See [Codex (Desktop)](/install/codex-desktop/) for what differs.
 - **Copilot in VS Code**: run the [Copilot CLI](/install/copilot-cli/) install, then follow the one manual debug-log step on the [Copilot (VS Code)](/install/copilot-vscode/) page to turn on per-request credit costs.
 

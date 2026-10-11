@@ -53,27 +53,27 @@ Token Optimizer cuts the tokens your AI coding assistant wastes, keeps your work
 
 **Why not just use Headroom or RTK?** They compress command output, which covers 15-25% of your context. Token Optimizer covers that plus the other 75%: bloated configs, unused skills, stale memory, compaction loss, model misrouting, behavioral waste. Every saving is cache-safe and measured. The dashboard updates after every session, automatically.
 
-Works on ten AI coding tools, with Windsurf next on the roadmap:
+Works on ten AI coding tools, with Devin next on the roadmap:
 
 <table align="center">
   <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"><br><sub><b>Claude Code</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"><br><sub><b>Codex</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"><br><sub><b>OpenCode</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"><br><sub><b>OpenClaw</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"><br><sub><b>Hermes</b></sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"></a><br><sub><b>Claude Code</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"></a><br><sub><b>Codex</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"></a><br><sub><b>OpenCode</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"></a><br><sub><b>OpenClaw</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"></a><br><sub><b>Hermes</b></sub></td>
   </tr>
   <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"><br><sub><b>GitHub Copilot</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"><br><sub><b>Pi Coding Agent</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"><br><sub><b>Cursor</b></sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"><br><sub><b>Google Antigravity</b> (beta)</sub></a></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"><br><sub><b>Grok Build</b> (beta)</sub></a></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"></a><br><sub><b>GitHub Copilot</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"></a><br><sub><b>Pi Coding Agent</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"></a><br><sub><b>Cursor</b></sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"></a><br><sub><b>Google Antigravity</b> (beta)</sub></td>
+    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"></a><br><sub><b>Grok Build</b> (beta)</sub></td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer Quick Scan" width="800">
+  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer in a Claude Code terminal: the quick scan, what runs automatically on every turn, and a 30-day savings report" width="800">
 </p>
 
 ## Install
@@ -625,6 +625,13 @@ python3 measure.py setup-quality-bar --uninstall
 </details>
 
 ## Desktop Status Bar
+
+<p align="center">
+  <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4"><img src="https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/docs-site/public/media/token-optimizer-desktop-status-bar.gif" alt="The Token Optimizer status bar inside the Claude desktop app: Clawd reacts to the session while quality, context, cache and usage limits update live" width="720"></a>
+  <br><sub>A 30-second preview. <a href="https://token-optimizer.dev/media/token-optimizer-desktop-status-bar.mp4">Watch the full film with sound</a> (50 seconds).</sub>
+</p>
+
+**A live status bar inside the Claude desktop app.** Claude Code now lets a plugin add its own piece of interface, called a mod. Token Optimizer uses one to put your session's health right above the prompt: a quality grade, how full the context is, how long the cache stays warm, and both usage limits. One plain sentence tells you what needs attention, and one button fixes it. Clawd, the small orange mascot, acts out what the session is doing, so you can tell at a glance whether Claude is reading, editing, waiting for your OK, or done.
 
 Using the Claude desktop app? The status bar comes with the Token Optimizer plugin: once it is installed, the bar appears above your prompt. Nothing extra to install.
 

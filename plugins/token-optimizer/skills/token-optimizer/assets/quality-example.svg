@@ -145,7 +145,7 @@
   <!-- ═══ Status bar content ═══ -->
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.3s" begin="0.2s" fill="freeze"/>
-    <text x="14" y="568" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">Opus 4.6</text>
+    <text x="14" y="568" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">Opus 5.5</text>
     <text x="100" y="568" fill="#313244" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">|</text>
     <text x="112" y="568" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">my-project</text>
 
