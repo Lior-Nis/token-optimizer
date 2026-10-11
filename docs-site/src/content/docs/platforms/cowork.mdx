@@ -53,7 +53,7 @@ The Cowork packager retains a subset of Claude Code hook events. These are the a
 | `PostToolUse` | Large-result archiving and post-tool bookkeeping. |
 | `Stop` | compact-capture and session-end flush. |
 
-`SessionStart`, `PreCompact`, `PostCompact`, `SessionEnd`, `StopFailure`, and `CwdChanged` are omitted from the payload. A missing event can remove automatic behavior, including in-place restore; the probe must establish the actual host matrix.
+`SessionStart`, `PreCompact`, `PostCompact`, `SessionEnd`, `StopFailure`, `PostToolUseFailure`, and `CwdChanged` are omitted from the payload. Without `PostToolUseFailure`, failed Bash output is not archived on Cowork. A missing event can remove automatic behavior, including in-place restore; the probe must establish the actual host matrix.
 
 The design avoids a second plugin. The run-once SessionStart features are wired onto `UserPromptSubmit` in the master `hooks.json` behind a per-session run-once guard keyed on the session id. On native Claude Code, SessionStart runs them first and sets the marker, so the `UserPromptSubmit` copies no-op (one stat). In the Cowork payload, where SessionStart is omitted, the first `UserPromptSubmit` does the work. So the normal plugin is Cowork-native in place, and the Cowork packager is a trim to the intended events.
 

@@ -19,7 +19,7 @@ Prompt caches expire on a timer. Anthropic's API cache holds a prefix for about 
 
 Keep-Warm watches paused sessions and evaluates whether a cache refresh could pay. Its modeled ping path would refresh the prefix before expiry, but normal production ticks stop at the disabled-LLM-ping gate; watching alone does not keep a cache warm.
 
-This is the one feature that can spend tokens on your behalf, so it is opt-in, gated by consent, and capped. Everything else in Token Optimizer is measurement or context shaping. Keep-Warm is the exception that touches your bill, and it is built to be honest about it.
+This is the one feature designed to spend tokens on your behalf, so it is opt-in, gated by consent, and capped. Production builds keep the pings themselves switched off. Everything else in Token Optimizer is measurement or context shaping. Keep-Warm is the exception that touches your bill, and it is built to be honest about it.
 
 <Aside type="caution" title="Spends tokens, opt-in only">
 The experimental ping path spends tokens, requires consent, and normally refuses subscription billing. In the shipped production path, even enabling consent does not turn on LLM pings. Manual desktop refresh is separate and also uses the host.
@@ -45,7 +45,7 @@ python3 measure.py keepwarm-enable     # consent + install scheduler (macOS); re
 python3 measure.py keepwarm-disable    # terminal opt-out
 ```
 
-`keepwarm-enable` records consent and installs the scheduler on macOS. `keepwarm-disable` is a terminal opt-out that stops all pinging.
+`keepwarm-enable` records consent and installs the scheduler on macOS. `keepwarm-disable` is a terminal opt-out: a declined user is never asked again and never pinged.
 
 ### The automatic loop
 
@@ -78,7 +78,7 @@ python3 measure.py keepwarm-consent-asked     # mark the pitch as shown (idempot
 cd ~/.claude/skills/token-optimizer/scripts
 python3 measure.py keepwarm-forecast --days 30   # projected savings from YOUR history (before enabling)
 python3 measure.py keepwarm-backfill --days 30   # replay the policy over real history
-python3 measure.py keepwarm-report               # full money report once running
+python3 measure.py keepwarm-report               # full money report (empty while pings are disabled)
 python3 measure.py keepwarm-quota-value          # subscription users: value in quota, not dollars
 ```
 

@@ -9,7 +9,7 @@ Subagents use the short prompt cache by default unless the host setting or envir
 
 ## What it does
 
-Token Optimizer **recommends** `subagentPromptCacheTtl: "1h"` when your own history shows it pays, and does not set it by default. Claude Code keeps subagents at 5 minutes because 1 hour costs more on average for agent-shaped work, and the verdict Token Optimizer produces is an estimate, so editing a user's settings on an estimate is not ok. The recommendation is a per-user line -- the measured numbers plus the exact command -- shown by `subagent-cache status`, `doctor`, `quick`, and `coach`:
+Token Optimizer **recommends** `subagentPromptCacheTtl: "1h"` when your own history shows it pays, and does not set it by default. Claude Code keeps subagents at 5 minutes because 1 hour costs more on average for agent-shaped work, and the verdict Token Optimizer produces is an estimate, so editing a user's settings on an estimate is not ok. The recommendation is a per-user line (the measured numbers plus the exact command) shown by `subagent-cache status`, `doctor`, `quick`, and `coach`:
 
 ```text
 Subagent cache: would have saved about $1.42 net (estimate) over the last
@@ -18,7 +18,7 @@ Subagent cache: would have saved about $1.42 net (estimate) over the last
 
 A 1-hour cache is not free. Writing a prefix at 1 hour costs 2x the base input price instead of 1.25x, so it only wins when subagents are returned to, or respawned, within the hour. A heavy subagent user measured roughly break-even; a user whose subagents run once would lose money. That is why the recommendation is gated on evidence, not on a rule of thumb.
 
-The same verdict also feeds the daily usage-recommendations record (`measure.py recommendations`), which is what `quick`, `doctor`, `status`, `coach`, and the dashboard's "From your own usage" section read. When you act on the recommendation and a later measurement shows the numbers moved, the record says so as a "since you changed it" win -- observational, never causal. The daily recommendation never writes the key. Only explicit `subagent-cache enable` or the automation opt-in described below can do that.
+The same verdict also feeds the daily usage-recommendations record (`measure.py recommendations`), which is what `quick`, `doctor`, `status`, `coach`, and the dashboard's "From your own usage" section read. When you act on the recommendation and a later measurement shows the numbers moved, the record says so as a "since you changed it" win, observational and never causal. The daily recommendation never writes the key. Only explicit `subagent-cache enable` or the automation opt-in described below can do that.
 
 ## When it recommends
 
@@ -134,6 +134,6 @@ Claude Code 2.1.243+ only, on macOS, Linux, and Windows (the managed-settings pa
 ## Related
 
 - [Cache TTL watchdog](/features/cache-watchdog/): `cache-report` measures expiry waste on the main-conversation cache.
-- [Keep-Warm](/features/keep-warm/): the API-billing ping that keeps a paused prefix alive.
+- [Keep-Warm](/features/keep-warm/): the scheduler built to keep a paused prefix alive. Its pings are disabled in production builds.
 - [Cache economics](/concepts/cache-economics/): why a lapsed prefix costs 1.25 to 2x to rewrite.
 - [Configuration](/reference/configuration/): `TOKEN_OPTIMIZER_SUBAGENT_CACHE_1H` and friends.

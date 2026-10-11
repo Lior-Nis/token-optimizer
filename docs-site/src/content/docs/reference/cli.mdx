@@ -48,7 +48,7 @@ Commands that wire Token Optimizer into a platform. Plugin and marketplace insta
 | `check-hook` | Report whether the data-collection hooks are wired | `--json` |
 | `cleanup-duplicate-hooks` | Remove hooks from `settings.json` that the installed plugin already provides | `--dry-run`, `--json` |
 | `setup-smart-compact` | Install the PreCompact checkpoint capture and SessionStart restore hooks | `--dry-run`, `--status`, `--uninstall` |
-| `setup-vscode-extension` | Build/package the companion VSIX; extension install remains separate | n/a |
+| `setup-vscode-extension` | Manage the VS Code status-bar extension auto-install. The default reports the opt-out, the detected editor and the install state; `--install` clears the opt-out and installs now; `--uninstall` sets a sticky opt-out and removes the extension | `--status`, `--install`, `--enable`, `--uninstall` |
 | `setup-quality-bar` | Install the status-line quality bar and the quality-cache hook | `--dry-run`, `--status`, `--uninstall` |
 | `setup-daemon` | Install the persistent dashboard server (macOS launchd, Linux systemd, Windows Task Scheduler) | `--dry-run`, `--uninstall` |
 | `setup-coach-injection` | Write the COACH managed block once; does not install a recurring loop | `--uninstall` |
@@ -217,7 +217,7 @@ Keep-Warm watching is opt-in; production LLM pings are disabled even after enabl
 | Command | Description | Key flags |
 |---|---|---|
 | `cache-report` | Analyze prompt-cache expiry waste: tokens re-written after a cache window expired, per provider | `--days N`, `--fresh`, `--verbose`, `--json` |
-| `subagent-cache` | Manage the 1-hour subagent prompt-cache TTL: `status` reports state, the verdict and why, the advice line, and the net payoff estimate from your transcripts; `enable` (always unconditional, prints the estimate first) and `disable` set and undo `subagentPromptCacheTtl` ; the explicit automation opt-in can also write it | `status`, `enable`, `disable`, `--json` |
+| `subagent-cache` | Manage the 1-hour subagent prompt-cache TTL: `status` reports state, the verdict and why, the advice line, and the net payoff estimate from your transcripts; `enable` (always unconditional, prints the estimate first) and `disable` set and undo `subagentPromptCacheTtl`; the explicit automation opt-in can also write it | `status`, `enable`, `disable`, `--json` |
 | `compact-advice` | Read-only replay of session history against candidate compact windows; recommendations never change the setting | `--days N`, `--json` |
 | `recommendations` | The daily usage-recommendations record (compact window, subagent cache lifetime): `status` (default) prints the items, the measured numbers, and any post-change wins; `refresh` re-measures now in a bounded, self-locking run. Advice only -- never writes either setting | `status`, `refresh`, `--json` |
 
@@ -260,7 +260,6 @@ Adapter commands target a specific platform. All require the matching `TOKEN_OPT
 | `codex-compact-prompt` | Render or install the Codex compact prompt guidance | n/a |
 | `codex-status-line` | Render the Codex status line (context % and quality) | n/a |
 | `codex-state` | Dump current Codex runtime state | `--json` |
-| `codex-rollup` | Ingest recent Codex sessions into the history database. Runs automatically via Codex Stop hook. | `--quiet` |
 | `codex-skill` | Disable or enable a skill in Codex | `disable\|enable NAME`, `--path PATH` |
 | `codex-mcp` | Disable or enable an MCP server in Codex | `disable\|enable NAME` |
 
@@ -327,7 +326,7 @@ A few verbs exist for compatibility or are called only by other code paths.
 | `verbosity-steer` | UserPromptSubmit lean-output nudge; needs verified session/cache state. |
 | `daemon-revive` | Detached daemon recovery child; not a manual setup command. |
 | `runway-json` | Shared machine-readable runway snapshot for non-Python dashboards. |
-| `api-manage` | Dashboard management bridge; requires the daemon URL and management token, not a general bypass for authenticated actions. |
+| `api-manage` | Headless skill and MCP management that the dashboard daemon shells out to: `api-manage <endpoint> <name>`, where the endpoint is `skill/archive`, `skill/restore`, `mcp/disable` or `mcp/enable`. Prints one JSON object. The verb takes no URL or token; authentication is enforced by the daemon's HTTP layer in front of it. |
 | `session-end-flush-worker` | Internal background worker forked by `session-end-flush --defer`. Not called directly. |
 
 Internal libraries (`token_estimate.py`, `session_store.py`, `compression_log.py`, `injection.py`, `context_pressure.py`, `activity_tracker.py`) are imported by the engine and are not user-invoked commands. One exception is `outline.py PATH [--json]`, which renders a bounded structure-map outline for a file in Codex contexts where the read hook cannot substitute transparently.

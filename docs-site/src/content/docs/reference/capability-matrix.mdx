@@ -16,7 +16,7 @@ Each runtime serves its dashboard on a fixed port, so multiple runtimes run side
 | Claude Code (CLI and VS Code) | 24842 | `http://localhost:24842/token-optimizer` |
 | Codex (CLI and Desktop) | 24843 | `http://localhost:24843/token-optimizer` |
 | Hermes | 24844 | `http://localhost:24844` |
-| Copilot | 24845 | `http://localhost:24845/token-optimizer` (verify) |
+| Copilot | 24845 (reserved) | Not served yet. `dashboard` is refused under the Copilot runtime; use `copilot-summary` |
 | Cursor | 24846 | `http://localhost:24846/token-optimizer` (verify) |
 | Antigravity | 24847 | `http://localhost:24847/token-optimizer` |
 | Grok Build | 24848 | `http://localhost:24848/token-optimizer` |
@@ -30,7 +30,7 @@ Each runtime serves its dashboard on a fixed port, so multiple runtimes run side
 | Smart Compaction (PreCompact/PostCompact) | Yes | Yes | Approx. via prompt + Stop | Approx. via prompt + Stop | Yes (mode-aware) | Yes (progressive) | No (nudge only) | No (server-side) | No (server-side) | No (observational only) | No (no PreCompact hook) |
 | Session continuity / checkpoints | Yes | Yes | Yes | Yes | Yes | Yes (progressive) | Yes (via history db) | Part (session-start restore) | Part (session-start restore) | Part (per-workspace restore) | Yes (PreInvocation restore) |
 | Status line (terminal quality bar) | Yes | Via VSIX | Opt-in Codex status line | Not a separate Desktop bar | No | No | No | No | No | No | No |
-| Dashboard (visual HTML) | Yes (24842) | Yes (24842) | Yes (24843) | Yes (24843) | Yes | Yes (8-tab) | Yes (24844) | Yes (24845, verify) | Yes | Yes (24846, verify) | Yes (24847) |
+| Dashboard (visual HTML) | Yes (24842) | Yes (24842) | Yes (24843) | Yes (24843) | Yes | Yes (8-tab) | Yes (24844) | No (`copilot-summary` instead) | Yes | Yes (24846, verify) | Yes (24847) |
 | Daemon (bookmarkable URL) | Yes | Yes | Yes | Yes | No shared installer | No (own build) | Foreground dashboard; setup blocked | Setup blocked | Setup blocked | Foreground dashboard; setup blocked | Foreground dashboard; setup blocked |
 | Keep-Warm automation | Watcher/reporting; LLM pings disabled | Same gate | No | No | No | No | No | No | No | No | No |
 | Bash output compression | Yes | Yes | Experimental opt-in | Experimental opt-in | No | No | No | Part (gated on CLI ≥1.0.24) | No | Yes (observed) | Yes (PreToolUse rewrite, re-validated wrapper) |
@@ -91,7 +91,7 @@ See [Grok Build](/platforms/grok/) and [Pi](/platforms/pi/) for limits and insta
 
 ## Claude Cowork
 
-Cowork is not shown as a column above. It runs the same Claude Code engine in a VM rather than exposing its own hook API, so its feature coverage is that of Claude Code minus the events omitted from the packaged Cowork payload (`SessionStart`, `PreCompact`, `PostCompact`, `SessionEnd`, `StopFailure`, `CwdChanged`). The adapter is experimental and its hook firing is not yet confirmed on a live build, so a per-cell grid would overstate what has been verified. The [Cowork page](/platforms/cowork/) lists the intended hook set, what works, what is degraded (in-place compaction restore), and what is not measurable from inside a Cowork session.
+Cowork is not shown as a column above. It runs the same Claude Code engine in a VM rather than exposing its own hook API, so its feature coverage is that of Claude Code minus the events omitted from the packaged Cowork payload (`SessionStart`, `PreCompact`, `PostCompact`, `SessionEnd`, `StopFailure`, `PostToolUseFailure`, `CwdChanged`). The adapter is experimental and its hook firing is not yet confirmed on a live build, so a per-cell grid would overstate what has been verified. The [Cowork page](/platforms/cowork/) lists the intended hook set, what works, what is degraded (in-place compaction restore), and what is not measurable from inside a Cowork session.
 
 ## Per-platform detail
 

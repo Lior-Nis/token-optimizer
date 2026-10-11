@@ -215,7 +215,7 @@ The pricing tier drives every cost and savings calculation. Set it with `measure
 | `TOKEN_OPTIMIZER_NO_PROC_SCAN` | off | Skip best-effort process-tree scans used as runtime-detection fallbacks |
 | `TOKEN_OPTIMIZER_ALLOW_UNSAFE_RUNTIME_HOME` | off | For container layouts, relax only the under-`$HOME` containment check; absolute, existing, non-symlink directory checks still apply |
 | `HERMES_HOME` | ~/.hermes | Override the Hermes home directory for the Hermes adapter |
-| `TOKEN_OPTIMIZER_PYTHON` | trusted interpreter discovery | Override the Python executable used by the Copilot, Cursor, Antigravity, and Grok installers; the path must pass their trust checks |
+| `TOKEN_OPTIMIZER_PYTHON` | trusted interpreter discovery | Override the Python executable used by the hook launcher on Claude Code and Codex and by the Copilot, Cursor, Antigravity, and Grok installers; the path must pass their trust checks |
 | `TOKEN_OPTIMIZER_CURSOR_HOME` | ~/.cursor | Token Optimizer-only Cursor home override; absolute safe directory under HOME by default. Cursor has no documented CURSOR_HOME alias |
 | `TOKEN_OPTIMIZER_CURSOR_BIN` | agent/cursor discovery | Override the Cursor binary probed by doctor |
 | `TOKEN_OPTIMIZER_GROK_HOME` | ~/.grok | Token Optimizer-only Grok home override, ahead of host GROK_HOME; safer than changing Grok's own home when inspecting native Windows data from WSL |
