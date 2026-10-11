@@ -72,10 +72,6 @@ Works on ten AI coding tools, with Devin next on the roadmap:
   </tr>
 </table>
 
-<p align="center">
-  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer in a Claude Code terminal: the quick scan, what runs automatically on every turn, and a 30-day savings report" width="800">
-</p>
-
 ## What You Get
 
 **Runs automatically, every session, you do nothing:**
