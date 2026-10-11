@@ -72,10 +72,6 @@ Token Optimizer 砍掉你的 AI 编程助手浪费的 token，让你的工作在
 
 Devin 是路线图的下一站。
 
-<p align="center">
-  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 快速扫描" width="800">
-</p>
-
 ## 你得到什么
 
 **每个会话自动运行,你什么都不用做:**

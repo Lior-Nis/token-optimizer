@@ -72,10 +72,6 @@ Token Optimizer는 AI 코딩 보조 도구가 낭비하는 토큰을 줄이고, 
 
 Devin은 로드맵의 다음 순서입니다.
 
-<p align="center">
-  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer 빠른 스캔" width="800">
-</p>
-
 ## 제공되는 기능
 
 **매 세션 자동으로 실행되며, 사용자가 할 일은 없습니다:**

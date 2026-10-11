@@ -72,10 +72,6 @@ Token Optimizerは、AIコーディングアシスタントが無駄にするト
 
 Devinがロードマップの次です。
 
-<p align="center">
-  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer クイックスキャン" width="800">
-</p>
-
 ## 何が得られるか
 
 **毎セッション自動で動き、あなたは何もしない:**
