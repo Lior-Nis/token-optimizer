@@ -975,9 +975,22 @@ def test_dashboard_marks_partial_codex_memory_total():
         )
         out = json.loads(subprocess.run([node, "-e", script], capture_output=True,
                                         text=True, check=True).stdout)
-        assert html.count("memCountSuffix(mr)") == 3, html.count("memCountSuffix(mr)")
+        assert html.count("memCountSuffix(mr)") == 2, html.count("memCountSuffix(mr)")
         assert json.loads(subprocess.run([node, "-e", html_suffix_js(html)], capture_output=True,
                                          text=True, check=True).stdout) == ["+", "", ""]
+        rv = re.search(r"^function codexMemRuntimeValue\(mem, fnum\) \{.*\}$", html, re.M).group(0)
+        rjs = rv + (
+            "\nvar f=function(n){return String(n)};console.log(JSON.stringify(["
+            "codexMemRuntimeValue({available:true,thread_count:5,truncated:true,total_memory_tokens:9},f),"
+            "codexMemRuntimeValue({available:true,thread_count:5,truncated:false,total_memory_tokens:9},f),"
+            "codexMemRuntimeValue({available:false},f)]));"
+        )
+        assert json.loads(subprocess.run([node, "-e", rjs], capture_output=True, text=True,
+                                         check=True).stdout) == [
+            "9 tokens / 5+ thread(s) (partial: scan cap reached)", "9 tokens / 5 thread(s)", "none recorded"]
+        assert "codexMemRuntimeValue(mem, fn)" in html
+        assert "mr.codex" in html and "Codex Memory</span>" in html
+        assert "lines across Codex memory files" not in html
         assert out == ["Partial total: Codex memory scan cap reached. ", "", "",
                        "Codex Memories (partial)", "Codex Memories", "Codex Memories"]
 
@@ -995,14 +1008,33 @@ def test_state_report_memory_line_partial_suffix_end_to_end(monkeypatch, capsys)
         assert ("5 thread(s);" in line) is (not truncated), line
 
 
-def test_codex_memory_review_counts_are_real_not_detail_subset():
-    mem = {"exists": True, "path": "/x", "lines": 0, "thread_count": 40,
-           "files": [{"thread_id": f"t{i}", "memory_tokens": 1} for i in range(20)],
+def test_codex_memory_review_reports_only_measured_fields():
+    mem = {"exists": True, "path": "/x", "lines": 0, "thread_count": 40, "tokens": 12345,
+           "files": [{"thread_id": f"t{i}", "memory_tokens": 100 - i} for i in range(20)],
            "truncated": False}
     mr = measure._codex_memory_review_data(mem)
-    assert mr["entry_count"] == mr["topic_files_count"] == mr["linked_files_count"] == 40
-    assert mr["scan_partial"] is False
+    assert mr == {"codex": True, "target": "/x", "thread_count": 40, "total_tokens": 12345,
+                  "largest_thread_tokens": 100, "scan_partial": False}
+    for fake in ("entry_count", "topic_files_count", "linked_files_count", "total_lines",
+                 "findings", "severity_counts"):
+        assert fake not in mr
     assert measure._codex_memory_review_data({**mem, "truncated": True})["scan_partial"] is True
+    assert measure._codex_memory_review_data({"exists": True})["largest_thread_tokens"] == 0
+
+
+def test_codex_surfaces_do_not_render_unmeasured_line_counts(monkeypatch, capsys):
+    comps = _partial_components(False)
+    monkeypatch.setattr(measure, "measure_components", lambda *a, _c=comps, **kw: dict(_c))
+    monkeypatch.setattr(measure, "detect_runtime", lambda: "codex")
+    measure.quick_scan(as_json=True)
+    mem = [o for o in json.loads(capsys.readouterr().out)["top_offenders"] if o["name"] == "memory_md"][0]
+    assert "lines" not in mem["detail"] and "5000 threads" in mem["detail"], mem
+    measure.print_snapshot_summary({"label": "t", "timestamp": "2026-01-01T00:00:00",
+                                    "components": comps,
+                                    "totals": {"estimated_total": 9010, "context_window": 200000,
+                                               "pct": 4.5, "effective_total": 9010}})
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "Codex memories" in ln][0]
+    assert "lines" not in line and "5000 threads" in line, line
 
 
 def test_auto_snapshot_carries_scope_and_truncated(monkeypatch, tmp_path):

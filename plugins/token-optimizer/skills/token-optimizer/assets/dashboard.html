@@ -2373,6 +2373,7 @@ function extractFindings(auditMd) {
 /* ========== COMPONENT DETAILS BUILDER ========== */
 function codexMemPartialPrefix(m) { return m && m.truncated ? 'Partial total: Codex memory scan cap reached. ' : ''; }
 function codexMemBarLabel(m) { return m && m.truncated ? 'Codex Memories (partial)' : 'Codex Memories'; }
+function codexMemRuntimeValue(mem, fnum) { return (mem.available && mem.thread_count) ? fnum(mem.total_memory_tokens) + ' tokens / ' + mem.thread_count + (mem.truncated ? '+' : '') + ' thread(s)' + (mem.truncated ? ' (partial: scan cap reached)' : '') : 'none recorded'; }
 function memCountSuffix(mr) { return mr && mr.scan_partial ? '+' : ''; }
 function getComponentDetails(data) {
   var c = data.snapshot.components;
@@ -2420,7 +2421,7 @@ function getComponentDetails(data) {
       key: 'memory_md', name: 'MEMORY.md',
       tokens: c.memory_md ? c.memory_md.tokens : 0,
       sub: (c.memory_md && c.memory_md.exists !== false)
-        ? (isCodex ? codexMemPartialPrefix(c.memory_md) + c.memory_md.lines + ' lines across Codex memory files' : c.memory_md.lines + ' lines loaded every session')
+        ? (isCodex ? codexMemPartialPrefix(c.memory_md) + (c.memory_md.thread_count || 0) + ' thread(s) in Codex state (machine-wide)' : c.memory_md.lines + ' lines loaded every session')
         : (isCodex ? 'No Codex local memory files detected' : 'Not configured. Auto-memory is off or no project match.'),
       what: isCodex
         ? 'Codex local memories live under the Codex home and can be injected as developer guidance when memory support is active. They are separate from Claude MEMORY.md.'
@@ -3141,7 +3142,20 @@ var DB = (function() {
 
     // Memory health card
     var mr = data.memory_review;
-    if (mr && !mr.error) {
+    if (mr && !mr.error && mr.codex) {
+      healthCardsHtml += '<div class="card"><div class="card-header"><span>Codex Memory</span></div>' +
+        '<div style="text-align:center;padding:var(--s-3) 0;">' +
+        '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan);">' + fn(mr.total_tokens || 0) + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim);">tokens across all threads' + (mr.scan_partial ? ' (partial)' : '') + '</div>' +
+        '</div>' +
+        '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;">' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Threads with memory</span><span>' + (mr.thread_count || 0) + memCountSuffix(mr) + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Largest thread</span><span>' + fn(mr.largest_thread_tokens || 0) + ' tokens</span></div>' +
+        (mr.scan_partial ? '<div style="display:flex;justify-content:space-between;color:var(--c-warning, #ff9f43);margin-top:4px;font-weight:500;"><span>Scan</span><span>partial: cap reached</span></div>' : '') +
+        '</div>' +
+        '<div style="text-align:center;padding:0 0 var(--s-3);font-size:12px;color:var(--c-text-dim);">Measured from Codex state; no file structure audit</div>' +
+        '</div>';
+    } else if (mr && !mr.error) {
       var memoryLabel = isCodexOverview ? 'Codex Memory Health' : 'MEMORY.md Health';
       var memoryLimitText = isCodexOverview ? 'local memory lines' : 'lines (200-line visible limit)';
       var memoryCountText = isCodexOverview ? String(mr.total_lines || 0) : ((mr.total_lines || 0) + ' / 200');
@@ -3155,8 +3169,8 @@ var DB = (function() {
         '<div style="font-size:13px;color:var(--c-text-dim);">' + memoryLimitText + '</div>' +
         '</div>' +
         '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;">' +
-        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Entries</span><span>' + (mr.entry_count || 0) + memCountSuffix(mr) + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Topic files</span><span>' + (mr.topic_files_count || 0) + memCountSuffix(mr) + ' (' + (mr.linked_files_count || 0) + ' linked)</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Entries</span><span>' + (mr.entry_count || 0) + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Topic files</span><span>' + (mr.topic_files_count || 0) + ' (' + (mr.linked_files_count || 0) + ' linked)</span></div>' +
         (orphanCount > 0 ? '<div style="display:flex;justify-content:space-between;color:var(--c-warning, #ff9f43);"><span>Orphaned files</span><span>' + orphanCount + '</span></div>' : '') +
         '<div style="display:flex;justify-content:space-between;color:' + mrColor + ';margin-top:4px;font-weight:500;"><span>Status</span><span>' + esc(mrStatus) + '</span></div>' +
         (mr.savings && mr.savings.total_tokens > 0 ? '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);margin-top:2px;"><span>Recoverable</span><span>~' + fn(mr.savings.total_tokens) + ' tokens</span></div>' : '') +
@@ -3211,7 +3225,7 @@ var DB = (function() {
           rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">no state data yet</span></div>';
         }
         rows += '<div class="bar-row"><span class="bar-label">Memory</span><span class="bar-value">' +
-          ((mem.available && mem.thread_count) ? fn(mem.total_memory_tokens) + ' tokens / ' + mem.thread_count + ' thread(s)' : 'none recorded') +
+          codexMemRuntimeValue(mem, fn) +
           '</span></div>';
         if (goals.available && goals.total_goals) {
           var limited = (goals.budget_limited || 0) + (goals.usage_limited || 0);

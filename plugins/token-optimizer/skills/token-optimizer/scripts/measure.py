@@ -4292,7 +4292,8 @@ def quick_scan(as_json=False):
         if _rt == "codex" and mem.get("truncated"):
             _mem_label = "Codex memories (all threads, partial: scan cap reached)"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
-                         f"{_mem_label} ({mem.get('lines', 0)} lines)"))
+                         f"{_mem_label} ({mem.get('thread_count', 0)} threads)" if _rt == "codex"
+                         else f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
     # Sort by tokens descending, top 3
     offenders.sort(key=lambda x: -x[2])
@@ -5260,7 +5261,9 @@ def print_snapshot_summary(snapshot):
         memory_label = "Codex memories (all threads)" if is_codex else "MEMORY.md"
         if is_codex and mem.get("truncated"):
             memory_label = "Codex memories (all threads, partial)"
-        print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
+        _mem_unit = (f"{mem.get('thread_count', 0)} threads" if is_codex
+                     else f"{mem.get('lines', 0)} lines")
+        print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{_mem_unit}]")
 
     # Skills
     s = c.get("skills", {})
@@ -7782,21 +7785,20 @@ def _manage_mcp(action, name):
 
 
 def _codex_memory_review_data(mem):
-    """Dashboard memory-health card data for the Codex machine-wide memory component."""
-    # Real thread count, not the 20-row detail subset in mem["files"].
-    count = int(mem.get("thread_count", 0) or 0)
+    """Dashboard memory card data for the Codex machine-wide memory component.
+
+    Codex memory lives in state_*.sqlite rows, not a MEMORY.md file, so there is
+    no line count, entry index, topic-file listing or link audit. Only report
+    what was measured: thread count, tokens, largest thread, and scan status.
+    """
+    files = mem.get("files") or []
     return {
+        "codex": True,
         "target": mem.get("path", ""),
-        "total_lines": mem.get("lines", 0),
-        "entry_count": count,
-        "topic_files_count": count,
-        "linked_files_count": count,
+        "thread_count": int(mem.get("thread_count", 0) or 0),
+        "total_tokens": int(mem.get("tokens", 0) or 0),
+        "largest_thread_tokens": max((int(f.get("memory_tokens", 0) or 0) for f in files), default=0),
         "scan_partial": bool(mem.get("truncated")),
-        "findings": [],
-        "severity_counts": {"high": 0, "medium": 0, "low": 0},
-        "savings": {"total_tokens": 0, "by_category": {}},
-        "truncated": False,
-        "truncated_lines": 0,
     }
 
 
