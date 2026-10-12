@@ -57,13 +57,17 @@ def _read_leaf(directory_fd: int, name: str, cap: int) -> tuple[bytes, object]:
     with os.fdopen(fd, 'rb') as stream:
         before = os.fstat(stream.fileno())
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
-                or before.st_mode & 0o077 or before.st_nlink != 1 or before.st_size > cap):
+                or before.st_mode & 0o077 or before.st_nlink != 1):
             raise OSError('capture must be bounded, private and unlinked')
+        if before.st_size > cap:
+            raise OSError('capture exceeds the ' + str(cap) + ' byte limit; read the original files directly')
         content = stream.read(cap + 1)
         after = os.fstat(stream.fileno())
         identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
         current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if len(content) > cap or identity(before) != identity(after) or identity(after) != identity(current):
+        if len(content) > cap:
+            raise OSError('capture exceeded the ' + str(cap) + ' byte limit while reading')
+        if identity(before) != identity(after) or identity(after) != identity(current):
             raise OSError('capture changed during reading')
         return content, after
 

@@ -188,6 +188,14 @@ def test_valid_seal_still_refuses_reseal(capture):
     (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
     with pytest.raises(OSError):d.seal_capture(capture,0)
 
+def test_oversize_capture_error_names_the_size_limit(capture):
+    """PR229 finding 6: an over-limit capture must name the limit, not mislead."""
+    import devin_compress as d
+    (capture/'stdout').write_bytes(b'x'*(d.MAX_CAPTURE+1))
+    with pytest.raises(OSError) as exc:
+        d.seal_capture(capture,0)
+    assert 'limit' in str(exc.value)
+
 def test_install_message_matches_capture_policy(tmp_path,monkeypatch,capsys):
     """PR229 finding 5: consent text must not claim no raw copies are stored."""
     import devin_install as d
