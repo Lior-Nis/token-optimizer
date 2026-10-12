@@ -668,19 +668,26 @@ def test_exact_resolver_deterministic_and_not_capped_by_file_count():
 
 
 def test_exact_resolver_tiebreak_newest_mtime_then_path_and_stem_fallback():
-    with _CodexHome() as home:
-        sess = home / "sessions"
-        def write(name, meta=True, mtime=None):
-            f = sess / name
-            f.write_text((json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n") if meta else "not json\n", encoding="utf-8")
-            if mtime:
-                os.utime(f, (mtime, mtime))
-        write("b-caller-A.jsonl", mtime=1_700_000_000)
-        write("a-caller-A.jsonl", mtime=1_700_000_000)   # same mtime: path order wins
-        for _ in range(3):
-            assert codex_session.find_session_jsonl_exact("caller-A").name == "a-caller-A.jsonl"
-        write("c-caller-A.jsonl", mtime=1_800_000_000)   # newer mtime wins
-        assert codex_session.find_session_jsonl_exact("caller-A").name == "c-caller-A.jsonl"
+    meta = json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n"
+    real_rglob = Path.rglob
+    try:
+        for order in ("forward", "reverse"):
+            def fake_rglob(self, pattern, _order=order):
+                found = sorted(real_rglob(self, pattern))
+                return iter(found if _order == "forward" else list(reversed(found)))
+            Path.rglob = fake_rglob  # force BOTH traversal orders so only the sort key can decide
+            with _CodexHome() as home:
+                for name in ("b-caller-A.jsonl", "a-caller-A.jsonl", "c-caller-A.jsonl"):
+                    f = home / "sessions" / name
+                    f.write_text(meta, encoding="utf-8")
+                    os.utime(f, (1_700_000_000, 1_700_000_000))
+                # Identical mtimes: lexicographically first path wins, whatever the traversal order.
+                assert codex_session.find_session_jsonl_exact("caller-A").name == "a-caller-A.jsonl", order
+                newer = home / "sessions" / "c-caller-A.jsonl"
+                os.utime(newer, (1_800_000_000, 1_800_000_000))
+                assert codex_session.find_session_jsonl_exact("caller-A").name == "c-caller-A.jsonl", order
+    finally:
+        Path.rglob = real_rglob
     with _CodexHome() as home:
         (home / "sessions" / "caller-A.jsonl").write_text("not json\n", encoding="utf-8")
         assert codex_session.find_session_jsonl_exact("caller-A").name == "caller-A.jsonl"  # no meta: exact stem
@@ -748,14 +755,34 @@ def test_claude_hook_resolution_is_id_first_then_mtime_guess(tmp_path):
 
 
 def test_memory_component_thread_count_not_capped_by_detail_limit():
+    """The audit component and the recommendation text carry the real thread count."""
     with _CodexHome() as home:
         n = codex_state._DETAIL_LIMIT + 20
         _make_state_db(home, threads=[(f"thread-{i:03d}", 1, i) for i in range(n)], edges=[])
-        _make_memory_table(home, [(f"thread-{i:03d}", "x" * 40, "") for i in range(n)])
-        mem = codex_state.memory_overhead()
-        assert mem["thread_count"] == n and len(mem["by_thread"]) == codex_state._DETAIL_LIMIT
-        src = (SCRIPTS / "measure.py").read_text(encoding="utf-8")
-        assert 'memory.get(\'thread_count\'' in src
+        # 4 chars/token: 4000 chars per thread -> 1000 tokens each, > the 3000 total threshold.
+        _make_memory_table(home, [(f"thread-{i:03d}", "x" * 4000, "") for i in range(n)])
+        saved_home = measure.runtime_home
+        measure.runtime_home = lambda: home
+        try:
+            comp = measure._measure_codex_components()["memory_md"]
+        finally:
+            measure.runtime_home = saved_home
+        assert comp["scope"] == "all_threads"
+        assert comp["thread_count"] == n
+        assert len(comp["files"]) == codex_state._DETAIL_LIMIT
+        recs = measure._generate_codex_auto_recommendations({"memory_md": comp})
+        text = json.dumps(recs, default=str)
+        assert f"across {n} threads on this machine" in text, text[:400]
+
+
+def test_auto_detect_reports_codex_specific_unresolved_reason():
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("other-B", 5, 200)], edges=[])
+        path, err = measure._resolve_jsonl_path()
+        assert path is None and "CODEX_THREAD_ID is not set" in err
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        path, err = measure._resolve_jsonl_path()
+        assert path is None and "no transcript found for caller-A" in err
 
 
 def test_memory_overhead_empty_id_is_not_machine_wide():

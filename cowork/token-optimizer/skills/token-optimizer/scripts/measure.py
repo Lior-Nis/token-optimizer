@@ -6081,7 +6081,8 @@ def _codex_state_summary():
     if detect_runtime() != "codex":
         return None
     # Resolve the invoking thread id ONCE (CODEX_THREAD_ID) and scope every
-    # thread-specific Codex-state metric to its goal subtree. When the identity
+    # thread-specific Codex-state metric to it: subagent and goal totals to
+    # its goal subtree, memory to its own rows. When the identity
     # is unresolved, do NOT fall back to the whole-DB aggregation: that would
     # present other threads' tokens and goals as the current thread's. Report
     # an explicit unresolved state instead.
@@ -36624,6 +36625,8 @@ def _resolve_jsonl_path(arg=None):
     found = _find_current_session_jsonl()
     if found:
         return found, None
+    if _use_codex_session_adapter():
+        return None, _codex_unresolved_message(_codex_thread_resolution())
     return None, "No active session found. Provide a session ID or path."
 
 
