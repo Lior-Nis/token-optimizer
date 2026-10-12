@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Memory diagnostics count links in flat indexes and preambles before section headings, avoiding false orphan warnings.
+
 ## [5.13.37] - 2026-10-11
 
 - Slim desktop status bar: one compact line by default, unfold for detail, with a link to the full dashboard.
