@@ -146,7 +146,7 @@ def test_no_nested_devin_skill_template():
     assert (SCRIPTS.parents[2]/'devin/SKILL.md').exists()
 
 def test_install_dirs_owner_only_under_permissive_umask(tmp_path,monkeypatch):
-    """PR229 finding 3: intermediate dirs must not inherit the ambient umask."""
+    """Intermediate dirs must not inherit the ambient umask."""
     import devin_install as d
     monkeypatch.setenv('HOME',str(tmp_path))
     previous=os.umask(0o000)
@@ -157,14 +157,14 @@ def test_install_dirs_owner_only_under_permissive_umask(tmp_path,monkeypatch):
         assert path.stat().st_mode & 0o077==0,(str(path),oct(path.stat().st_mode))
 
 def test_install_refuses_group_writable_config_parent(tmp_path,monkeypatch):
-    """PR229 finding 3: a writable ancestor lets a local user rename the skill dir."""
+    """A writable ancestor lets a local user rename the skill dir."""
     import devin_install as d
     monkeypatch.setenv('HOME',str(tmp_path))
     cfg=tmp_path/'.config';cfg.mkdir(mode=0o777);cfg.chmod(0o777)
     with pytest.raises(OSError):d.install()
 
 def test_torn_seal_reseals_and_recovers(capture):
-    """PR229 finding 4: a seal killed mid-write must not brick the capture."""
+    """A seal killed mid-write must not brick the capture."""
     import devin_compress as d
     raw=b'payload line\n'*1000
     (capture/'stdout').write_bytes(raw)
@@ -173,7 +173,7 @@ def test_torn_seal_reseals_and_recovers(capture):
     assert d.read_pair(capture,sealed=True,exit_code=0)[0]==raw
 
 def test_orphaned_seal_hardlink_repaired(capture):
-    """PR229 finding 4: a kill between os.link and unlink left nlink 2 + a stray temp."""
+    """A kill between os.link and unlink left nlink 2 + a stray temp."""
     import devin_compress as d
     raw=b'payload line\n'*1000
     (capture/'stdout').write_bytes(raw);d.seal_capture(capture,0)
@@ -190,7 +190,7 @@ def test_valid_seal_still_refuses_reseal(capture):
 
 @pytest.mark.parametrize('sub',['.claude','.codex','.cursor','.config'])
 def test_devin_home_refuses_other_tool_homes(tmp_path,monkeypatch,sub):
-    """PR229 finding 8: the Devin home must be a dedicated directory."""
+    """The Devin home must be a dedicated directory."""
     import devin_state as s
     monkeypatch.setenv('HOME',str(tmp_path))
     monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path/sub))
@@ -198,7 +198,7 @@ def test_devin_home_refuses_other_tool_homes(tmp_path,monkeypatch,sub):
     assert 'dedicated' in str(exc.value) or 'another tool' in str(exc.value)
 
 def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
-    """PR229 finding 8: pointing the Devin home at HOME itself is refused."""
+    """Pointing the Devin home at HOME itself is refused."""
     import devin_state as s
     monkeypatch.setenv('HOME',str(tmp_path))
     monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path))
@@ -243,7 +243,7 @@ def test_wrong_type_prepared_refuses_without_traceback(capture,marker):
     assert run.returncode==2 and not run.stdout and b'Traceback' not in run.stderr
 
 def test_symlinked_devin_home_names_symlink_as_the_cause(tmp_path,monkeypatch):
-    """PR229 finding 10: a symlinked .config must report 'symlink', not 'inside HOME'."""
+    """A symlinked .config must report 'symlink', not 'inside HOME'."""
     import devin_state as s
     monkeypatch.setenv('HOME',str(tmp_path))
     outside=tmp_path.with_name(tmp_path.name+'-outside');outside.mkdir()
@@ -252,7 +252,7 @@ def test_symlinked_devin_home_names_symlink_as_the_cause(tmp_path,monkeypatch):
     assert 'symlink' in str(exc.value).lower()
 
 def test_sqlite_connections_are_explicitly_closed(tmp_path,monkeypatch):
-    """PR229 finding 10: commit alone is not close; connections must be closed."""
+    """Commit alone is not close; connections must be closed."""
     import devin_state as s
     import sqlite3
     monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
@@ -269,7 +269,7 @@ def test_sqlite_connections_are_explicitly_closed(tmp_path,monkeypatch):
     assert events.count('close')>=2,events
 
 def test_prepared_marker_publishes_atomically(tmp_path):
-    """PR229 finding 10: .prepared must appear atomically, never torn."""
+    """.prepared must appear atomically, never torn."""
     env=dict(os.environ,HOME=str(tmp_path))
     code="""import sys,os
 sys.path.insert(0,sys.argv[1]);import devin_state as s
@@ -285,7 +285,7 @@ s.prepare_capture()
             assert not (folder/'.prepared').exists()
 
 def test_recovery_pointer_is_a_runnable_command(tmp_path,monkeypatch):
-    """PR229 finding 9: the compressed pointer must name a runnable command."""
+    """The compressed pointer must name a runnable command."""
     import devin_state as s
     import devin_compress as d
     import shlex
@@ -302,7 +302,7 @@ def test_recovery_pointer_is_a_runnable_command(tmp_path,monkeypatch):
     assert run.returncode==0 and b'[Begin untrusted recovered stdout]' in run.stdout
 
 def test_recovery_requires_canonical_capture_id(tmp_path,monkeypatch):
-    """PR229 finding 7: only the bare capture-<hex> form may be echoed."""
+    """Only the bare capture-<hex> form may be echoed."""
     import devin_state as s
     import devin_compress as c
     monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
@@ -318,7 +318,7 @@ def test_recovery_requires_canonical_capture_id(tmp_path,monkeypatch):
     assert run.stdout.startswith(b'[Token Optimizer verified capture '+cap.name.encode())
 
 def test_oversize_capture_error_names_the_size_limit(capture):
-    """PR229 finding 6: an over-limit capture must name the limit, not mislead."""
+    """An over-limit capture must name the limit, not mislead."""
     import devin_compress as d
     (capture/'stdout').write_bytes(b'x'*(d.MAX_CAPTURE+1))
     with pytest.raises(OSError) as exc:
@@ -326,7 +326,7 @@ def test_oversize_capture_error_names_the_size_limit(capture):
     assert 'limit' in str(exc.value)
 
 def test_install_message_matches_capture_policy(tmp_path,monkeypatch,capsys):
-    """PR229 finding 5: consent text must not claim no raw copies are stored."""
+    """Consent text must not claim no raw copies are stored."""
     import devin_install as d
     monkeypatch.setenv('HOME',str(tmp_path));d.install()
     text=capsys.readouterr().out
@@ -334,7 +334,7 @@ def test_install_message_matches_capture_policy(tmp_path,monkeypatch,capsys):
     assert 'captures you create' in text and 'until you delete' in text
 
 def test_doctor_probe_records_no_metrics(tmp_path,monkeypatch):
-    """PR229 finding 1: the doctor's synthetic probe must not poison metrics."""
+    """The doctor's synthetic probe must not poison metrics."""
     import devin_install as d
     import devin_doctor as doctor
     import devin_state as s
