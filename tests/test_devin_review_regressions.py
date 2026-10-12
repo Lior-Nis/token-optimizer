@@ -188,6 +188,22 @@ def test_valid_seal_still_refuses_reseal(capture):
     (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
     with pytest.raises(OSError):d.seal_capture(capture,0)
 
+@pytest.mark.parametrize('sub',['.claude','.codex','.cursor','.config'])
+def test_devin_home_refuses_other_tool_homes(tmp_path,monkeypatch,sub):
+    """PR229 finding 8: the Devin home must be a dedicated directory."""
+    import devin_state as s
+    monkeypatch.setenv('HOME',str(tmp_path))
+    monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path/sub))
+    with pytest.raises(OSError) as exc:s.home()
+    assert 'dedicated' in str(exc.value) or 'another tool' in str(exc.value)
+
+def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
+    """PR229 finding 8: pointing the Devin home at HOME itself is refused."""
+    import devin_state as s
+    monkeypatch.setenv('HOME',str(tmp_path))
+    monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path))
+    with pytest.raises(OSError):s.home()
+
 def test_recovery_requires_canonical_capture_id(tmp_path,monkeypatch):
     """PR229 finding 7: only the bare capture-<hex> form may be echoed."""
     import devin_state as s

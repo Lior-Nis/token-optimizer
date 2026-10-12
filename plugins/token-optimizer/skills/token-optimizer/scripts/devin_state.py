@@ -25,8 +25,11 @@ def home() -> Path:
     else:
         xdg = os.environ.get('XDG_CONFIG_HOME')
         candidate = Path(xdg) / 'devin' if xdg else base / '.config' / 'devin'
-    if not candidate.is_absolute() or not candidate.resolve().is_relative_to(base.resolve()):
+    resolved = candidate.resolve()
+    if not candidate.is_absolute() or not resolved.is_relative_to(base.resolve()):
         raise OSError('Devin home must be an absolute path inside HOME')
+    if resolved == base.resolve() or resolved.name in ('.claude', '.codex', '.cursor', '.config'):
+        raise OSError('Devin home must be a dedicated directory, not HOME or another tool home')
     if any(not ch.isprintable() or ch == '`' for ch in str(candidate)):
         raise OSError('unsupported control/markdown characters in home path')
     no_symlinks(candidate)
