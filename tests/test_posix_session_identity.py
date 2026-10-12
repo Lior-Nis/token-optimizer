@@ -1501,3 +1501,74 @@ def test_headless_flag_in_a_spaced_argv0_is_embedded_even_when_the_exe_dir_is_un
     # No headless evidence + unresolvable exe stays fail-closed.
     assert _classify(measure, spaced, argv=[spaced], exe=spaced) == "unknown"
     assert _classify(measure, "claude", exe=spaced) == "unknown"
+
+
+# --- health: ordered session versions -----------------------------------------
+
+def _version_health(monkeypatch, installed, versions):
+    measure = _load_measure()
+    sessions = [dict(pid=pid, elapsed_seconds=60, identity='terminal_cli', has_terminal=True)
+                for pid in range(1, len(versions) + 1)]
+    monkeypatch.setattr(measure.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(measure, 'detect_runtime', lambda: 'claude')
+    monkeypatch.setattr(measure, '_resolve_runtime_bin', lambda _: 'claude')
+    monkeypatch.setattr(measure.subprocess, 'run', lambda *a, **kw:
+                        subprocess.CompletedProcess([], 0, f'{installed} (Claude Code)\n' if installed else '', ''))
+    monkeypatch.setattr(measure, '_collect_posix_claude_sessions', lambda **kw: sessions)
+    monkeypatch.setattr(measure, '_find_session_version_for_pid', lambda pid: versions[pid - 1])
+    return measure, measure._collect_health_data()
+
+
+def test_health_only_flags_semantically_older_sessions(monkeypatch):
+    _, health = _version_health(monkeypatch, '2.1.292',
+        ['2.1.300', '2.1.280', '2.1.292', '2.1.292-rc.1', '2.1.300-rc.1', '2.1.292+build.7'])
+    assert ['OUTDATED' in s['flags'] for s in health['running_sessions']] == [False, True, False, True, False, False]
+    assert any(r.startswith('2 sessions running older version') for r in health['recommendations'])
+
+
+@pytest.mark.parametrize('versions,expected', [
+    (['2.1.292-rc.1', '2.1.292'], '2.1.292'),
+    (['2.1.292', '2.1.292-rc.1'], '2.1.292'),
+    (['2.1.300-rc.1', '2.1.292'], '2.1.300-rc.1'),
+    (['1.0.0-rc.2', '1.0.0-rc.10'], '1.0.0-rc.10'),
+    (['1.0.0-beta', '1.0.0-beta.1'], '1.0.0-beta.1'),
+    (['1.0.0-10', '1.0.0-alpha'], '1.0.0-alpha'),
+    (['garbage', '2.1.292'], '2.1.292'),
+    (['2.01.292', None], None),
+])
+def test_health_fallback_uses_highest_valid_semver(monkeypatch, versions, expected):
+    _, health = _version_health(monkeypatch, None, versions)
+    assert health['installed_version'] == expected
+
+
+@pytest.mark.parametrize('installed,session', [('2.1.292', 'unknown'), ('unknown', '2.1.280'),
+    ('2.1.292', '2.1'), ('2.1.292', None), ('2.1.292', '2.1.292-rc.01')])
+def test_health_does_not_claim_unknown_versions_are_older(monkeypatch, installed, session):
+    _, health = _version_health(monkeypatch, installed, [session])
+    assert 'OUTDATED' not in health['running_sessions'][0]['flags']
+
+
+def test_semver_key_matches_spec_precedence_sequence(monkeypatch):
+    measure = _load_measure()
+    ordered = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta',
+               '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0']
+    keys = [measure._semver_key(version) for version in ordered]
+    assert all(left < right for left, right in zip(keys, keys[1:]))
+    assert measure._semver_key('1.0.0+001') == measure._semver_key('1.0.0+build.2')
+
+
+@pytest.mark.parametrize('installed,session,outdated', [
+    ('2.1.292', '1.0.0-' + '9' * 5000, True),
+    ('2.1.292', '9' * 5000 + '.0.0', False),
+    ('1.0.0-' + '9' * 5000, '1.0.0-' + '8' * 5000, True),
+    ('1.0.0-alpha.' + '9' * 5000 + '.z', '1.0.0-alpha.' + '9' * 5000 + '.y', True),
+], ids=['long-prerelease', 'long-major', 'long-numeric-order', 'long-mixed-chain'])
+def test_health_orders_unbounded_semver_numerics_without_integer_conversion(monkeypatch, installed, session, outdated):
+    _, health = _version_health(monkeypatch, installed, [session])
+    assert ('OUTDATED' in health['running_sessions'][0]['flags']) is outdated
+
+
+def test_health_fallback_orders_unbounded_core_and_prerelease_numerics(monkeypatch):
+    huge = '9' * 5000
+    _, health = _version_health(monkeypatch, None, [huge + '.0.0-rc.' + huge, huge + '.0.0'])
+    assert health['installed_version'] == huge + '.0.0'

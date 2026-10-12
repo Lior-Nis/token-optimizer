@@ -27778,6 +27778,30 @@ def _resolve_runtime_bin(process_name):
     return process_name
 
 
+def _semver_key(version):
+    """Return a SemVer precedence key, or None when ordering is unknown."""
+    if not isinstance(version, str):
+        return None
+    match = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+        r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+        r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", version)
+    if not match:
+        return None
+    identifiers = []
+    prerelease = match.group(4)
+    if prerelease is not None:
+        for identifier in prerelease.split("."):
+            if identifier.isdigit():
+                if len(identifier) > 1 and identifier.startswith("0"):
+                    return None
+                identifiers.append((0, (len(identifier), identifier)))
+            else:
+                identifiers.append((1, identifier))
+    return (*((len(part), part) for part in match.group(1, 2, 3)),
+            prerelease is None, tuple(identifiers))
+
+
 def _collect_health_data():
     """Collect session health data.
 
@@ -27846,17 +27870,12 @@ def _collect_health_data():
     # Use the highest detected session version so the dashboard never shows
     # "unknown" while a Claude session is demonstrably running.
     if not installed_version and runtime != "codex":
-        detected = [s["version"] for s in running_sessions if s.get("version")]
+        detected = [(key, session["version"]) for session in running_sessions
+                    if (key := _semver_key(session.get("version"))) is not None]
         if detected:
-            def _ver_key(v):
-                parts = []
-                # Drop any pre-release suffix (2.1.0-rc.1) so it sorts BELOW the
-                # stable 2.1.0 per semver, not above it.
-                for part in str(v).split("-")[0].split("."):
-                    num = "".join(ch for ch in part if ch.isdigit())
-                    parts.append(int(num) if num else 0)
-                return parts
-            installed_version = max(detected, key=_ver_key)
+            installed_version = max(detected, key=lambda item: item[0])[1]
+
+    installed_key = _semver_key(installed_version)
 
     # Flag sessions
     for s in running_sessions:
@@ -27866,7 +27885,8 @@ def _collect_health_data():
             s["flags"] = ["RUNNING"]
             continue
         flags = []
-        if s["version"] and installed_version and s["version"] != installed_version:
+        session_key = _semver_key(s.get("version"))
+        if session_key is not None and installed_key is not None and session_key < installed_key:
             flags.append("OUTDATED")
         if s["elapsed_seconds"] > 172800:
             flags.append("ZOMBIE")
