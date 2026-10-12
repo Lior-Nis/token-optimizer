@@ -272,9 +272,12 @@ def test_compact_capture_resolves_by_identity_first():
     # session id up first and (Codex) never falls through to another thread.
     assert "_current_jsonl_for_hook(session_id)" in _fn_body("compact_capture", span=3000)
     helper = _fn_body("_current_jsonl_for_hook", span=1800)
-    assert helper.index("_find_session_jsonl_by_id(session_id)") < helper.index(
-        "_find_current_session_jsonl()"
-    ), "identity lookup must precede the mtime guess"
+    # Check the non-Codex lines specifically (the Codex branch returns first and
+    # would satisfy a plain first-occurrence ordering check trivially).
+    id_line = helper.index("filepath = _find_session_jsonl_by_id(session_id) if session_id else None")
+    assert id_line < helper.index("filepath = _find_current_session_jsonl()"), (
+        "identity lookup must precede the mtime guess"
+    )
 
 
 def test_quality_cache_resolves_by_identity_first():
@@ -282,9 +285,12 @@ def test_quality_cache_resolves_by_identity_first():
     # session id up first and (Codex) never falls through to another thread.
     assert "_current_jsonl_for_hook(session_id)" in _fn_body("quality_cache", span=2600)
     helper = _fn_body("_current_jsonl_for_hook", span=1800)
-    assert helper.index("_find_session_jsonl_by_id(session_id)") < helper.index(
-        "_find_current_session_jsonl()"
-    ), "identity lookup must precede the mtime guess"
+    # Check the non-Codex lines specifically (the Codex branch returns first and
+    # would satisfy a plain first-occurrence ordering check trivially).
+    id_line = helper.index("filepath = _find_session_jsonl_by_id(session_id) if session_id else None")
+    assert id_line < helper.index("filepath = _find_current_session_jsonl()"), (
+        "identity lookup must precede the mtime guess"
+    )
 
 
 def test_quality_cache_receives_the_hook_session_id():

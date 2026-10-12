@@ -725,6 +725,39 @@ def test_hook_with_explicit_session_id_never_falls_through_to_env_thread():
         assert measure._current_jsonl_for_hook(None).name == "parent-thread.jsonl"
 
 
+def test_claude_hook_resolution_is_id_first_then_mtime_guess(tmp_path):
+    """Claude runtime unchanged: the session id wins over a newer transcript; with
+    no match the mtime guess still applies (behavioral pin for the helper)."""
+    projects = tmp_path / "projects" / "proj"
+    projects.mkdir(parents=True)
+    mine = projects / "my-session-id.jsonl"
+    newer = projects / "newer-other.jsonl"
+    mine.write_text("{}\n", encoding="utf-8")
+    newer.write_text("{}\n", encoding="utf-8")
+    os.utime(mine, (1_600_000_000, 1_600_000_000))
+    os.utime(newer, (1_700_000_000, 1_700_000_000))
+    saved = (measure.detect_runtime, measure.CLAUDE_DIR)
+    measure.detect_runtime = lambda: "claude"
+    measure.CLAUDE_DIR = tmp_path
+    try:
+        assert measure._current_jsonl_for_hook("my-session-id") == mine
+        assert measure._current_jsonl_for_hook("no-such-session") == newer
+        assert measure._current_jsonl_for_hook(None) == newer
+    finally:
+        measure.detect_runtime, measure.CLAUDE_DIR = saved
+
+
+def test_memory_component_thread_count_not_capped_by_detail_limit():
+    with _CodexHome() as home:
+        n = codex_state._DETAIL_LIMIT + 20
+        _make_state_db(home, threads=[(f"thread-{i:03d}", 1, i) for i in range(n)], edges=[])
+        _make_memory_table(home, [(f"thread-{i:03d}", "x" * 40, "") for i in range(n)])
+        mem = codex_state.memory_overhead()
+        assert mem["thread_count"] == n and len(mem["by_thread"]) == codex_state._DETAIL_LIMIT
+        src = (SCRIPTS / "measure.py").read_text(encoding="utf-8")
+        assert 'memory.get(\'thread_count\'' in src
+
+
 def test_memory_overhead_empty_id_is_not_machine_wide():
     with _CodexHome() as home:
         _make_state_db(home, threads=[("caller-A", 5, 100)], edges=[])

@@ -3070,6 +3070,7 @@ def _measure_codex_components():
         "lines": 0,
         "files": state_memory.get("by_thread", []),
         "scope": "all_threads",
+        "thread_count": int(state_memory.get("thread_count", 0) or 0),
         "note": (
             "Codex memory overhead is measured from state_*.sqlite stage1_outputs; "
             "legacy ~/.codex/memories files are not counted as automatic prompt overhead."
@@ -8969,7 +8970,7 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
     memory = components.get("memory_md", {})
     if memory.get("tokens", 0) > 3000:
         medium.append(
-            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {len(memory.get('files', []))} threads on this machine)**: "
+            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {memory.get('thread_count', len(memory.get('files', [])))} threads on this machine)**: "
             "Codex memory guidance can enter developer instructions when memories are enabled. "
             "Delete stale rollout summaries, consolidate duplicate memories, and keep only reusable preferences or project facts. "
             "Use Codex's memory reset only when you intentionally want to clear all persisted local memory."
