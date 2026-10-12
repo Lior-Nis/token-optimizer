@@ -36273,7 +36273,7 @@ def _codex_identity_reason():
     status = codex_state.thread_identity_status()
     if status == "invalid":
         return "CODEX_THREAD_ID is set but not a valid thread id"
-    return "CODEX_THREAD_ID is not set"
+    return "CODEX_THREAD_ID is not set or is empty"
 
 
 def _codex_thread_resolution():
