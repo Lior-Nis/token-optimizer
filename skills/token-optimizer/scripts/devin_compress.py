@@ -10,7 +10,6 @@ from pathlib import Path
 import stat
 import re
 import sys
-import tempfile
 
 # Load the source-only importer itself from source, never through __pycache__.
 _source_root = Path(__file__).resolve().parent
@@ -69,6 +68,28 @@ def _read_leaf(directory_fd: int, name: str, cap: int) -> tuple[bytes, object]:
         return content, after
 
 
+def _repair_orphaned_seal(directory_fd: int) -> None:
+    """A seal killed between os.link and unlink left complete.json linked to a
+    stray tempfile name in this directory. Only a same-inode sibling under the
+    tempfile prefix is removed; any other extra link still refuses."""
+    try:
+        seal = os.stat('complete.json', dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if seal.st_nlink != 2 or not stat.S_ISREG(seal.st_mode):
+        return
+    for name in os.listdir(directory_fd):
+        if not name.startswith('tmp'):
+            continue
+        try:
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if info.st_ino == seal.st_ino and info.st_dev == seal.st_dev and stat.S_ISREG(info.st_mode):
+            os.unlink(name, dir_fd=directory_fd)
+            break
+
+
 def read_pair(directory: Path, *, sealed: bool, exit_code=None) -> tuple[bytes, bytes]:
     from devin_state import data_dir
     root = data_dir() / 'captures'
@@ -92,8 +113,12 @@ def read_pair(directory: Path, *, sealed: bool, exit_code=None) -> tuple[bytes, 
                 or provenance.get('stderr') != [err_info.st_dev, err_info.st_ino]):
             raise OSError('prepared capture identity changed')
         if sealed:
+            _repair_orphaned_seal(fd)
             content, _ = _read_leaf(fd, 'complete.json', 4096)
-            seal = json.loads(content)
+            try:
+                seal = json.loads(content)
+            except ValueError:
+                raise OSError('seal record torn by an interrupted write; re-run seal to repair')
             if (not isinstance(seal, dict) or seal.get('exit_code') != exit_code
                     or seal.get('stdout_sha256') != hashlib.sha256(out).hexdigest()
                     or seal.get('stderr_sha256') != hashlib.sha256(err).hexdigest()):
@@ -170,20 +195,27 @@ def seal_capture(directory: Path, exit_code: int) -> None:
     from devin_state import private_path
     target = private_path(directory / 'complete.json')
     if target.exists():
-        raise OSError('capture already sealed')
-    temporary = None
+        # A seal killed mid-write can leave a torn, unparseable complete.json.
+        # It can never validate as a seal, so a retry may safely replace it;
+        # a complete parseable seal is never overwritten.
+        try:
+            json.loads(target.read_bytes())
+        except (OSError, ValueError):
+            target.unlink()
+        else:
+            raise OSError('capture already sealed')
+    fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
-        with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as handle:
-            temporary = Path(handle.name)
-            json.dump({'exit_code': exit_code, 'stdout_sha256': hashlib.sha256(out).hexdigest(),
-                       'stderr_sha256': hashlib.sha256(err).hexdigest()}, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        # Atomic publish without overwriting another seal.
-        os.link(temporary, target, follow_symlinks=False)
+        # Exclusive create: no window where complete.json has two links.
+        payload = json.dumps({'exit_code': exit_code,
+                              'stdout_sha256': hashlib.sha256(out).hexdigest(),
+                              'stderr_sha256': hashlib.sha256(err).hexdigest()}).encode()
+        view = memoryview(payload)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        os.close(fd)
 
 
 def main(argv=None) -> int:

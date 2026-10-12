@@ -163,6 +163,31 @@ def test_install_refuses_group_writable_config_parent(tmp_path,monkeypatch):
     cfg=tmp_path/'.config';cfg.mkdir(mode=0o777);cfg.chmod(0o777)
     with pytest.raises(OSError):d.install()
 
+def test_torn_seal_reseals_and_recovers(capture):
+    """PR229 finding 4: a seal killed mid-write must not brick the capture."""
+    import devin_compress as d
+    raw=b'payload line\n'*1000
+    (capture/'stdout').write_bytes(raw)
+    torn=capture/'complete.json';torn.write_bytes(b'{"exit_code": 0, "stdo');torn.chmod(0o600)
+    d.seal_capture(capture,0)
+    assert d.read_pair(capture,sealed=True,exit_code=0)[0]==raw
+
+def test_orphaned_seal_hardlink_repaired(capture):
+    """PR229 finding 4: a kill between os.link and unlink left nlink 2 + a stray temp."""
+    import devin_compress as d
+    raw=b'payload line\n'*1000
+    (capture/'stdout').write_bytes(raw);d.seal_capture(capture,0)
+    stray=capture/'tmpOrphan123'
+    os.link(capture/'complete.json',stray)
+    assert d.read_pair(capture,sealed=True,exit_code=0)[0]==raw
+    assert not stray.exists()
+
+def test_valid_seal_still_refuses_reseal(capture):
+    """A complete parseable seal is never replaced."""
+    import devin_compress as d
+    (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
+    with pytest.raises(OSError):d.seal_capture(capture,0)
+
 def test_doctor_probe_records_no_metrics(tmp_path,monkeypatch):
     """PR229 finding 1: the doctor's synthetic probe must not poison metrics."""
     import devin_install as d
