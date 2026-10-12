@@ -218,7 +218,7 @@ def install(*, dry_run=False) -> None:
         _atomic(pending,json.dumps(transaction,sort_keys=True).encode())
         try:
             state.private_path(root / 'plugin', directory=True, create=True)
-            skill.mkdir(parents=True, exist_ok=True, mode=0o700)
+            state.private_dir(skill)
             files = {}
             for name in PAYLOAD:
                 target = root / 'plugin' / name

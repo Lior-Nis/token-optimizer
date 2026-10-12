@@ -145,6 +145,24 @@ def test_no_nested_devin_skill_template():
     assert not (SCRIPTS.parent/'devin/SKILL.md').exists()
     assert (SCRIPTS.parents[2]/'devin/SKILL.md').exists()
 
+def test_install_dirs_owner_only_under_permissive_umask(tmp_path,monkeypatch):
+    """PR229 finding 3: intermediate dirs must not inherit the ambient umask."""
+    import devin_install as d
+    monkeypatch.setenv('HOME',str(tmp_path))
+    previous=os.umask(0o000)
+    try:d.install()
+    finally:os.umask(previous)
+    for path in (tmp_path/'.config',tmp_path/'.config/devin',tmp_path/'.config/devin/skills',
+                 d.skill_dir(),d.state.data_dir(),d.state.data_dir()/'plugin'):
+        assert path.stat().st_mode & 0o077==0,(str(path),oct(path.stat().st_mode))
+
+def test_install_refuses_group_writable_config_parent(tmp_path,monkeypatch):
+    """PR229 finding 3: a writable ancestor lets a local user rename the skill dir."""
+    import devin_install as d
+    monkeypatch.setenv('HOME',str(tmp_path))
+    cfg=tmp_path/'.config';cfg.mkdir(mode=0o777);cfg.chmod(0o777)
+    with pytest.raises(OSError):d.install()
+
 def test_doctor_probe_records_no_metrics(tmp_path,monkeypatch):
     """PR229 finding 1: the doctor's synthetic probe must not poison metrics."""
     import devin_install as d

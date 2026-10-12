@@ -43,11 +43,31 @@ def no_symlinks(path: Path) -> None:
             raise OSError('symlink path refused')
 
 
+def private_dir(path: Path) -> Path:
+    """Create path and missing ancestors at mode 0700. Directories this creates
+    are always owner-only; pre-existing ancestors must not be writable by
+    group/other unless sticky, or another local user could rename the private
+    tree out from under the adapter."""
+    no_symlinks(path)
+    missing = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    for ancestor in (cursor, *cursor.parents):
+        info = ancestor.lstat()
+        if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+            raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor))
+    for folder in reversed(missing):
+        folder.mkdir(mode=0o700)
+    return path
+
+
 def private_path(path: Path, *, directory=False, create=False) -> Path:
     no_symlinks(path)
     if create:
         if directory:
-            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_dir(path)
         elif not path.exists():
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
