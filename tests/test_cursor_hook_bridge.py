@@ -59,6 +59,7 @@ def _fake_bash(monkeypatch, *, whitelisted=True, dangerous=False):
         SimpleNamespace(
             _is_whitelisted=lambda c: whitelisted,
             _has_dangerous_chars=lambda c: dangerous,
+            _is_auto_approvable=lambda c: whitelisted and not dangerous,
         ),
     )
 

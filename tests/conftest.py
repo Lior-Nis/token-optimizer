@@ -212,6 +212,19 @@ _SANITIZED_ENV_KEYS = (
 
 
 @pytest.fixture(autouse=True)
+def _scrub_user_session_env(monkeypatch):
+    """Drop the developer's own session settings so they cannot steer a test.
+
+    Running the suite from inside a Claude Code session inherits that session's
+    switches: the Bash compression off switch disables every bridge rewrite, and
+    a custom compact window rescales context fill. A test that needs either one
+    sets it itself.
+    """
+    for name in ("TOKEN_OPTIMIZER_BASH_COMPRESS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _restore_runtime_env():
     saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS + _SANITIZED_ENV_KEYS}
     for key in _SANITIZED_ENV_KEYS:

@@ -111,6 +111,45 @@ _GIT_WRITE_SUBCMDS = frozenset({
 })
 
 
+# Inspection-only commands a hook may rewrite when the rewrite ALSO approves
+# the call (a host where the hook's answer skips the user's approval step).
+# Deliberately tiny: the compression whitelist above includes builds, tests,
+# cloud CLIs and `find`, all of which can delete or write.
+_AUTO_APPROVE_COMMANDS = frozenset({"ls", "wc", "du", "df", "tail", "tree", "rg", "grep"})
+_AUTO_APPROVE_GIT_SUBCMDS = frozenset({"status", "log"})
+# Flags that write a file or run another program from an otherwise read-only command.
+_AUTO_APPROVE_BLOCKED_FLAG_PREFIXES = (
+    "--output", "--ext-diff", "--textconv", "--pre", "--hostname-bin",
+)
+
+
+def is_auto_approvable(command_str):
+    """True only for commands that cannot write, delete or run other programs.
+
+    The compression whitelist decides what is worth compressing. This decides
+    what a hook may wave through without the user's approval, which is a much
+    higher bar. Every caller that emits an approval must pass this gate.
+    """
+    if has_dangerous_chars(command_str) or not is_whitelisted(command_str):
+        return False
+    try:
+        tokens = shlex.split(command_str)
+    except ValueError:
+        return False
+    # No env prefixes: GIT_DIR / HOME and friends retarget an approved command.
+    if not tokens or "=" in tokens[0]:
+        return False
+    cmd, args = tokens[0], tokens[1:]
+    if any(a.startswith(_AUTO_APPROVE_BLOCKED_FLAG_PREFIXES) for a in args):
+        return False
+    if cmd == "git":
+        return bool(args) and args[0] in _AUTO_APPROVE_GIT_SUBCMDS
+    if cmd == "tree":
+        # `tree -o FILE` writes the listing to FILE.
+        return not any(a == "-o" or (a.startswith("-") and not a.startswith("--") and "o" in a[1:]) for a in args)
+    return cmd in _AUTO_APPROVE_COMMANDS
+
+
 def has_dangerous_chars(command_str):
     """Check if command contains shell metacharacters."""
     for ch in command_str:

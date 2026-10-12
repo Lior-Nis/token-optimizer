@@ -25,7 +25,7 @@ Host platform tool call
 | Event | Target Script | Purpose | Data Read | Data Written |
 |-------|--------------|---------|-----------|-------------|
 | **PreToolUse[Read]** | `read_cache.py --quiet` | Detect redundant file reads, serve structure maps | Session store SQLite, target file | Session store (file entry, cached content) |
-| **PreToolUse[Bash]** | `bash_hook.py --quiet` | Bash output compression pre-check | None | None |
+| **PreToolUse[Bash]** | `bash_hook.py --quiet` | Always silent. Returns no permission decision, so your prompts and auto mode checks run as normal. Bash output is compressed after the command runs (PostToolUse) | None | None |
 | **PreToolUse[Agent\|Task]** | `measure.py checkpoint-trigger --milestone pre-fanout` | Checkpoint before sub-agent fan-out | Session transcript | Checkpoint markdown file |
 | **PreToolUse[mcp__.*]** | `refetch_guard.py --quiet` | Deny an exact duplicate MCP call after a large result was archived, and hand back the `expand` command | Session archive manifest (session store) | None |
 | **PreCompact** (x3) | `measure.py dynamic-compact-instructions` | Generate context-aware compaction instructions | Session transcript, trends.db | Compact instructions (stdout) |
@@ -46,9 +46,9 @@ Host platform tool call
 ### No Shell Execution
 
 - `run.py` uses `subprocess.Popen(cmd)` with a list of arguments, never `shell=True`
-- `bash_hook.py` and `bash_compress.py` reject commands containing shell metacharacters: `;|&$(){}><\n\r\x00`
+- `bash_compress.py` and the host bridges reject commands containing shell metacharacters: `;|&$(){}><\n\r\x00`
 - Only a whitelist of safe environment variables (`HOME`, `PATH`, `LANG`, `TERM`, `USER`, `SHELL`, `TMPDIR`) can be passed through command rewrites
-- **Worktree-isolated sessions skip Bash compression.** When the session cwd is under `.claude/worktrees/`, `bash_hook.py` passes commands through unrewritten. Claude Code's worktree isolation guard statically rejects the rewrite wrapper as "too complex," so rewriting there would refuse every whitelisted command; skipping compression is the correct trade-off (commands still run, they just aren't compressed).
+- **No hook approves a command for you.** On Claude Code, Token Optimizer never returns a permission `allow`. Bash output is compressed after the command has run, so permission prompts, `ask` and `deny` rules and auto mode checks all apply to the exact command Claude sent.
 
 ### Path Traversal Protection
 

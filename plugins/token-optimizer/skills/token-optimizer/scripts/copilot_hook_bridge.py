@@ -499,7 +499,9 @@ def handle_pre_tool_use(payload):
         "updatedInput": updated,
         "modifiedArgs": updated,
     }
-    if caps.get(CAP_ALLOW):
+    # Approve only commands that cannot write, delete or run other programs;
+    # anything else keeps Copilot's own approval dialog.
+    if caps.get(CAP_ALLOW) and _bash_hook._is_auto_approvable(command):
         hook_out["permissionDecision"] = "allow"
     _emit({"hookSpecificOutput": hook_out})
 

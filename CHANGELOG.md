@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.38] - 2026-10-12
+
+- Your permission prompts and auto mode checks now apply to every Bash command. Token Optimizer no longer approves any command on your behalf.
+- Bash output is still compressed, after the command has run.
+- On Cursor, Copilot CLI and Grok, only inspection commands such as `ls`, `git status` and `rg` are compressed before they run.
+
 ## [5.13.37] - 2026-10-11
 
 - Slim desktop status bar: one compact line by default, unfold for detail, with a link to the full dashboard.

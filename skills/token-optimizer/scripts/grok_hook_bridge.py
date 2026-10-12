@@ -611,6 +611,10 @@ def handle_pre_tool_use(payload):
         return
     if not _bash_hook._is_whitelisted(command):
         return
+    # Omitting ``decision`` below approves the call, so the rewrite is limited
+    # to commands that cannot write, delete or run other programs.
+    if not _bash_hook._is_auto_approvable(command):
+        return
     try:
         original_tokens = shlex.split(command)
     except ValueError:
