@@ -815,3 +815,51 @@ def test_failed_delivery_keeps_the_capture_intact(tmp_path, monkeypatch):
     assert run.returncode == 2, (run.returncode, run.stderr)
     assert capture.exists()
     assert (capture / 'stdout').read_bytes() == raw
+
+
+def test_concurrent_sealers_have_exactly_one_winner(capture, monkeypatch):
+    """Two sealers racing on one capture: the first pauses right after
+    creating its file; exactly one must succeed and the stored exit code must
+    be the winner's."""
+    import json as _json
+    import threading
+    import devin_compress as d
+    (capture / 'stdout').write_bytes(b'line\n' * 500)
+    entered, release = threading.Event(), threading.Event()
+    real_write = os.write
+    outcomes = []
+    def paused_write(fd, data):
+        if threading.current_thread().name == 'first-sealer' and not entered.is_set():
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError('second sealer did not finish')
+        return real_write(fd, data)
+    def first():
+        try:
+            d.seal_capture(capture, 0)
+            outcomes.append(('first', 'success', 0))
+        except Exception as exc:
+            outcomes.append(('first', type(exc).__name__, str(exc)))
+    def second():
+        try:
+            d.seal_capture(capture, 1)
+            outcomes.append(('second', 'success', 1))
+        except Exception as exc:
+            outcomes.append(('second', type(exc).__name__, str(exc)))
+    monkeypatch.setattr(os, 'write', paused_write)
+    thread = threading.Thread(target=first, name='first-sealer')
+    thread.start()
+    assert entered.wait(10)
+    other = threading.Thread(target=second, name='second-sealer')
+    other.start()
+    # The second sealer either completes during the pause or stays parked
+    # until the first is released; both orders exercise the shared section.
+    other.join(2)
+    release.set()
+    thread.join(10)
+    other.join(10)
+    assert not thread.is_alive() and not other.is_alive()
+    winners = [o for o in outcomes if o[1] == 'success']
+    assert len(winners) == 1, outcomes
+    seal = _json.loads((capture / 'complete.json').read_bytes())
+    assert seal['exit_code'] == winners[0][2]

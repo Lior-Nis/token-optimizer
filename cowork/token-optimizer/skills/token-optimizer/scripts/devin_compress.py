@@ -220,29 +220,40 @@ def seal_capture(directory: Path, exit_code: int) -> None:
         raise ValueError('invalid exit code or missing consent')
     out, err = read_pair(directory, sealed=False)
     from devin_state import private_path
-    target = private_path(directory / 'complete.json')
-    if target.exists():
-        # A seal killed mid-write can leave a torn, unparseable complete.json.
-        # It can never validate as a seal, so a retry may safely replace it;
-        # a complete parseable seal is never overwritten.
-        try:
-            json.loads(target.read_bytes())
-        except (OSError, ValueError):
-            target.unlink()
-        else:
-            raise OSError('capture already sealed')
-    fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    import fcntl
+    # Serialize publication on the capture directory itself: concurrent sealers
+    # take turns holding an exclusive flock and each re-validates the seal
+    # under the lock, so an in-flight file is never unlinked by a rival and a
+    # completed seal is never overwritten.
+    lock_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        # Exclusive create: no window where complete.json has two links.
-        payload = json.dumps({'exit_code': exit_code,
-                              'stdout_sha256': hashlib.sha256(out).hexdigest(),
-                              'stderr_sha256': hashlib.sha256(err).hexdigest()}).encode()
-        view = memoryview(payload)
-        while view:
-            view = view[os.write(fd, view):]
-        os.fsync(fd)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        target = private_path(directory / 'complete.json')
+        if target.exists():
+            # A seal killed mid-write can leave a torn, unparseable
+            # complete.json. It can never validate as a seal, so a retry may
+            # safely replace it; a complete parseable seal is never
+            # overwritten.
+            try:
+                json.loads(target.read_bytes())
+            except (OSError, ValueError):
+                target.unlink()
+            else:
+                raise OSError('capture already sealed')
+        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        try:
+            # Exclusive create: no window where complete.json has two links.
+            payload = json.dumps({'exit_code': exit_code,
+                                  'stdout_sha256': hashlib.sha256(out).hexdigest(),
+                                  'stderr_sha256': hashlib.sha256(err).hexdigest()}).encode()
+            view = memoryview(payload)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(lock_fd)
 
 
 def main(argv=None) -> int:
