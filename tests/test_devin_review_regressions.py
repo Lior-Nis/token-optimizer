@@ -762,3 +762,56 @@ def test_purge_cannot_follow_a_swapped_capture_directory(tmp_path, monkeypatch):
     assert swapped
     assert (outside / 'stdout').exists()
     assert (outside / 'stderr').exists()
+
+
+def _sealed_filter_command(tmp_path, monkeypatch, raw, code=1):
+    import devin_state as s
+    import devin_compress as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    s.enable_consent()
+    capture = s.prepare_capture()
+    (capture / 'stdout').write_bytes(raw)
+    d.seal_capture(capture, code)
+    command = [sys.executable, str(SCRIPTS / 'devin_compress.py'),
+               '--stdout', str(capture / 'stdout'), '--stderr', str(capture / 'stderr'),
+               '--exit-code', str(code), '--session', 's']
+    return capture, command
+
+
+def test_passthrough_removal_only_after_complete_delivery(tmp_path, monkeypatch):
+    """Raw passthrough through a non-blocking pipe drained slowly must deliver
+    every byte before the stored capture is removed."""
+    raw = b'RAW-INERT-OUTPUT\n' * 32768
+    capture, command = _sealed_filter_command(tmp_path, monkeypatch, raw)
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(write_fd, False)
+    child = subprocess.Popen(command, stdout=write_fd, stderr=subprocess.PIPE,
+                             env={**os.environ, 'PYTHONUNBUFFERED': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+    os.close(write_fd)
+    chunks = []
+    while True:
+        part = os.read(read_fd, 65536)
+        if not part:
+            break
+        chunks.append(part)
+    os.close(read_fd)
+    errors = child.stderr.read()
+    child.wait(timeout=30)
+    delivered = b''.join(chunks)
+    assert child.returncode == 1 and delivered == raw, (child.returncode, len(delivered), errors)
+    assert not capture.exists()
+
+
+def test_failed_delivery_keeps_the_capture_intact(tmp_path, monkeypatch):
+    """A reader that closed the pipe early must leave the capture in place
+    with its bytes intact and the CLI exits non-zero."""
+    raw = b'x' * 262144
+    capture, command = _sealed_filter_command(tmp_path, monkeypatch, raw)
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    run = subprocess.run(command, stdout=write_fd, stderr=subprocess.PIPE,
+                         env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+    os.close(write_fd)
+    assert run.returncode == 2, (run.returncode, run.stderr)
+    assert capture.exists()
+    assert (capture / 'stdout').read_bytes() == raw

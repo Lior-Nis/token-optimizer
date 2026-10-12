@@ -7,7 +7,9 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import select
 import shlex
+import signal
 import stat
 import re
 import sys
@@ -197,6 +199,22 @@ def _remove_capture(directory: Path) -> None:
     delete_capture(directory)
 
 
+def _deliver(fd: int, data: bytes) -> None:
+    """Write every byte to the descriptor, retrying interrupted and
+    non-blocking short writes. Any short, zero or refused write raises so a
+    capture is only removed after verified complete delivery."""
+    view = memoryview(data)
+    while view:
+        try:
+            sent = os.write(fd, view)
+        except (BlockingIOError, InterruptedError):
+            select.select([], [fd], [])
+            continue
+        if not sent:
+            raise OSError('output stream accepted zero bytes')
+        view = view[sent:]
+
+
 def seal_capture(directory: Path, exit_code: int) -> None:
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or not 0 <= exit_code <= 255 or not consent_ok():
         raise ValueError('invalid exit code or missing consent')
@@ -229,6 +247,9 @@ def seal_capture(directory: Path, exit_code: int) -> None:
 
 def main(argv=None) -> int:
     os.environ['TOKEN_OPTIMIZER_RUNTIME'] = 'devin'
+    # A closed pipe reports EPIPE as an exception rather than signal death so
+    # delivery failures stay observable and captures are never deleted early.
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     parser = argparse.ArgumentParser(description=__doc__)
     args = list(sys.argv[1:] if argv is None else argv)
     if args == ['prepare']:
@@ -279,16 +300,27 @@ def main(argv=None) -> int:
     except (OSError, ValueError, ImportError, SyntaxError) as exc:
         print(f'Token Optimizer: capture not filtered: {exc}. Originals remain unchanged; inspect them directly.', file=sys.stderr)
         return 2
-    sys.stdout.buffer.write(result.stdout)
-    sys.stderr.buffer.write(result.stderr)
-    sys.stdout.buffer.flush()
-    sys.stderr.buffer.flush()
+    try:
+        _deliver(sys.stdout.buffer.fileno(), result.stdout)
+        _deliver(sys.stderr.buffer.fileno(), result.stderr)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.flush()
+    except (OSError, AttributeError, ValueError):
+        try:
+            print('Token Optimizer: output delivery incomplete; the stored capture was retained.', file=sys.stderr)
+        except Exception:
+            pass
+        return 2
     if result.outcome != 'compressed':
         # Passthrough emits no recovery pointer, so the stored original is
         # unrecoverable anyway and may hold credentials. Remove it only after
         # the raw bytes have been written out successfully.
-        _remove_capture(args.stdout.parent)
-        print('Token Optimizer: output passed through unfiltered; the stored capture was removed and there is nothing to recover.', file=sys.stderr)
+        try:
+            _remove_capture(args.stdout.parent)
+        except OSError as exc:
+            print('Token Optimizer: capture cleanup refused: ' + str(exc), file=sys.stderr)
+        else:
+            print('Token Optimizer: output passed through unfiltered; the stored capture was removed and there is nothing to recover.', file=sys.stderr)
     return result.code
 
 
