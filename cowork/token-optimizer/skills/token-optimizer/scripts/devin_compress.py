@@ -215,6 +215,15 @@ def _deliver(fd: int, data: bytes) -> None:
         view = view[sent:]
 
 
+def _note(message: str) -> None:
+    """Best-effort diagnostic straight to fd 2. A buffered print to a closed
+    stderr would fail again at interpreter exit and change the exit status."""
+    try:
+        os.write(2, (message + '\n').encode('utf-8', 'replace'))
+    except OSError:
+        pass
+
+
 def seal_capture(directory: Path, exit_code: int) -> None:
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or not 0 <= exit_code <= 255 or not consent_ok():
         raise ValueError('invalid exit code or missing consent')
@@ -317,10 +326,7 @@ def main(argv=None) -> int:
         sys.stdout.buffer.flush()
         sys.stderr.buffer.flush()
     except (OSError, AttributeError, ValueError):
-        try:
-            print('Token Optimizer: output delivery incomplete; the stored capture was retained.', file=sys.stderr)
-        except Exception:
-            pass
+        _note('Token Optimizer: output delivery incomplete; the stored capture was retained.')
         return 2
     if result.outcome != 'compressed':
         # Passthrough emits no recovery pointer, so the stored original is
@@ -329,9 +335,9 @@ def main(argv=None) -> int:
         try:
             _remove_capture(args.stdout.parent)
         except OSError as exc:
-            print('Token Optimizer: capture cleanup refused: ' + str(exc), file=sys.stderr)
+            _note('Token Optimizer: capture cleanup refused: ' + str(exc))
         else:
-            print('Token Optimizer: output passed through unfiltered; the stored capture was removed and there is nothing to recover.', file=sys.stderr)
+            _note('Token Optimizer: output passed through unfiltered; the stored capture was removed and there is nothing to recover.')
     return result.code
 
 

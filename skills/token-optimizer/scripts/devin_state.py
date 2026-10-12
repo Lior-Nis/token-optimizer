@@ -236,7 +236,9 @@ def delete_capture(directory: Path) -> None:
                 continue
             if stat.S_ISREG(leaf.st_mode):
                 os.unlink(name, dir_fd=capture_fd)
-        # Remove the name only while it still resolves to the opened directory.
+        # Skip the rmdir when the name no longer points at the opened directory.
+        # rmdir only ever removes an EMPTY directory, so a swap between this
+        # check and the call cannot delete anyone's files.
         try:
             current = os.stat(directory.name, dir_fd=root_fd, follow_symlinks=False)
         except FileNotFoundError:

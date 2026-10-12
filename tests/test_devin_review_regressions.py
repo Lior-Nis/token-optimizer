@@ -888,3 +888,20 @@ def test_install_text_describes_automatic_passthrough_removal(tmp_path, monkeypa
     text = capsys.readouterr().out
     assert 'cleanup stays with you' not in text
     assert 'removes its capture' in text
+
+
+def test_closed_stderr_keeps_the_captured_exit_code(tmp_path, monkeypatch):
+    """A reader that closed stderr must not change the exit status once the
+    whole payload was delivered on stdout."""
+    raw = b'RAW-INERT-OUTPUT\n' * 4096
+    capture, command = _sealed_filter_command(tmp_path, monkeypatch, raw, code=7)
+    err_read, err_write = os.pipe()
+    os.close(err_read)
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=err_write,
+                             env={**os.environ, 'PYTHONUNBUFFERED': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+    os.close(err_write)
+    delivered = child.stdout.read()
+    child.wait(timeout=30)
+    assert delivered == raw
+    assert child.returncode == 7, child.returncode
+    assert not capture.exists()
