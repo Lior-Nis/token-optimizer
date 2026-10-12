@@ -307,6 +307,7 @@ def main(argv=None) -> int:
         # unrecoverable anyway and may hold credentials. Remove it only after
         # the raw bytes have been written out successfully.
         _remove_capture(args.stdout.parent)
+        print('Token Optimizer: output passed through unfiltered; the stored capture was removed and there is nothing to recover.', file=sys.stderr)
     return result.code
 
 

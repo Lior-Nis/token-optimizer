@@ -30,7 +30,7 @@ Run the installed filter explicitly:
 
 Replace paths and the exit status with the real capture values. Supported format hints: generic, git-status, git-log, listing, search, tests, build. These are format labels, never executable commands. Only stdout/stderr in one adapter-prepared capture directory are accepted. Both captures must be owner-only regular files with no symlink components, no hardlinks, and at most 8 MiB each. Unsupported captures are refused before any output is emitted; inspect the originals directly. Output past the 8 MiB limit cannot be sealed or filtered at all; read the originals directly instead. Never delete originals automatically.
 
-The filter leaves captures unchanged. A compressed result gives an opaque capture ID. Recover only through the filter's checked recovery operation:
+A compressed result keeps the capture and ends with an opaque capture ID. A raw passthrough removes the capture after delivery and says so on stderr: there is nothing to recover, so offer recovery only when the output carries a capture ID. Recover only through the filter's checked recovery operation:
 
 ```bash
 @PYTHON@ @FILTER@ recover --capture-id capture-0123456789abcdef0123456789abcdef --exit-code 0

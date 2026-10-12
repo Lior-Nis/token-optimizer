@@ -205,7 +205,7 @@ def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
     with pytest.raises(OSError):s.home()
 
 def test_credential_passthrough_removes_capture(tmp_path,monkeypatch):
-    """fix229-extra A: raw passthrough emits bytes, then removes the capture."""
+    """Raw passthrough emits bytes, then removes the capture."""
     import devin_state as s
     import devin_compress as d
     monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
@@ -217,9 +217,11 @@ def test_credential_passthrough_removes_capture(tmp_path,monkeypatch):
                         '--exit-code','0','--session','s'],capture_output=True)
     assert run.returncode==0 and run.stdout==raw
     assert not cap.exists()
+    # The model must be told there is nothing left to recover.
+    assert b'nothing to recover' in run.stderr and b'capture-' not in run.stderr
 
 def test_purge_removes_stored_captures(tmp_path,monkeypatch):
-    """fix229-extra A: uninstall --purge must remove stored captures."""
+    """Uninstall --purge must remove stored captures."""
     import devin_install as d
     import devin_state as s
     import devin_compress as c
@@ -233,7 +235,7 @@ def test_purge_removes_stored_captures(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize('marker',['[1,2]','null','42','"str"'])
 def test_wrong_type_prepared_refuses_without_traceback(capture,marker):
-    """fix229-extra B: valid JSON of the wrong type in .prepared is a clean refusal."""
+    """Valid JSON of the wrong type in .prepared is a clean refusal."""
     import devin_compress as d
     (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
     p=capture/'.prepared';p.write_bytes(marker.encode());p.chmod(0o600)
