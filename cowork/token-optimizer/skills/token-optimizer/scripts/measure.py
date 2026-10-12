@@ -4287,6 +4287,8 @@ def quick_scan(as_json=False):
         # Under Codex this component holds state_*.sqlite memory, not a
         # MEMORY.md file — label it for the runtime the user is on.
         _mem_label = "Codex memories (all threads)" if _rt == "codex" else "MEMORY.md"
+        if _rt == "codex" and mem.get("truncated"):
+            _mem_label = "Codex memories (all threads, partial: scan cap reached)"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
                          f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
@@ -5254,6 +5256,8 @@ def print_snapshot_summary(snapshot):
     if "memory_md" in c:
         mem = c["memory_md"]
         memory_label = "Codex memories (all threads)" if is_codex else "MEMORY.md"
+        if is_codex and mem.get("truncated"):
+            memory_label = "Codex memories (partial, cap reached)"
         print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
 
     # Skills

@@ -914,3 +914,40 @@ def test_memory_overhead_not_truncated_at_exact_cap():
         finally:
             codex_state._MAX_ROWS = saved
             measure.runtime_home = saved_home
+
+
+def _partial_components(truncated):
+    return {
+        "agents_md_global": {"path": "/x/AGENTS.md", "exists": True, "tokens": 10, "lines": 1},
+        "memory_md": {"path": "/x/state_*.sqlite", "exists": True, "tokens": 9000, "lines": 0,
+                      "files": [], "scope": "all_threads", "thread_count": 5000,
+                      "truncated": truncated},
+    }
+
+
+def test_quick_scan_and_snapshot_label_partial_memory_total(monkeypatch, capsys):
+    for truncated in (True, False):
+        comps = _partial_components(truncated)
+        monkeypatch.setattr(measure, "measure_components", lambda *a, _c=comps, **kw: dict(_c))
+        monkeypatch.setattr(measure, "detect_runtime", lambda: "codex")
+        measure.quick_scan(as_json=True)
+        payload = json.loads(capsys.readouterr().out)
+        mem = [o for o in payload["top_offenders"] if o["name"] == "memory_md"][0]
+        assert ("partial" in mem["detail"]) is truncated, mem
+
+        measure.print_snapshot_summary({
+            "label": "t", "timestamp": "2026-01-01T00:00:00",
+            "components": comps, "totals": {"estimated_total": 9010, "context_window": 200000,
+                                            "pct": 4.5, "effective_total": 9010},
+        })
+        out = capsys.readouterr().out
+        line = [ln for ln in out.splitlines() if "Codex memories" in ln][0]
+        assert ("partial" in line) is truncated, line
+
+
+def test_dashboard_marks_partial_codex_memory_total():
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("skills", "plugins/token-optimizer/skills", "cowork/token-optimizer/skills"):
+        html = (root / rel / "token-optimizer/assets/dashboard.html").read_text(encoding="utf-8")
+        assert "c.memory_md.truncated" in html
+        assert "Codex Memories (partial)" in html
