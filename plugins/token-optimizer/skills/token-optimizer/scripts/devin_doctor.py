@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only readiness and local filter probe; never starts a Devin session."""
+"""Readiness check and synthetic local filter probe; records no metrics and never starts a Devin session."""
 import argparse
 import json
 import os
@@ -55,7 +55,7 @@ def diagnose(probe=False):
         out.write_bytes(raw); err.write_bytes(b'')
         seal_capture(tmp, 0)
         try:
-            value = filter_capture(out, err, 0, 'generic', 'doctor-local-probe')
+            value = filter_capture(out, err, 0, 'generic', 'doctor-local-probe', record_metrics=False)
             result['local_probe_passed'] = value.code == 0 and len(value.stdout) < len(raw) and out.read_bytes() == raw
         finally:
             for leaf in ('stdout','stderr','.prepared','complete.json'):

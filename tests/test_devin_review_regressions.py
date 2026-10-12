@@ -145,6 +145,16 @@ def test_no_nested_devin_skill_template():
     assert not (SCRIPTS.parent/'devin/SKILL.md').exists()
     assert (SCRIPTS.parents[2]/'devin/SKILL.md').exists()
 
+def test_doctor_probe_records_no_metrics(tmp_path,monkeypatch):
+    """PR229 finding 1: the doctor's synthetic probe must not poison metrics."""
+    import devin_install as d
+    import devin_doctor as doctor
+    import devin_state as s
+    monkeypatch.setenv('HOME',str(tmp_path));d.install()
+    assert s.summary()['events']==0 and s.summary()['original_estimate']==0
+    assert doctor.diagnose(probe=True)['local_probe_passed'] is True
+    assert s.summary()['events']==0 and s.summary()['original_estimate']==0
+
 def test_doctor_probe_cleans_synthetic_capture(tmp_path,monkeypatch):
     import devin_install as d
     import devin_doctor as doctor

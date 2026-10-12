@@ -112,7 +112,7 @@ def read_capture(path: Path) -> bytes:
 
 
 def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
-                   session: str) -> FilterResult:
+                   session: str, *, record_metrics: bool = True) -> FilterResult:
     if os.name != 'posix' or not consent_ok():
         raise OSError('Devin output filter requires a POSIX install with local data consent')
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or not 0 <= exit_code <= 255:
@@ -154,11 +154,12 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
     except Exception as exc:
         return FilterResult(raw, ('Compression unavailable: ' + type(exc).__name__ + '; emitting original bytes.\n').encode(), 0, 'unavailable')
     measured = False
-    try:
-        record(session, text, delivered, outcome)
-        measured = True
-    except Exception:
-        pass
+    if record_metrics:
+        try:
+            record(session, text, delivered, outcome)
+            measured = True
+        except Exception:
+            pass
     return FilterResult(delivered.encode('utf-8'), b'', 0, outcome, measured)
 
 
