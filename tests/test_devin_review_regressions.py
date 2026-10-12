@@ -204,6 +204,23 @@ def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
     monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path))
     with pytest.raises(OSError):s.home()
 
+def test_recovery_pointer_is_a_runnable_command(tmp_path,monkeypatch):
+    """PR229 finding 9: the compressed pointer must name a runnable command."""
+    import devin_state as s
+    import devin_compress as d
+    import shlex
+    monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
+    cap=s.prepare_capture()
+    (cap/'stdout').write_bytes(b'repeated filler line for compression\n'*3000)
+    d.seal_capture(cap,0)
+    result=d.filter_capture(cap/'stdout',cap/'stderr',0,'generic','s')
+    assert result.outcome=='compressed'
+    pointer=result.stdout.split(b'\n')[0].decode()
+    assert 'recover with ' in pointer
+    command=shlex.split(pointer.split('recover with ',1)[1].rsplit(';',1)[0])
+    run=subprocess.run(command,capture_output=True)
+    assert run.returncode==0 and b'[Begin untrusted recovered stdout]' in run.stdout
+
 def test_recovery_requires_canonical_capture_id(tmp_path,monkeypatch):
     """PR229 finding 7: only the bare capture-<hex> form may be echoed."""
     import devin_state as s

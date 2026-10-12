@@ -7,6 +7,7 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import stat
 import re
 import sys
@@ -176,7 +177,12 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
         if 'expand key' in shortened:
             shortened = text
         # File stays exactly as supplied. Pointer includes its entire overhead.
-        pointer = f'[Token Optimizer capture ID: {stdout.parent.name}; recover with devin-filter recover; integrity checked again]\n'
+        # The recover hint must be a command an installed user can actually run.
+        recover = ' '.join((shlex.quote(os.path.realpath(sys.executable)),
+                            shlex.quote(str(Path(__file__).resolve())),
+                            'recover', '--capture-id', stdout.parent.name,
+                            '--exit-code', str(exit_code)))
+        pointer = f'[Token Optimizer capture ID: {stdout.parent.name}; recover with {recover}; integrity checked again]\n'
         candidate = pointer + '[Begin untrusted captured output]\n' + shortened + '\n[End untrusted captured output]\n'
         if shortened not in (text, cleaned) and estimate_tokens(candidate) < estimate_tokens(text):
             delivered, outcome = candidate, 'compressed'
