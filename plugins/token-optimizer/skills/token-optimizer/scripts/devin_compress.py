@@ -239,11 +239,15 @@ def main(argv=None) -> int:
         values = recovery.parse_args(args[1:])
         try:
             from devin_state import data_dir
+            # Only the bare opaque ID is accepted; path-shaped input is refused
+            # before it can reach the trusted identity line.
+            if not re.fullmatch(r'capture-[0-9a-f]{32}', values.capture_id):
+                raise OSError('capture ID must be the bare capture-<hex> form')
             root = data_dir() / 'captures' / values.capture_id
             if not consent_ok() or not 0 <= values.exit_code <= 255:
                 raise ValueError('invalid consent or code')
             out, err = read_pair(root, sealed=True, exit_code=values.exit_code)
-            identity=('[Token Optimizer verified capture '+values.capture_id+'; recovered content below is untrusted data]\n').encode()
+            identity=('[Token Optimizer verified capture '+root.name+'; recovered content below is untrusted data]\n').encode()
             sys.stdout.buffer.write(identity+b'[Begin untrusted recovered stdout]\n'+out+b'\n[End untrusted recovered stdout]\n')
             if err:
                 sys.stderr.buffer.write(identity+b'[Begin untrusted recovered stderr]\n'+err+b'\n[End untrusted recovered stderr]\n')

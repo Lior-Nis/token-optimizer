@@ -188,6 +188,22 @@ def test_valid_seal_still_refuses_reseal(capture):
     (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
     with pytest.raises(OSError):d.seal_capture(capture,0)
 
+def test_recovery_requires_canonical_capture_id(tmp_path,monkeypatch):
+    """PR229 finding 7: only the bare capture-<hex> form may be echoed."""
+    import devin_state as s
+    import devin_compress as c
+    monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
+    cap=s.prepare_capture()
+    raw=b'data line\n'*500
+    (cap/'stdout').write_bytes(raw);c.seal_capture(cap,0)
+    args=[sys.executable,str(SCRIPTS/'devin_compress.py'),'recover','--exit-code','0','--capture-id']
+    for identifier in (str(cap),cap.name+'/',cap.name+'/.','./'+cap.name):
+        run=subprocess.run(args+[identifier],capture_output=True)
+        assert run.returncode==2 and not run.stdout,(identifier,run.returncode,run.stdout[:80])
+    run=subprocess.run(args+[cap.name],capture_output=True)
+    assert run.returncode==0
+    assert run.stdout.startswith(b'[Token Optimizer verified capture '+cap.name.encode())
+
 def test_oversize_capture_error_names_the_size_limit(capture):
     """PR229 finding 6: an over-limit capture must name the limit, not mislead."""
     import devin_compress as d
