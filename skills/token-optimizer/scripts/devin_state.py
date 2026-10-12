@@ -1,5 +1,6 @@
 """Private local output estimates for Devin. Never stores captured text."""
 from __future__ import annotations
+import contextlib
 import hashlib
 import hmac
 import secrets
@@ -25,14 +26,18 @@ def home() -> Path:
     else:
         xdg = os.environ.get('XDG_CONFIG_HOME')
         candidate = Path(xdg) / 'devin' if xdg else base / '.config' / 'devin'
+    if not candidate.is_absolute():
+        raise OSError('Devin home must be an absolute path inside HOME')
+    # A symlinked component is the first thing to name: resolving through it
+    # would mask the real cause behind an 'outside HOME' error.
+    no_symlinks(candidate)
     resolved = candidate.resolve()
-    if not candidate.is_absolute() or not resolved.is_relative_to(base.resolve()):
+    if not resolved.is_relative_to(base.resolve()):
         raise OSError('Devin home must be an absolute path inside HOME')
     if resolved == base.resolve() or resolved.name in ('.claude', '.codex', '.cursor', '.config'):
         raise OSError('Devin home must be a dedicated directory, not HOME or another tool home')
     if any(not ch.isprintable() or ch == '`' for ch in str(candidate)):
         raise OSError('unsupported control/markdown characters in home path')
-    no_symlinks(candidate)
     return candidate
 
 
@@ -119,13 +124,15 @@ def record(session: str, original: str, delivered: str, outcome: str) -> None:
         except FileNotFoundError:continue
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid():
             raise OSError('foreign SQLite sidecar refused')
-    with sqlite3.connect(target, timeout=10) as db:
-        db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_key TEXT, created REAL, source TEXT, original_estimate INTEGER, delivered_estimate INTEGER, outcome TEXT)')
-        db.execute('INSERT INTO events VALUES (?,?,?,?,?,?,?)',
-                   (uuid.uuid4().hex, hmac.new(session_salt(), session.encode(), hashlib.sha256).hexdigest(), time.time(),
-                    SOURCE, estimate_tokens(original), estimate_tokens(delivered), outcome))
-        db.execute('DELETE FROM events WHERE created < ?', (time.time() - RETENTION_DAYS * 86400,))
-        db.execute('DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY created DESC LIMIT -1 OFFSET ?)', (MAX_RECORDS,))
+    # 'with connect()' only commits; the connection must also be closed.
+    with contextlib.closing(sqlite3.connect(target, timeout=10)) as db:
+        with db:
+            db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_key TEXT, created REAL, source TEXT, original_estimate INTEGER, delivered_estimate INTEGER, outcome TEXT)')
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?,?,?)',
+                       (uuid.uuid4().hex, hmac.new(session_salt(), session.encode(), hashlib.sha256).hexdigest(), time.time(),
+                        SOURCE, estimate_tokens(original), estimate_tokens(delivered), outcome))
+            db.execute('DELETE FROM events WHERE created < ?', (time.time() - RETENTION_DAYS * 86400,))
+            db.execute('DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY created DESC LIMIT -1 OFFSET ?)', (MAX_RECORDS,))
 
 
 def summary() -> dict:
@@ -137,7 +144,7 @@ def summary() -> dict:
     target = private_path(data_dir() / 'metrics.db')
     if not target.exists():
         return result
-    with sqlite3.connect(target.as_uri() + '?mode=ro', uri=True) as db:
+    with contextlib.closing(sqlite3.connect(target.as_uri() + '?mode=ro', uri=True)) as db:
         row = db.execute('SELECT COUNT(*), COALESCE(SUM(original_estimate),0), COALESCE(SUM(delivered_estimate),0) FROM events WHERE created >= ?', (time.time() - RETENTION_DAYS * 86400,)).fetchone()
     result.update(events=row[0], original_estimate=row[1], delivered_estimate=row[2],
                   estimated_output_reduction=row[1] - row[2])
@@ -170,6 +177,12 @@ def prepare_capture() -> Path:
     for name in ('stdout', 'stderr'):
         info = (result / name).stat()
         provenance[name] = [info.st_dev, info.st_ino]
-    p = private_path(result / '.prepared', create=True)
-    p.write_text(json.dumps(provenance))
+    p = private_path(result / '.prepared')
+    # Atomic publish: a kill mid-write must never leave a torn .prepared.
+    with tempfile.NamedTemporaryFile(mode='w', dir=result, delete=False) as out:
+        out.write(json.dumps(provenance))
+        out.flush()
+        os.fsync(out.fileno())
+        temporary = out.name
+    os.replace(temporary, p)
     return result

@@ -204,6 +204,48 @@ def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
     monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path))
     with pytest.raises(OSError):s.home()
 
+def test_symlinked_devin_home_names_symlink_as_the_cause(tmp_path,monkeypatch):
+    """PR229 finding 10: a symlinked .config must report 'symlink', not 'inside HOME'."""
+    import devin_state as s
+    monkeypatch.setenv('HOME',str(tmp_path))
+    outside=tmp_path.with_name(tmp_path.name+'-outside');outside.mkdir()
+    (tmp_path/'.config').symlink_to(outside,target_is_directory=True)
+    with pytest.raises(OSError) as exc:s.home()
+    assert 'symlink' in str(exc.value).lower()
+
+def test_sqlite_connections_are_explicitly_closed(tmp_path,monkeypatch):
+    """PR229 finding 10: commit alone is not close; connections must be closed."""
+    import devin_state as s
+    import sqlite3
+    monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
+    events=[]
+    real=sqlite3.connect
+    class Proxy:
+        def __init__(self,db):self._db=db
+        def __getattr__(self,n):return getattr(self._db,n)
+        def __enter__(self):return self
+        def __exit__(self,*a):events.append('commit');return self._db.__exit__(*a)
+        def close(self):events.append('close');return self._db.close()
+    monkeypatch.setattr(s.sqlite3,'connect',lambda *a,**k:Proxy(real(*a,**k)))
+    s.record('s','a'*20,'b','compressed');s.summary()
+    assert events.count('close')>=2,events
+
+def test_prepared_marker_publishes_atomically(tmp_path):
+    """PR229 finding 10: .prepared must appear atomically, never torn."""
+    env=dict(os.environ,HOME=str(tmp_path))
+    code="""import sys,os
+sys.path.insert(0,sys.argv[1]);import devin_state as s
+s.enable_consent()
+os.replace=lambda *a,**k:os._exit(137)
+s.prepare_capture()
+"""
+    run=subprocess.run([sys.executable,'-c',code,str(SCRIPTS)],env=env,capture_output=True)
+    assert run.returncode==137,run.stderr
+    captures=tmp_path/'.config/devin/token-optimizer/captures'
+    if captures.exists():
+        for folder in captures.iterdir():
+            assert not (folder/'.prepared').exists()
+
 def test_recovery_pointer_is_a_runnable_command(tmp_path,monkeypatch):
     """PR229 finding 9: the compressed pointer must name a runnable command."""
     import devin_state as s
