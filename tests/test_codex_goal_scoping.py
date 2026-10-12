@@ -442,6 +442,27 @@ def test_current_thread_id_unresolved_without_identity():
             assert codex_state.current_thread_id() is None, bad
 
 
+def test_thread_id_validated_exactly_as_exported_never_trimmed():
+    """A whitespace-padded CODEX_THREAD_ID is malformed, never trimmed into a
+    valid id; unset, empty and whitespace-only values stay absent."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100)], edges=[])
+        for pad in (" ", "\t", "\n", "\r"):
+            for bad in (pad + "caller-A", "caller-A" + pad):
+                os.environ["CODEX_THREAD_ID"] = bad
+                assert codex_state.current_thread_id() is None, repr(bad)
+                assert codex_state.thread_identity_status() == "invalid", repr(bad)
+        os.environ.pop("CODEX_THREAD_ID")
+        assert codex_state.thread_identity_status() == "absent"
+        for blank in ("", "   ", "\t\n\r "):
+            os.environ["CODEX_THREAD_ID"] = blank
+            assert codex_state.current_thread_id() is None
+            assert codex_state.thread_identity_status() == "absent", repr(blank)
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert codex_state.current_thread_id() == "caller-A"
+        assert codex_state.thread_identity_status() == "ok"
+
+
 def test_current_thread_id_identity_missing_from_db_is_not_replaced():
     """Identity absent from the threads table stays the identity (no fallback to newest)."""
     with _CodexHome() as home:

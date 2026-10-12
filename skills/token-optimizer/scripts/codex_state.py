@@ -287,17 +287,25 @@ def invoking_thread_id() -> str | None:
     """Return the invoking Codex thread id from ``CODEX_THREAD_ID``, or None.
 
     Codex exports the id of the thread that launched the process. That is the
-    only identity of the caller we have; a malformed value is treated as
-    absent rather than sanitized into some other id.
+    only identity of the caller we have, and the value is validated exactly
+    as exported: an unset, empty or whitespace-only value is treated as
+    absent, while a non-empty value carrying stray whitespace or any other
+    character outside the id alphabet is malformed. Malformed values are
+    never sanitized or trimmed into some other id.
     """
-    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
+    raw = os.environ.get(_THREAD_ID_ENV, "")
     return raw if _THREAD_ID_RE.fullmatch(raw) else None
 
 
 def thread_identity_status() -> str:
-    """``"ok"``, ``"absent"`` (CODEX_THREAD_ID unset/empty) or ``"invalid"``."""
-    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
-    if not raw:
+    """``"ok"``, ``"absent"`` (unset, empty or whitespace-only) or ``"invalid"``.
+
+    The unmodified ``CODEX_THREAD_ID`` value is matched exactly; padding such
+    as a leading or trailing space, tab or newline makes the value invalid,
+    not absent.
+    """
+    raw = os.environ.get(_THREAD_ID_ENV, "")
+    if not raw.strip():
         return "absent"
     return "ok" if _THREAD_ID_RE.fullmatch(raw) else "invalid"
 
