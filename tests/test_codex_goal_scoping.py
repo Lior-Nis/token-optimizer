@@ -757,7 +757,7 @@ def test_claude_hook_resolution_is_id_first_then_mtime_guess(tmp_path):
 def test_memory_component_thread_count_not_capped_by_detail_limit():
     """The audit component and the recommendation text carry the real thread count."""
     with _CodexHome() as home:
-        n = codex_state._DETAIL_LIMIT + 20
+        n = 40
         _make_state_db(home, threads=[(f"thread-{i:03d}", 1, i) for i in range(n)], edges=[])
         # 4 chars/token: 4000 chars per thread -> 1000 tokens each, > the 3000 total threshold.
         _make_memory_table(home, [(f"thread-{i:03d}", "x" * 4000, "") for i in range(n)])
@@ -769,7 +769,8 @@ def test_memory_component_thread_count_not_capped_by_detail_limit():
             measure.runtime_home = saved_home
         assert comp["scope"] == "all_threads"
         assert comp["thread_count"] == n
-        assert len(comp["files"]) == codex_state._DETAIL_LIMIT
+        assert len(comp["files"]) == 20
+        assert codex_state._DETAIL_LIMIT == 20
         recs = measure._generate_codex_auto_recommendations({"memory_md": comp})
         text = json.dumps(recs, default=str)
         assert f"across {n} threads on this machine" in text, text[:400]
@@ -873,3 +874,43 @@ def test_subagent_costs_no_root_is_backward_compatible():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_memory_overhead_flags_truncation_when_row_cap_binds():
+    with _CodexHome() as home:
+        saved = codex_state._MAX_ROWS
+        codex_state._MAX_ROWS = 5
+        try:
+            _make_state_db(home, threads=[(f"t{i:03d}", 1, i) for i in range(8)], edges=[])
+            _make_memory_table(home, [(f"t{i:03d}", "x" * 400, "") for i in range(8)])
+            saved_home = measure.runtime_home
+            measure.runtime_home = lambda: home
+            try:
+                over = codex_state.memory_overhead()
+                comp = measure._measure_codex_components()["memory_md"]
+            finally:
+                measure.runtime_home = saved_home
+            assert over["thread_count"] == 5
+            assert over["truncated"] is True
+            assert comp["truncated"] is True
+            recs = json.dumps(measure._generate_codex_auto_recommendations(
+                {"memory_md": {**comp, "tokens": 9000}}), default=str)
+            assert "partial" in recs
+        finally:
+            codex_state._MAX_ROWS = saved
+
+
+def test_memory_overhead_not_truncated_at_exact_cap():
+    with _CodexHome() as home:
+        saved = codex_state._MAX_ROWS
+        codex_state._MAX_ROWS = 5
+        saved_home = measure.runtime_home
+        measure.runtime_home = lambda: home
+        try:
+            _make_state_db(home, threads=[(f"t{i:03d}", 1, i) for i in range(5)], edges=[])
+            _make_memory_table(home, [(f"t{i:03d}", "x" * 400, "") for i in range(5)])
+            over = codex_state.memory_overhead()
+            assert over["thread_count"] == 5 and over["truncated"] is False
+        finally:
+            codex_state._MAX_ROWS = saved
+            measure.runtime_home = saved_home

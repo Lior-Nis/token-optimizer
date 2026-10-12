@@ -454,6 +454,7 @@ def _empty_memory() -> dict[str, Any]:
     return {
         "available": False,
         "thread_count": 0,
+        "truncated": False,
         "total_raw_memory_chars": 0,
         "total_rollout_summary_chars": 0,
         "total_memory_tokens": 0,
@@ -499,7 +500,7 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
                        COALESCE({summary_expr}, 0) AS summary_chars
                 FROM stage1_outputs
                 {where}
-                LIMIT {_MAX_ROWS}
+                LIMIT {_MAX_ROWS + 1}
                 """,
                 params,
             ).fetchall()
@@ -508,6 +509,10 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
 
     if not rows:
         return {**_empty_memory(), "available": True}
+
+    # Fetched one past the cap so a binding cap is detectable, never silent.
+    truncated = len(rows) > _MAX_ROWS
+    rows = rows[:_MAX_ROWS]
 
     total_raw = total_summary = max_tokens = 0
     by_thread: list[dict[str, Any]] = []
@@ -524,6 +529,7 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
     return {
         "available": True,
         "thread_count": len(rows),
+        "truncated": truncated,
         "total_raw_memory_chars": total_raw,
         "total_rollout_summary_chars": total_summary,
         "total_memory_tokens": (total_raw + total_summary) // CHARS_PER_TOKEN,

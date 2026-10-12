@@ -3071,6 +3071,7 @@ def _measure_codex_components():
         "files": state_memory.get("by_thread", []),
         "scope": "all_threads",
         "thread_count": int(state_memory.get("thread_count", 0) or 0),
+        "truncated": bool(state_memory.get("truncated")),
         "note": (
             "Codex memory overhead is measured from state_*.sqlite stage1_outputs; "
             "legacy ~/.codex/memories files are not counted as automatic prompt overhead."
@@ -6181,7 +6182,8 @@ def codex_state_report(as_json=False):
     if mem.get("unresolved"):
         print("\nMemory overhead: unresolved (no invoking thread id)")
     elif mem.get("available") and mem["thread_count"]:
-        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']} thread(s); "
+        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']}{'+' if mem.get('truncated') else ''} thread(s)"
+              f"{' (partial: scan cap reached)' if mem.get('truncated') else ''}; "
               f"largest {mem['max_thread_memory_tokens']:,}")
     else:
         print("\nMemory overhead: none recorded")
@@ -8971,7 +8973,7 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
     memory = components.get("memory_md", {})
     if memory.get("tokens", 0) > 3000:
         medium.append(
-            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {memory.get('thread_count', len(memory.get('files', [])))} threads on this machine)**: "
+            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {memory.get('thread_count', len(memory.get('files', [])))} threads on this machine{' - partial, scan cap reached' if memory.get('truncated') else ''})**: "
             "Codex memory guidance can enter developer instructions when memories are enabled. "
             "Delete stale rollout summaries, consolidate duplicate memories, and keep only reusable preferences or project facts. "
             "Use Codex's memory reset only when you intentionally want to clear all persisted local memory."
