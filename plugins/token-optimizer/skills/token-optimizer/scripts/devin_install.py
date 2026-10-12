@@ -249,7 +249,7 @@ def install(*, dry_run=False) -> None:
             _clear_pending(pending)
             raise
     print('Installed Devin explicit output skill (contract-only beta; no live session proof).')
-    print('Consent: private captures may contain confidential/personal data; no raw copies are stored.')
+    print('Consent: private captures may contain confidential/personal data; the adapter makes no extra copies beyond the captures you create, which persist until you delete them.')
     print('Failures, stderr, binary and credential-matching output pass through RAW to Devin/model context.')
     print('Numeric local estimates retain 30 days, at most 10000 rows. Capture cleanup stays with you.')
 

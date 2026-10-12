@@ -188,6 +188,14 @@ def test_valid_seal_still_refuses_reseal(capture):
     (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
     with pytest.raises(OSError):d.seal_capture(capture,0)
 
+def test_install_message_matches_capture_policy(tmp_path,monkeypatch,capsys):
+    """PR229 finding 5: consent text must not claim no raw copies are stored."""
+    import devin_install as d
+    monkeypatch.setenv('HOME',str(tmp_path));d.install()
+    text=capsys.readouterr().out
+    assert 'no raw copies are stored' not in text
+    assert 'captures you create' in text and 'until you delete' in text
+
 def test_doctor_probe_records_no_metrics(tmp_path,monkeypatch):
     """PR229 finding 1: the doctor's synthetic probe must not poison metrics."""
     import devin_install as d
