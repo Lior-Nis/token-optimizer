@@ -6106,7 +6106,7 @@ def _codex_state_summary():
     summary['available_models'] = codex_models.visible_models()
     try:
         # Session signals follow the same identity: never the newest-mtime file.
-        current = codex_session.find_session_jsonl_by_id(current_tid) if current_tid else None
+        current = codex_session.find_session_jsonl_exact(current_tid) if current_tid else None
         if current:
             session = codex_session.parse_session_jsonl(current)
             if session:
@@ -36228,8 +36228,7 @@ def _find_current_session_jsonl(require_identity=False):
         except Exception:
             current_tid = None
         if current_tid:
-            resolved = codex_session.find_session_jsonl_by_id(current_tid)
-            return resolved
+            return codex_session.find_session_jsonl_exact(current_tid)
         if require_identity:
             # Manual `quality current`: without the caller's identity the
             # newest-mtime session may belong to another thread. Report
@@ -36328,23 +36327,22 @@ def quality_analyzer(session_id=None, as_json=False):
     else:
         filepath = _find_current_session_jsonl(require_identity=True)
 
-    if not filepath and (not session_id or session_id == "current") and _codex_identity_unresolved():
-        msg = (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
-               "Pass a session id explicitly instead of guessing the newest session.")
-        if as_json:
-            print(json.dumps({"error": msg, "thread_resolution": "unresolved"}))
-        else:
-            print(f"[Token Optimizer] {msg}")
-        return None
-
     if not filepath and (not session_id or session_id == "current") and _use_codex_session_adapter():
-        # Identity resolved but its transcript was not found. Say so for the
-        # caller's thread; never substitute another thread's session.
+        # One resolution outcome for the invoking Codex thread: either its
+        # transcript, or an explicit unresolved state with the reason. Never
+        # another thread's session, never the Claude-runtime message.
         tid = codex_state.current_thread_id()
-        msg = (f"No transcript found for the current Codex thread ({tid}). "
-               "Pass a session id explicitly if it lives elsewhere.")
+        if tid:
+            reason = "transcript_not_found"
+            msg = (f"Could not resolve the current Codex thread: no transcript found for {tid}. "
+                   "Pass a session id explicitly if it lives elsewhere.")
+        else:
+            reason = "identity_invalid" if codex_state.thread_identity_status() == "invalid" else "identity_absent"
+            msg = (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
+                   "Pass a session id explicitly instead of guessing the newest session.")
         if as_json:
-            print(json.dumps({"error": msg, "thread_resolution": "invoking", "selected_thread_id": tid}))
+            print(json.dumps({"error": msg, "thread_resolution": "unresolved",
+                              "reason": reason, "selected_thread_id": tid}))
         else:
             print(f"[Token Optimizer] {msg}")
         return None

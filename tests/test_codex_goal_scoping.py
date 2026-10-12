@@ -497,6 +497,7 @@ def test_quality_analyzer_current_reports_unresolved_json(capsys):
         assert out["thread_resolution"] == "unresolved"
         assert "other-B" not in json.dumps(out)
         assert "is not set" in out["error"]
+        assert out["reason"] == "identity_absent"
         os.environ["CODEX_THREAD_ID"] = "a b"
         assert measure.quality_analyzer(as_json=True) is None
         assert "not a valid thread id" in json.loads(capsys.readouterr().out)["error"]
@@ -553,7 +554,35 @@ def test_quality_analyzer_missing_transcript_names_caller_thread(capsys):
         out = json.loads(capsys.readouterr().out)
         assert "caller-A" in out["error"]
         assert "Claude" not in out["error"]
-        assert out["thread_resolution"] == "invoking"
+        assert out["thread_resolution"] == "unresolved"
+        assert out["reason"] == "transcript_not_found"
+        assert out["selected_thread_id"] == "caller-A"
+
+
+def test_rollout_like_identity_is_not_normalized_to_another_thread():
+    """rollout-UNKNOWN-<uuid> must not resolve the <uuid> thread's transcript."""
+    uuid = "019a2abc-1111-2222-3333-444455556666"
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100), (uuid, 5, 200)], edges=[])
+        (home / "sessions" / f"rollout-2026-10-12T10-00-00-{uuid}.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": uuid, "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8",
+        )
+        os.environ["CODEX_THREAD_ID"] = f"rollout-UNKNOWN-{uuid}"
+        assert measure._find_current_session_jsonl() is None
+        # The genuine id still resolves its rollout-named transcript.
+        os.environ["CODEX_THREAD_ID"] = uuid
+        assert measure._find_current_session_jsonl().name.endswith(f"{uuid}.jsonl")
+
+
+def test_identity_absent_from_db_is_still_the_identity():
+    """Pinned decision: DB absence alone never invalidates CODEX_THREAD_ID (the DB
+    can lag a brand-new thread); resolution only fails when no transcript matches."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100), ("other-B", 5, 200)], edges=[])
+        os.environ["CODEX_THREAD_ID"] = "nonexistent-id"
+        assert codex_state.current_thread_id() == "nonexistent-id"
+        assert measure._find_current_session_jsonl() is None
 
 
 def test_codex_summary_reports_selected_thread_from_identity():

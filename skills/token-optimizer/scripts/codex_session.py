@@ -318,6 +318,48 @@ def find_session_jsonl_by_id(session_id: str) -> Path | None:
     return exact_matches[0]
 
 
+_ROLLOUT_STEM_RE = re.compile(
+    r'rollout-.*-([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})'
+)
+
+
+def _raw_session_meta_id(path: Path) -> str | None:
+    """session_meta id exactly as written (no normalization)."""
+    for record in _iter_json_records(path, skip_large_file=True):
+        if record.get("type") != "session_meta":
+            continue
+        value = _payload(record).get("id")
+        return str(value) if value else None
+    return None
+
+
+def find_session_jsonl_exact(thread_id: str) -> Path | None:
+    """Resolve a transcript for exactly ``thread_id``; never normalized.
+
+    Unlike ``find_session_jsonl_by_id`` (an explicit-session convenience that
+    strips ``rollout-`` prefixes and illegal characters), this matches the
+    id verbatim against the file stem, the UUID suffix of a
+    ``rollout-<ts>-<uuid>`` stem, or the raw ``session_meta`` id. Used for
+    the invoking-thread identity, where silently changing the id would bind
+    to a different thread.
+    """
+    if not thread_id or not re.fullmatch(r"[A-Za-z0-9_-]{6,128}", thread_id):
+        return None
+    matches: list[Path] = []
+    for root in session_roots():
+        if not root.exists():
+            continue
+        for jf in itertools.islice(root.rglob(f"*{thread_id}*.jsonl"), 50):
+            m = _ROLLOUT_STEM_RE.fullmatch(jf.stem)
+            file_id = m.group(1) if m else jf.stem
+            if file_id == thread_id or _raw_session_meta_id(jf) == thread_id:
+                matches.append(jf)
+    if not matches:
+        return None
+    matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return matches[0]
+
+
 def _session_meta_id(path: Path) -> str | None:
     for record in _iter_json_records(path, skip_large_file=True):
         if record.get("type") != "session_meta":
