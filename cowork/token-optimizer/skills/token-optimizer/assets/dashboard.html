@@ -2371,6 +2371,8 @@ function extractFindings(auditMd) {
 }
 
 /* ========== COMPONENT DETAILS BUILDER ========== */
+function codexMemPartialPrefix(m) { return m && m.truncated ? 'Partial total: Codex memory scan cap reached. ' : ''; }
+function codexMemBarLabel(m) { return m && m.truncated ? 'Codex Memories (partial)' : 'Codex Memories'; }
 function getComponentDetails(data) {
   var c = data.snapshot.components;
   var cd = data.snapshot.component_details || {};
@@ -2417,7 +2419,7 @@ function getComponentDetails(data) {
       key: 'memory_md', name: 'MEMORY.md',
       tokens: c.memory_md ? c.memory_md.tokens : 0,
       sub: (c.memory_md && c.memory_md.exists !== false)
-        ? (isCodex ? (c.memory_md.truncated ? 'Partial total: Codex memory scan cap reached. ' : '') + c.memory_md.lines + ' lines across Codex memory files' : c.memory_md.lines + ' lines loaded every session')
+        ? (isCodex ? codexMemPartialPrefix(c.memory_md) + c.memory_md.lines + ' lines across Codex memory files' : c.memory_md.lines + ' lines loaded every session')
         : (isCodex ? 'No Codex local memory files detected' : 'Not configured. Auto-memory is off or no project match.'),
       what: isCodex
         ? 'Codex local memories live under the Codex home and can be injected as developer guidance when memory support is active. They are separate from Claude MEMORY.md.'
@@ -3017,7 +3019,7 @@ var DB = (function() {
       var logMax = Math.log10(ctxWindow);
       return Math.max(2, (logVal / logMax) * 80);
     }
-    var barLabels = [isCodexOverview ? 'AGENTS.md' : 'CLAUDE.md', isCodexOverview ? (c.memory_md && c.memory_md.truncated ? 'Codex Memories (partial)' : 'Codex Memories') : 'MEMORY.md', 'Skills'];
+    var barLabels = [isCodexOverview ? 'AGENTS.md' : 'CLAUDE.md', isCodexOverview ? codexMemBarLabel(c.memory_md) : 'MEMORY.md', 'Skills'];
     if (!isCodexOverview) barLabels.push('Commands');
     if (rulesTokens > 0) barLabels.push('Rules');
     if (importsTokens > 0) barLabels.push('@imports');

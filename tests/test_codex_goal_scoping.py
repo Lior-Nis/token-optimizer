@@ -946,8 +946,41 @@ def test_quick_scan_and_snapshot_label_partial_memory_total(monkeypatch, capsys)
 
 
 def test_dashboard_marks_partial_codex_memory_total():
+    """Run the dashboard's own helpers in node and check the call sites use them."""
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
     root = Path(__file__).resolve().parent.parent
     for rel in ("skills", "plugins/token-optimizer/skills", "cowork/token-optimizer/skills"):
         html = (root / rel / "token-optimizer/assets/dashboard.html").read_text(encoding="utf-8")
-        assert "c.memory_md.truncated" in html
-        assert "Codex Memories (partial)" in html
+        helpers = "\n".join(re.findall(r"^function codexMem\w+\(m\) \{.*\}$", html, re.M))
+        assert helpers.count("function ") == 2, helpers
+        assert "codexMemPartialPrefix(c.memory_md)" in html
+        assert "codexMemBarLabel(c.memory_md)" in html
+        script = helpers + (
+            "\nconsole.log(JSON.stringify([codexMemPartialPrefix({truncated:true}),"
+            "codexMemPartialPrefix({truncated:false}),codexMemPartialPrefix(undefined),"
+            "codexMemBarLabel({truncated:true}),codexMemBarLabel({truncated:false}),"
+            "codexMemBarLabel(undefined)]));"
+        )
+        out = json.loads(subprocess.run([node, "-e", script], capture_output=True,
+                                        text=True, check=True).stdout)
+        assert out == ["Partial total: Codex memory scan cap reached. ", "", "",
+                       "Codex Memories (partial)", "Codex Memories", "Codex Memories"]
+
+
+def test_state_report_memory_line_partial_suffix_end_to_end(monkeypatch, capsys):
+    base = {"thread_resolution": "resolved", "subagents": {"available": False},
+            "goals": {"available": False}}
+    for truncated in (True, False):
+        mem = {"available": True, "thread_count": 5, "truncated": truncated,
+               "total_memory_tokens": 900, "max_thread_memory_tokens": 300}
+        monkeypatch.setattr(measure, "_codex_state_summary", lambda _m=mem: {**base, "memory": _m})
+        measure.codex_state_report()
+        line = [ln for ln in capsys.readouterr().out.splitlines() if "Memory overhead" in ln][0]
+        assert ("5+ thread(s) (partial: scan cap reached);" in line) is truncated, line
+        assert ("5 thread(s);" in line) is (not truncated), line
