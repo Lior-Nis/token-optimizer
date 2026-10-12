@@ -1138,6 +1138,28 @@ def test_dashboard_runtime_row_distinguishes_unavailable_from_empty():
         assert out[2].startswith("unresolved")
 
 
+def test_dashboard_subagents_and_goals_render_unresolved():
+    for html in _dashboard_html_copies():
+        js = (_extract_fn(html, "codexSubRuntimeValue") + "\n" +
+              _extract_fn(html, "codexGoalsRuntimeValue") + (
+              "\nvar f=function(n){return String(n)};console.log(JSON.stringify(["
+              "codexSubRuntimeValue({unresolved:true,available:false,total_subagents:0},f),"
+              "codexGoalsRuntimeValue({unresolved:true,available:false,total_goals:0}),"
+              "codexSubRuntimeValue({available:false},f),"
+              "codexGoalsRuntimeValue({available:true,total_goals:0}),"
+              "codexSubRuntimeValue({available:true,total_subagents:2,open_subagents:1,"
+              "leaked_subagents:0,total_child_tokens:5},f),"
+              "codexGoalsRuntimeValue({available:true,total_goals:3,active_goals:1,"
+              "budget_limited:1,usage_limited:0})]));"))
+        sub_u, goals_u, sub_un, goals_n, sub_ok, goals_ok = _node_eval(js)
+        assert sub_u == "unresolved (no invoking thread id)"
+        assert goals_u == "unresolved (no invoking thread id)"
+        assert sub_un == "no state data yet"
+        assert goals_n == "none active"
+        assert "2 total (1 open)" in sub_ok and "5 tokens" in sub_ok
+        assert "3 (1 active)" in goals_ok and "1 limited" in goals_ok
+
+
 def test_dashboard_codex_card_renders_both_directions():
     for html in _dashboard_html_copies():
         js = (_extract_fn(html, "codexMemCardHtml") + "\n" + _extract_fn(html, "memCountSuffix") +

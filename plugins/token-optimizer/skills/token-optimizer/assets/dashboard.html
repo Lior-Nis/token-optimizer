@@ -2374,6 +2374,8 @@ function extractFindings(auditMd) {
 function codexMemPartialPrefix(m) { return m && m.truncated ? 'Partial total: Codex memory scan cap reached. ' : ''; }
 function codexMemBarLabel(m) { return m && m.truncated ? 'Codex Memories (partial)' : 'Codex Memories'; }
 function codexMemRuntimeValue(mem, fnum) { if (mem.unresolved) return 'unresolved (no invoking thread id)'; if (!mem.available) return 'unavailable (Codex state database not found or unreadable)'; return mem.thread_count ? fnum(mem.total_memory_tokens) + ' tokens / ' + mem.thread_count + (mem.truncated ? '+' : '') + ' thread(s)' + (mem.truncated ? ' (partial: scan cap reached)' : '') : 'none recorded'; }
+function codexSubRuntimeValue(sub, fnum) { if (sub.unresolved) return 'unresolved (no invoking thread id)'; if (!sub.available) return 'no state data yet'; var leakWarn = sub.leaked_subagents > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + sub.leaked_subagents + ' leaked</span>' : ''; return sub.total_subagents + ' total (' + sub.open_subagents + ' open)' + leakWarn + ' &middot; ' + fnum(sub.total_child_tokens) + ' tokens'; }
+function codexGoalsRuntimeValue(goals) { if (goals.unresolved) return 'unresolved (no invoking thread id)'; if (!goals.available || !goals.total_goals) return 'none active'; var limited = (goals.budget_limited || 0) + (goals.usage_limited || 0); var goalWarn = limited > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + limited + ' limited</span>' : ''; return goals.total_goals + ' (' + goals.active_goals + ' active)' + goalWarn; }
 function codexMemCardHtml(mr, fn) { return '<div class="card"><div class="card-header"><span>Codex Memory</span></div>' +
         '<div style="text-align:center;padding:var(--s-3) 0;">' +
         '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan);">' + fn(mr.total_tokens || 0) + '</div>' +
@@ -3216,26 +3218,15 @@ var DB = (function() {
         if (existingCsCard) existingCsCard.parentNode.removeChild(existingCsCard);
         var sub = cs.subagents || {}, mem = cs.memory || {}, goals = cs.goals || {};
         var rows = '';
-        if (sub.available) {
-          var leakWarn = sub.leaked_subagents > 0
-            ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + sub.leaked_subagents + ' leaked</span>' : '';
-          rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">' +
-            sub.total_subagents + ' total (' + sub.open_subagents + ' open)' + leakWarn +
-            ' &middot; ' + fn(sub.total_child_tokens) + ' tokens</span></div>';
-        } else {
-          rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">no state data yet</span></div>';
-        }
+        rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">' +
+          codexSubRuntimeValue(sub, fn) +
+          '</span></div>';
         rows += '<div class="bar-row"><span class="bar-label">Memory</span><span class="bar-value">' +
           codexMemRuntimeValue(mem, fn) +
           '</span></div>';
-        if (goals.available && goals.total_goals) {
-          var limited = (goals.budget_limited || 0) + (goals.usage_limited || 0);
-          var goalWarn = limited > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + limited + ' limited</span>' : '';
-          rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">' +
-            goals.total_goals + ' (' + goals.active_goals + ' active)' + goalWarn + '</span></div>';
-        } else {
-          rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">none active</span></div>';
-        }
+        rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">' +
+          codexGoalsRuntimeValue(goals) +
+          '</span></div>';
         var rl = cs.rate_limits && cs.rate_limits.primary;
         if (rl && rl.used_percent != null) {
           rows += '<div class="bar-row"><span class="bar-label">Rate limit</span><span class="bar-value">' + Math.round(rl.used_percent) + '% used (primary)</span></div>';
