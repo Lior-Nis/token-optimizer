@@ -28459,6 +28459,16 @@ def _is_plugin_installed():
     return False
 
 
+def _is_compaction_runner(cmd, event):
+    """Recognize runner path arguments for the events each runner dispatches."""
+    if not isinstance(cmd, str):
+        return False
+    name = "sessionstart_runner" if event == "SessionStart" else "stop_runner"
+    if event not in ("SessionStart", "Stop", "SessionEnd"):
+        return False
+    return bool(re.search(r"(?:^|[\s\"'/\\])" + name + r"\.py(?:$|[\s\"';])", cmd))
+
+
 def _is_hook_installed(settings=None):
     """Check if the SessionEnd measure.py collect hook is installed.
 
@@ -28484,7 +28494,9 @@ def _is_hook_installed(settings=None):
             hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
             for hook in hook_list:
                 cmd = hook.get("command", "") if isinstance(hook, dict) else ""
-                if isinstance(cmd, str) and _TO_SESSION_END_CMD_RE.search(cmd):
+                if isinstance(cmd, str) and (
+                    _TO_SESSION_END_CMD_RE.search(cmd) or _is_compaction_runner(cmd, "SessionEnd")
+                ):
                     return True
 
     # Check plugin cache hooks (marketplace plugin auto-install)
@@ -28501,7 +28513,9 @@ def _is_hook_installed(settings=None):
                         hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
                         for hook in hook_list:
                             cmd = hook.get("command", "") if isinstance(hook, dict) else ""
-                            if isinstance(cmd, str) and _TO_SESSION_END_CMD_RE.search(cmd):
+                            if isinstance(cmd, str) and (
+                                _TO_SESSION_END_CMD_RE.search(cmd) or _is_compaction_runner(cmd, "SessionEnd")
+                            ):
                                 return True
             except (json.JSONDecodeError, PermissionError, OSError):
                 continue
@@ -43118,7 +43132,9 @@ def _is_smart_compact_installed(settings=None):
                 # SessionEnd uses session-end-flush in plugin (handles both
                 # collection + end-of-session checkpoint). Accept it alongside
                 # the older compact-capture / compact-restore signatures.
-                if "measure.py" in cmd and (
+                if not isinstance(cmd, str):
+                    continue
+                if _is_compaction_runner(cmd, event) or "measure.py" in cmd and (
                     "compact-capture" in cmd
                     or "compact-restore" in cmd
                     or (event == "SessionEnd" and ("session-end-flush" in cmd or "collect" in cmd))
