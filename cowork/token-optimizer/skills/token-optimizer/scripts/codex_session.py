@@ -295,11 +295,6 @@ def find_all_jsonl_files(days: int = 30, max_files: int = 500) -> list[tuple[Pat
     return [(jf, mtime, _project_name_from_file(jf)) for jf, mtime in newest]
 
 
-def find_current_session_jsonl() -> Path | None:
-    files = find_all_jsonl_files(days=90, max_files=10)
-    return files[0][0] if files else None
-
-
 def find_session_jsonl_by_id(session_id: str) -> Path | None:
     safe_id = _safe_session_id(session_id)
     if not safe_id:
