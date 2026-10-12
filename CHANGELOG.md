@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.13.39] - 2026-10-13
+
+- Memory health no longer reports every topic file as orphaned when MEMORY.md is a flat list of links.
+- Session health only flags a session as outdated when its version is really older than the installed one.
+- Doctor and the Hooks tab now recognise the hooks that plugin installs ship, so Smart Compaction and Session Tracking show as on.
+- The desktop status bar finds Python on Windows machines where the Store alias reports a shortened exit code.
+
 ## [5.13.38] - 2026-10-12
 
 - Your permission prompts and auto mode checks now apply to every Bash command. Token Optimizer no longer approves any command on your behalf.

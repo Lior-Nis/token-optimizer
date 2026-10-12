@@ -37223,6 +37223,12 @@ def _mr_parse_memory_index(filepath):
                         "line": i, "entry_idx": len(entries)}
                 current_entry["links"].append(link)
                 links_all.append(link)
+        else:
+            # Auto-memory also writes flat indexes without section headings.
+            # Keep these links for orphan/broken-link checks without creating entries.
+            for m in _MR_LINK_RE.finditer(stripped):
+                links_all.append({"text": m.group(1), "target": m.group(2),
+                                  "line": i, "entry_idx": None})
 
     # Close last entry
     if current_entry is not None:
