@@ -687,6 +687,36 @@ def test_every_codex_caller_is_identity_bound_not_mtime():
         assert measure._find_current_session_jsonl() is None  # identity w/o transcript
 
 
+def test_hook_with_explicit_session_id_never_falls_through_to_env_thread():
+    """A hook for session S (e.g. a subagent inheriting the parent's env) must not
+    be given the CODEX_THREAD_ID thread's transcript when S has none."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("parent-thread", 5, 100)], edges=[])
+        (home / "sessions" / "parent-thread.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "parent-thread", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8")
+        os.environ["CODEX_THREAD_ID"] = "parent-thread"
+        assert measure._current_jsonl_for_hook("other-session").__class__ is type(None)
+        assert measure._current_jsonl_for_hook("parent-thread").name == "parent-thread.jsonl"
+        # No session id supplied: the invoking-thread resolver applies.
+        assert measure._current_jsonl_for_hook(None).name == "parent-thread.jsonl"
+
+
+def test_memory_overhead_empty_id_is_not_machine_wide():
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100)], edges=[])
+        _make_memory_table(home, [("caller-A", "x" * 400, "")])
+        assert codex_state.memory_overhead(root_thread_id="")["thread_count"] == 0
+        assert codex_state.memory_overhead()["thread_count"] == 1
+
+
+def test_machine_wide_memory_component_is_labelled_all_threads():
+    src = (SCRIPTS / "measure.py").read_text(encoding="utf-8")
+    assert '"scope": "all_threads"' in src
+    assert "Codex memories (all threads)" in src
+    assert "threads on this machine" in src
+
+
 def test_codex_summary_reports_selected_thread_from_identity():
     with _CodexHome() as home:
         _make_state_db(

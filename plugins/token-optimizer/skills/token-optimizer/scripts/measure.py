@@ -3069,6 +3069,7 @@ def _measure_codex_components():
         "tokens": int(state_memory.get("total_memory_tokens", 0) or 0),
         "lines": 0,
         "files": state_memory.get("by_thread", []),
+        "scope": "all_threads",
         "note": (
             "Codex memory overhead is measured from state_*.sqlite stage1_outputs; "
             "legacy ~/.codex/memories files are not counted as automatic prompt overhead."
@@ -4283,7 +4284,7 @@ def quick_scan(as_json=False):
     if mem.get("tokens", 0) > 0:
         # Under Codex this component holds state_*.sqlite memory, not a
         # MEMORY.md file — label it for the runtime the user is on.
-        _mem_label = "Codex memories" if _rt == "codex" else "MEMORY.md"
+        _mem_label = "Codex memories (all threads)" if _rt == "codex" else "MEMORY.md"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
                          f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
@@ -5250,7 +5251,7 @@ def print_snapshot_summary(snapshot):
     # Memory
     if "memory_md" in c:
         mem = c["memory_md"]
-        memory_label = "Codex memories" if is_codex else "MEMORY.md"
+        memory_label = "Codex memories (all threads)" if is_codex else "MEMORY.md"
         print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
 
     # Skills
@@ -6153,8 +6154,9 @@ def codex_state_report(as_json=False):
         why = (f"no transcript found for {summary.get('selected_thread_id')}"
                if reason == "transcript_not_found" else _codex_identity_reason())
         print(f"\nCurrent thread: unresolved ({why}). "
-              "Session signals are not shown"
-              + ("; thread-scoped subagent, goal and memory totals are not shown." if not summary.get("selected_thread_id") else "."))
+              + ("Session signals are not shown; thread-scoped subagent, goal and memory totals are not shown."
+                 if not summary.get("selected_thread_id")
+                 else f"Session signals are not shown; totals below are for thread {summary.get('selected_thread_id')}, not its transcript."))
 
     sub = summary["subagents"]
     if sub.get("unresolved"):
@@ -8964,7 +8966,7 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
     memory = components.get("memory_md", {})
     if memory.get("tokens", 0) > 3000:
         medium.append(
-            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {len(memory.get('files', []))} files)**: "
+            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {len(memory.get('files', []))} threads on this machine)**: "
             "Codex memory guidance can enter developer instructions when memories are enabled. "
             "Delete stale rollout summaries, consolidate duplicate memories, and keep only reusable preferences or project facts. "
             "Use Codex's memory reset only when you intentionally want to clear all persisted local memory."
@@ -36238,6 +36240,24 @@ def _codex_unresolved_message(res):
             "Pass a session id explicitly instead of guessing the newest session.")
 
 
+def _current_jsonl_for_hook(session_id):
+    """Resolve the transcript for a hook that may carry an explicit session id.
+
+    Claude/other runtimes: session id first, then the mtime guess (unchanged).
+    Codex: when a session id is supplied, its own transcript or None. Falling
+    through to the invoking-thread resolver would mix another session's
+    transcript into this session's checkpoint/cache (a subagent hook can
+    inherit the parent's CODEX_THREAD_ID). With no session id, the invoking
+    thread resolver applies.
+    """
+    if session_id and _use_codex_session_adapter():
+        return _find_session_jsonl_by_id(session_id)
+    filepath = _find_session_jsonl_by_id(session_id) if session_id else None
+    if filepath is None:
+        filepath = _find_current_session_jsonl()
+    return filepath
+
+
 def _find_current_session_jsonl():
     """Find the most recently modified JSONL file across all project directories.
 
@@ -39357,9 +39377,7 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         # most recently active transcript, which on a new session is somebody
         # else's -- and a checkpoint captured from the wrong session is later
         # restored into this one's context. Same order checkpoint_trigger uses.
-        filepath = _find_session_jsonl_by_id(session_id) if session_id else None
-        if filepath is None:
-            filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     # Build trigger suffix for filename so restore/list logic can rank all semantic checkpoints.
     trigger_suffix = f"-{trigger}" if trigger and trigger != "auto" else ""
@@ -42288,10 +42306,8 @@ def checkpoint_trigger(milestone=None, session_id=None, transcript_path=None, qu
         candidate = Path(transcript_path)
         if candidate.exists():
             filepath = candidate
-    if filepath is None and session_id:
-        filepath = _find_session_jsonl_by_id(session_id)
     if filepath is None:
-        filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     if filepath is None:
         return None
@@ -44736,9 +44752,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     else:
         # Resolve by identity before falling back to an mtime guess: a wrong
         # guess writes this session's score into another session's cache.
-        filepath = _find_session_jsonl_by_id(session_id) if session_id else None
-        if filepath is None:
-            filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     # Per-session cache: each session has its own file to avoid cross-session pollution
     cache_path = _quality_cache_path_for(filepath)

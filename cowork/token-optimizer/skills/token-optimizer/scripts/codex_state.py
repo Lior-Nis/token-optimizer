@@ -476,6 +476,9 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
     """
     if not _is_codex():
         return _empty_memory()
+    if root_thread_id is not None and not root_thread_id:
+        # An empty id is a scoping failure, never a request for the whole DB.
+        return _empty_memory()
     db = _find_versioned_db("state", "stage1_outputs")
     if db is None:
         return _empty_memory()
@@ -487,8 +490,8 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
                 return _empty_memory()
             raw_expr = "length(raw_memory)" if "raw_memory" in cols else "0"
             summary_expr = "length(rollout_summary)" if "rollout_summary" in cols else "0"
-            where = "WHERE thread_id = ?" if root_thread_id else ""
-            params = (root_thread_id,) if root_thread_id else ()
+            where = "WHERE thread_id = ?" if root_thread_id is not None else ""
+            params = (root_thread_id,) if root_thread_id is not None else ()
             rows = conn.execute(
                 f"""
                 SELECT thread_id AS thread_id,
