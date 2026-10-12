@@ -31,6 +31,7 @@ intentionally out of scope.
 from __future__ import annotations
 
 import math
+import os
 import re
 import sqlite3
 import time
@@ -278,42 +279,45 @@ def _resolve_subtree(
     return subtree, aggregation_edges
 
 
+_THREAD_ID_ENV = "CODEX_THREAD_ID"
+_THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,128}")
+
+
+def invoking_thread_id() -> str | None:
+    """Return the invoking Codex thread id from ``CODEX_THREAD_ID``, or None.
+
+    Codex exports the id of the thread that launched the process. That is the
+    only identity of the caller we have; a malformed value is treated as
+    absent rather than sanitized into some other id.
+    """
+    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
+    return raw if _THREAD_ID_RE.fullmatch(raw) else None
+
+
+def thread_identity_status() -> str:
+    """``"ok"``, ``"absent"`` (CODEX_THREAD_ID unset/empty) or ``"invalid"``."""
+    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
+    if not raw:
+        return "absent"
+    return "ok" if _THREAD_ID_RE.fullmatch(raw) else "invalid"
+
+
 def current_thread_id() -> str | None:
-    """Resolve the active Codex thread id from the state database.
+    """Resolve the invoking Codex thread id.
 
-    The most-recently-updated row in ``threads`` is the live thread. This is
-    deterministic (keyed off the state DB's own update timestamps) rather than
-    the JSONL mtime guess used by the session resolver, which can pick an
-    older session when several are open concurrently (requirement
-    3: ``quality current`` must resolve to the active thread, not the
-    most-recent-mtime session).
+    Binds to the caller's own identity (``CODEX_THREAD_ID``) and returns it
+    as-is, whether or not the state DB has a row for it yet. It never infers
+    "current" from the newest ``threads`` row: with several threads open
+    concurrently that row belongs to whichever thread wrote last, which can be
+    a different thread from the caller (issue #108).
 
-    Returns ``None`` off-Codex, when no state DB exists, or on any sqlite/OS
-    error (fail-open). Tiebreaker on ``id DESC`` keeps the choice deterministic
-    when two threads share an update timestamp.
+    Returns ``None`` off-Codex, or on Codex when the caller's identity is not
+    available. ``None`` means *unresolved*; callers must surface that instead
+    of substituting a guess.
     """
     if not _is_codex():
         return None
-    db = _find_versioned_db("state", "threads")
-    if db is None:
-        return None
-    try:
-        with _ro_connect(db) as conn:
-            cols = _table_columns(conn, "threads")
-            if "id" not in cols:
-                return None
-            if "updated_at_ms" in cols:
-                order = "updated_at_ms DESC, id DESC"
-            elif "updated_at" in cols:
-                order = "updated_at DESC, id DESC"
-            else:
-                order = "id DESC"
-            row = conn.execute(
-                f"SELECT id AS id FROM threads ORDER BY {order} LIMIT 1"
-            ).fetchone()
-            return str(row["id"]) if row and row["id"] else None
-    except (sqlite3.Error, OSError):
-        return None
+    return invoking_thread_id()
 
 
 def _empty_subagents() -> dict[str, Any]:
@@ -450,6 +454,7 @@ def _empty_memory() -> dict[str, Any]:
     return {
         "available": False,
         "thread_count": 0,
+        "truncated": False,
         "total_raw_memory_chars": 0,
         "total_rollout_summary_chars": 0,
         "total_memory_tokens": 0,
@@ -458,8 +463,12 @@ def _empty_memory() -> dict[str, Any]:
     }
 
 
-def memory_overhead() -> dict[str, Any]:
+def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
     """Per-thread memory overhead from ``stage1_outputs``.
+
+    ``root_thread_id=None`` is the machine-wide audit view (every thread's
+    memory rows). With a thread id, only that thread's rows are measured; the
+    id is bound as a SQL parameter, never interpolated.
 
     Codex's densified memory (``raw_memory`` + ``rollout_summary``) is injected
     into context. This measures its size in tokens per thread. Returns zeros
@@ -467,6 +476,9 @@ def memory_overhead() -> dict[str, Any]:
     memory).
     """
     if not _is_codex():
+        return _empty_memory()
+    if root_thread_id is not None and not root_thread_id:
+        # An empty id is a scoping failure, never a request for the whole DB.
         return _empty_memory()
     db = _find_versioned_db("state", "stage1_outputs")
     if db is None:
@@ -479,20 +491,29 @@ def memory_overhead() -> dict[str, Any]:
                 return _empty_memory()
             raw_expr = "length(raw_memory)" if "raw_memory" in cols else "0"
             summary_expr = "length(rollout_summary)" if "rollout_summary" in cols else "0"
+            where = "WHERE thread_id = ?" if root_thread_id is not None else ""
+            params = (root_thread_id,) if root_thread_id is not None else ()
             rows = conn.execute(
                 f"""
                 SELECT thread_id AS thread_id,
                        COALESCE({raw_expr}, 0) AS raw_chars,
                        COALESCE({summary_expr}, 0) AS summary_chars
                 FROM stage1_outputs
-                LIMIT {_MAX_ROWS}
-                """
+                {where}
+                LIMIT {_MAX_ROWS + 1}
+                """,
+                params,
             ).fetchall()
     except (sqlite3.Error, OSError):
         return _empty_memory()
 
+    # Fetched one past the cap so a binding cap is detectable, never silent.
+    truncated = len(rows) > _MAX_ROWS
+    rows = rows[:_MAX_ROWS]
+    # Only threads that actually carry memory text count; null/empty rows do not.
+    rows = [r for r in rows if int(r["raw_chars"] or 0) + int(r["summary_chars"] or 0) > 0]
     if not rows:
-        return {**_empty_memory(), "available": True}
+        return {**_empty_memory(), "available": True, "truncated": truncated}
 
     total_raw = total_summary = max_tokens = 0
     by_thread: list[dict[str, Any]] = []
@@ -509,6 +530,7 @@ def memory_overhead() -> dict[str, Any]:
     return {
         "available": True,
         "thread_count": len(rows),
+        "truncated": truncated,
         "total_raw_memory_chars": total_raw,
         "total_rollout_summary_chars": total_summary,
         "total_memory_tokens": (total_raw + total_summary) // CHARS_PER_TOKEN,
