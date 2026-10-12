@@ -6097,10 +6097,12 @@ def _codex_state_summary():
         return None
     # Resolve the invoking thread id ONCE (CODEX_THREAD_ID) and scope every
     # thread-specific Codex-state metric to it: subagent and goal totals to
-    # its goal subtree, memory to its own rows. When the identity
-    # is unresolved, do NOT fall back to the whole-DB aggregation: that would
-    # present other threads' tokens and goals as the current thread's. Report
-    # an explicit unresolved state instead.
+    # its goal subtree. When the identity is unresolved, do NOT fall back to
+    # the whole-DB aggregation for those: that would present other threads'
+    # tokens and goals as the current thread's. Report an explicit unresolved
+    # state instead. Memory overhead is different: it is a machine-wide
+    # metric across all threads on this machine, so it is measured without a
+    # thread filter and needs no identity.
     try:
         current_tid = codex_state.current_thread_id()
     except Exception:
@@ -6109,14 +6111,10 @@ def _codex_state_summary():
     if current_tid:
         subagents = codex_state.subagent_costs(root_thread_id=current_tid)
         goals = codex_state.goal_budgets(root_thread_id=current_tid)
-        # Memory rows are keyed per thread and are measured for the invoking
-        # thread only (its own injected memory), whereas subagent and goal
-        # totals roll up the invoking thread's spawn subtree.
-        memory = codex_state.memory_overhead(root_thread_id=current_tid)
     else:
         subagents = {**codex_state._empty_subagents(), "unresolved": True}
         goals = {**codex_state._empty_goals(), "unresolved": True}
-        memory = {**codex_state._empty_memory(), "unresolved": True}
+    memory = codex_state.memory_overhead()
     summary = {
         "subagents": subagents,
         "memory": memory,
@@ -6174,7 +6172,7 @@ def codex_state_report(as_json=False):
         why = (f"no transcript found for {summary.get('selected_thread_id')}"
                if reason == "transcript_not_found" else _codex_identity_reason())
         print(f"\nCurrent thread: unresolved ({why}). "
-              + ("Session signals are not shown; thread-scoped subagent, goal and memory totals are not shown."
+              + ("Session signals are not shown; thread-scoped subagent and goal totals are not shown."
                  if not summary.get("selected_thread_id")
                  else f"Session signals are not shown; totals below are for thread {summary.get('selected_thread_id')}, not its transcript."))
 
@@ -6193,10 +6191,8 @@ def codex_state_report(as_json=False):
         print("\nSubagents: no state data yet (no spawn edges recorded)")
 
     mem = summary["memory"]
-    if mem.get("unresolved"):
-        print("\nMemory overhead: unresolved (no invoking thread id)")
-    elif mem.get("available") and mem["thread_count"]:
-        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']}{'+' if mem.get('truncated') else ''} thread(s)"
+    if mem.get("available") and mem["thread_count"]:
+        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']}{'+' if mem.get('truncated') else ''} thread(s) on this machine"
               f"{' (partial: scan cap reached)' if mem.get('truncated') else ''}; "
               f"largest {mem['max_thread_memory_tokens']:,}")
     else:

@@ -605,27 +605,47 @@ def _make_memory_table(home, rows):
         conn.close()
 
 
-def test_memory_overhead_scoped_to_invoking_thread_never_other_threads(capsys):
+def test_memory_overhead_is_machine_wide_when_thread_unresolved(capsys):
+    """stage1_outputs rows are machine-wide: the invoking thread's identity
+    never scopes them, and an unresolved identity never hides the total."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100), ("other-B", 5, 200)], edges=[])
+        # The older thread carries memory; the live thread has none yet.
+        _make_memory_table(home, [("other-B", "y" * 8000, "")])
+        # Unresolved: subagent/goal totals report unresolved, but memory is a
+        # machine-wide metric and still reports every thread's rows.
+        s = measure._codex_state_summary()
+        assert s["subagents"]["unresolved"] is True
+        assert s["goals"]["unresolved"] is True
+        assert s["memory"].get("unresolved") is not True
+        assert s["memory"]["total_memory_tokens"] == 2000
+        assert s["memory"]["thread_count"] == 1
+        measure.codex_state_report()
+        out = capsys.readouterr().out
+        assert "Memory overhead: unresolved" not in out
+        assert "2,000 tokens across 1 thread(s) on this machine" in out
+        # Resolved: memory stays machine-wide (other-B's rows, not caller-A's).
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        m = measure._codex_state_summary()["memory"]
+        assert m["thread_count"] == 1
+        assert m["total_memory_tokens"] == 2000
+        assert [r["thread_id"] for r in m["by_thread"]] == ["other-B"]
+        measure.codex_state_report()
+        out = capsys.readouterr().out
+        assert "2,000 tokens across 1 thread(s) on this machine" in out
+
+
+def test_memory_overhead_reports_all_threads_not_just_the_invoking_one(capsys):
     with _CodexHome() as home:
         _make_state_db(home, threads=[("caller-A", 5, 100), ("other-B", 5, 200)], edges=[])
         _make_memory_table(home, [("caller-A", "x" * 400, ""), ("other-B", "y" * 8000, "")])
-        # Unresolved: no memory numbers at all.
-        s = measure._codex_state_summary()
-        assert s["memory"]["unresolved"] is True and s["memory"]["total_memory_tokens"] == 0
-        assert s["memory"]["by_thread"] == []
-        measure.codex_state_report()
-        assert "Memory overhead: unresolved" in capsys.readouterr().out
-        # Resolved: only the caller's rows.
         os.environ["CODEX_THREAD_ID"] = "caller-A"
-        measure.codex_state_report()
-        out = capsys.readouterr().out
-        assert "Memory overhead: 100 tokens across 1 thread(s)" in out
-        assert "2,000" not in out and "2000" not in out
         m = measure._codex_state_summary()["memory"]
-        assert m["thread_count"] == 1
-        assert [r["thread_id"] for r in m["by_thread"]] == ["caller-A"]
-        # Machine-wide audit view (no root) is unchanged.
-        assert codex_state.memory_overhead()["thread_count"] == 2
+        assert m["thread_count"] == 2
+        assert m["total_memory_tokens"] == 2100
+        assert {r["thread_id"] for r in m["by_thread"]} == {"caller-A", "other-B"}
+        measure.codex_state_report()
+        assert "2,100 tokens across 2 thread(s) on this machine" in capsys.readouterr().out
 
 
 def test_report_shows_transcript_not_found(capsys):
@@ -1004,8 +1024,8 @@ def test_state_report_memory_line_partial_suffix_end_to_end(monkeypatch, capsys)
         monkeypatch.setattr(measure, "_codex_state_summary", lambda _m=mem: {**base, "memory": _m})
         measure.codex_state_report()
         line = [ln for ln in capsys.readouterr().out.splitlines() if "Memory overhead" in ln][0]
-        assert ("5+ thread(s) (partial: scan cap reached);" in line) is truncated, line
-        assert ("5 thread(s);" in line) is (not truncated), line
+        assert ("5+ thread(s) on this machine (partial: scan cap reached);" in line) is truncated, line
+        assert ("5 thread(s) on this machine;" in line) is (not truncated), line
 
 
 def test_codex_memory_review_reports_only_measured_fields():
