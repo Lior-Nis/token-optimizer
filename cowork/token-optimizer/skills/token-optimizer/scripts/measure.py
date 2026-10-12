@@ -3068,6 +3068,8 @@ def _measure_codex_components():
 
     components["claude_md_global"] = {"path": str(CLAUDE_DIR / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
     components["claude_md_home"] = {"path": str(HOME / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
+    # Machine-wide audit view by design (not a current-thread claim): the
+    # Codex install's total memory overhead across all threads.
     state_memory = codex_state.memory_overhead()
     components["memory_md"] = {
         "path": str(runtime_home() / "state_*.sqlite"),
@@ -3075,6 +3077,9 @@ def _measure_codex_components():
         "tokens": int(state_memory.get("total_memory_tokens", 0) or 0),
         "lines": 0,
         "files": state_memory.get("by_thread", []),
+        "scope": "all_threads",
+        "thread_count": int(state_memory.get("thread_count", 0) or 0),
+        "truncated": bool(state_memory.get("truncated")),
         "note": (
             "Codex memory overhead is measured from state_*.sqlite stage1_outputs; "
             "legacy ~/.codex/memories files are not counted as automatic prompt overhead."
@@ -4177,6 +4182,8 @@ def _auto_snapshot(components, totals, ctx_window):
             ),
             "memory_md_tokens": components.get("memory_md", {}).get("tokens", 0),
             "memory_md_lines": components.get("memory_md", {}).get("lines", 0),
+            "memory_md_scope": components.get("memory_md", {}).get("scope", "file"),
+            "memory_md_truncated": bool(components.get("memory_md", {}).get("truncated")),
         }
         # Keep last 30 snapshots
         existing = sorted(snap_dir.glob("snap_*.json"))
@@ -4289,9 +4296,12 @@ def quick_scan(as_json=False):
     if mem.get("tokens", 0) > 0:
         # Under Codex this component holds state_*.sqlite memory, not a
         # MEMORY.md file — label it for the runtime the user is on.
-        _mem_label = "Codex memories" if _rt == "codex" else "MEMORY.md"
+        _mem_label = "Codex memories (all threads)" if _rt == "codex" else "MEMORY.md"
+        if _rt == "codex" and mem.get("truncated"):
+            _mem_label = "Codex memories (all threads, partial: scan cap reached)"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
-                         f"{_mem_label} ({mem.get('lines', 0)} lines)"))
+                         f"{_mem_label} ({mem.get('thread_count', 0)} threads)" if _rt == "codex"
+                         else f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
     # Sort by tokens descending, top 3
     offenders.sort(key=lambda x: -x[2])
@@ -5256,8 +5266,12 @@ def print_snapshot_summary(snapshot):
     # Memory
     if "memory_md" in c:
         mem = c["memory_md"]
-        memory_label = "Codex memories" if is_codex else "MEMORY.md"
-        print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
+        memory_label = "Codex memories (all threads)" if is_codex else "MEMORY.md"
+        if is_codex and mem.get("truncated"):
+            memory_label = "Codex memories (all threads, partial)"
+        _mem_unit = (f"{mem.get('thread_count', 0)} threads" if is_codex
+                     else f"{mem.get('lines', 0)} lines")
+        print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{_mem_unit}]")
 
     # Skills
     s = c.get("skills", {})
@@ -5477,8 +5491,13 @@ def compare_snapshots():
     rows.append(("CLAUDE.md (all)", before_claude, after_claude))
 
     # MEMORY.md
+    _mem_partial = bool(bc.get("memory_md", {}).get("truncated") or ac.get("memory_md", {}).get("truncated"))
+    _mem_all = "all_threads" in (bc.get("memory_md", {}).get("scope"), ac.get("memory_md", {}).get("scope"))
+    _mem_row = "Codex memories (all threads)" if _mem_all else "MEMORY.md"
+    if _mem_partial:
+        _mem_row = _mem_row[:-1] + ", partial)" if _mem_all else "MEMORY.md (partial)"
     rows.append((
-        "MEMORY.md",
+        _mem_row,
         bc.get("memory_md", {}).get("tokens", 0),
         ac.get("memory_md", {}).get("tokens", 0),
     ))
@@ -6084,21 +6103,33 @@ def _codex_state_summary():
     """
     if detect_runtime() != "codex":
         return None
-    # Resolve the active thread id ONCE from the state DB and scope every
-    # Codex-state metric to its goal subtree. Without this, subagent_costs and
-    # goal_budgets aggregate EVERY spawn edge/goal in the DB (including closed
-    # historical ones from unrelated prior work), inflating totals and letting
-    # `quality current` pick a stale session. Fail-open: a None
-    # resolution falls back to the legacy whole-DB aggregation.
+    # Resolve the invoking thread id ONCE (CODEX_THREAD_ID) and scope every
+    # thread-specific Codex-state metric to it: subagent and goal totals to
+    # its goal subtree. When the identity is unresolved, do NOT fall back to
+    # the whole-DB aggregation for those: that would present other threads'
+    # tokens and goals as the current thread's. Report an explicit unresolved
+    # state instead. Memory overhead is different: it is a machine-wide
+    # metric across all threads on this machine, so it is measured without a
+    # thread filter and needs no identity.
     try:
         current_tid = codex_state.current_thread_id()
     except Exception:
         current_tid = None
+    res = _codex_thread_resolution()
+    if current_tid:
+        subagents = codex_state.subagent_costs(root_thread_id=current_tid)
+        goals = codex_state.goal_budgets(root_thread_id=current_tid)
+    else:
+        subagents = {**codex_state._empty_subagents(), "unresolved": True}
+        goals = {**codex_state._empty_goals(), "unresolved": True}
+    memory = codex_state.memory_overhead()
     summary = {
-        "subagents": codex_state.subagent_costs(root_thread_id=current_tid),
-        "memory": codex_state.memory_overhead(),
-        "goals": codex_state.goal_budgets(root_thread_id=current_tid),
+        "subagents": subagents,
+        "memory": memory,
+        "goals": goals,
         "selected_thread_id": current_tid,
+        "thread_resolution": res["status"],
+        "thread_resolution_reason": res["reason"],
         "rate_limits": None,
         "effort": None,
         "compaction": None,
@@ -6106,7 +6137,8 @@ def _codex_state_summary():
     import codex_models
     summary['available_models'] = codex_models.visible_models()
     try:
-        current = codex_session.find_current_session_jsonl()
+        # Session signals follow the same identity: never the newest-mtime file.
+        current = res["path"]
         if current:
             session = codex_session.parse_session_jsonl(current)
             if session:
@@ -6143,8 +6175,19 @@ def codex_state_report(as_json=False):
     print("\nToken Optimizer - Codex Runtime State")
     print("=" * 38)
 
+    if summary.get("thread_resolution") == "unresolved":
+        reason = summary.get("thread_resolution_reason")
+        why = (f"no transcript found for {summary.get('selected_thread_id')}"
+               if reason == "transcript_not_found" else _codex_identity_reason())
+        print(f"\nCurrent thread: unresolved ({why}). "
+              + ("Session signals are not shown; thread-scoped subagent and goal totals are not shown."
+                 if not summary.get("selected_thread_id")
+                 else f"Session signals are not shown; totals below are for thread {summary.get('selected_thread_id')}, not its transcript."))
+
     sub = summary["subagents"]
-    if sub.get("available"):
+    if sub.get("unresolved"):
+        print("\nSubagents: unresolved (no invoking thread id)")
+    elif sub.get("available"):
         print(f"\nSubagents: {sub['total_subagents']} total "
               f"({sub['open_subagents']} open, {sub['closed_subagents']} closed, "
               f"{sub['leaked_subagents']} leaked)")
@@ -6157,13 +6200,16 @@ def codex_state_report(as_json=False):
 
     mem = summary["memory"]
     if mem.get("available") and mem["thread_count"]:
-        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']} thread(s); "
+        print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']}{'+' if mem.get('truncated') else ''} thread(s) on this machine"
+              f"{' (partial: scan cap reached)' if mem.get('truncated') else ''}; "
               f"largest {mem['max_thread_memory_tokens']:,}")
     else:
         print("\nMemory overhead: none recorded")
 
     goals = summary["goals"]
-    if goals.get("available") and goals["total_goals"]:
+    if goals.get("unresolved"):
+        print("\nGoals: unresolved (no invoking thread id)")
+    elif goals.get("available") and goals["total_goals"]:
         print(f"\nGoals: {goals['total_goals']} ({goals['active_goals']} active)")
         if goals["budget_limited"] or goals["usage_limited"] or goals["over_budget"]:
             print(f"  ! {goals['budget_limited']} budget-limited, {goals['usage_limited']} usage-limited, "
@@ -7742,6 +7788,24 @@ def _manage_mcp(action, name):
         return False
 
 
+def _codex_memory_review_data(mem):
+    """Dashboard memory card data for the Codex machine-wide memory component.
+
+    Codex memory lives in state_*.sqlite rows, not a MEMORY.md file, so there is
+    no line count, entry index, topic-file listing or link audit. Only report
+    what was measured: thread count, tokens, largest thread, and scan status.
+    """
+    files = mem.get("files") or []
+    return {
+        "codex": True,
+        "target": mem.get("path", ""),
+        "thread_count": int(mem.get("thread_count", 0) or 0),
+        "total_tokens": int(mem.get("tokens", 0) or 0),
+        "largest_thread_tokens": max((int(f.get("memory_tokens", 0) or 0) for f in files), default=0),
+        "scan_partial": bool(mem.get("truncated")),
+    }
+
+
 def generate_standalone_dashboard(days=30, quiet=False, force=False):
     """Generate a persistent Trends + Health dashboard (no audit data needed).
 
@@ -7904,18 +7968,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     try:
         mem = components.get("memory_md", {})
         if detect_runtime() == "codex" and mem.get("exists"):
-            mr_data = {
-                "target": mem.get("path", ""),
-                "total_lines": mem.get("lines", 0),
-                "entry_count": len(mem.get("files", [])),
-                "topic_files_count": len(mem.get("files", [])),
-                "linked_files_count": len(mem.get("files", [])),
-                "findings": [],
-                "severity_counts": {"high": 0, "medium": 0, "low": 0},
-                "savings": {"total_tokens": 0, "by_category": {}},
-                "truncated": False,
-                "truncated_lines": 0,
-            }
+            mr_data = _codex_memory_review_data(mem)
         elif mem.get("exists") and mem.get("path"):
             mem_path = Path(mem["path"])
             memory_dir = mem_path.parent
@@ -8945,7 +8998,7 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
     memory = components.get("memory_md", {})
     if memory.get("tokens", 0) > 3000:
         medium.append(
-            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {len(memory.get('files', []))} files)**: "
+            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {memory.get('thread_count', len(memory.get('files', [])))} threads on this machine{' - partial, scan cap reached' if memory.get('truncated') else ''})**: "
             "Codex memory guidance can enter developer instructions when memories are enabled. "
             "Delete stale rollout summaries, consolidate duplicate memories, and keep only reusable preferences or project facts. "
             "Use Codex's memory reset only when you intentionally want to clear all persisted local memory."
@@ -10592,6 +10645,8 @@ def generate_coach_data(focus=None, components=None, trends=None, include_determ
             "claude_md_tokens": claude_tokens,
             "instruction_label": instruction_label,
             "memory_md_lines": mem_lines,
+            "memory_md_scope": components.get("memory_md", {}).get("scope", "file"),
+            "memory_md_lines_measured": components.get("memory_md", {}).get("scope", "file") != "all_threads",
             "mcp_server_count": mcp_servers,
             "mcp_tokens": mcp_tokens,
             "rules_count": rules_count,
@@ -36213,32 +36268,79 @@ def compute_quality_score(quality_data, session_id=None):
     }
 
 
+def _codex_identity_reason():
+    """Human reason the invoking Codex thread id is unavailable."""
+    status = codex_state.thread_identity_status()
+    if status == "invalid":
+        return "CODEX_THREAD_ID is set but not a valid thread id"
+    return "CODEX_THREAD_ID is not set"
+
+
+def _codex_thread_resolution():
+    """Single resolution outcome for the invoking Codex thread.
+
+    Returns ``{"status", "thread_id", "path", "reason"}``. ``status`` is
+    ``resolved`` (identity and transcript found) or ``unresolved`` with a
+    ``reason`` of ``identity_absent``, ``identity_invalid`` or
+    ``transcript_not_found``. Every Codex consumer renders this one outcome;
+    none falls back to another thread's session.
+    """
+    try:
+        tid = codex_state.current_thread_id()
+    except Exception:
+        tid = None
+    if not tid:
+        invalid = codex_state.thread_identity_status() == "invalid"
+        return {"status": "unresolved", "thread_id": None, "path": None,
+                "reason": "identity_invalid" if invalid else "identity_absent"}
+    path = codex_session.find_session_jsonl_exact(tid)
+    if path is None:
+        return {"status": "unresolved", "thread_id": tid, "path": None,
+                "reason": "transcript_not_found"}
+    return {"status": "resolved", "thread_id": tid, "path": path, "reason": None}
+
+
+def _codex_unresolved_message(res):
+    if res["reason"] == "transcript_not_found":
+        return (f"Could not resolve the current Codex thread: no transcript found for "
+                f"{res['thread_id']}. Pass a session id explicitly if it lives elsewhere.")
+    return (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
+            "Pass a session id explicitly instead of guessing the newest session.")
+
+
+def _current_jsonl_for_hook(session_id):
+    """Resolve the transcript for a hook that may carry an explicit session id.
+
+    Claude/other runtimes: session id first, then the mtime guess (unchanged).
+    Codex: when a session id is supplied, its own transcript or None. Falling
+    through to the invoking-thread resolver would mix another session's
+    transcript into this session's checkpoint/cache (a subagent hook can
+    inherit the parent's CODEX_THREAD_ID). With no session id, the invoking
+    thread resolver applies.
+    """
+    if session_id and _use_codex_session_adapter():
+        return _find_session_jsonl_by_id(session_id)
+    filepath = _find_session_jsonl_by_id(session_id) if session_id else None
+    if filepath is None:
+        filepath = _find_current_session_jsonl()
+    return filepath
+
+
 def _find_current_session_jsonl():
     """Find the most recently modified JSONL file across all project directories.
 
-    Searches ALL project dirs and picks the globally most recent JSONL.
-    This is necessary because hooks often run from a CWD that doesn't match
-    the active session's project dir (e.g., when the session is in the home
-    dir but the hook runs from a skill directory).
+    Claude runtime: searches ALL project dirs and picks the globally most
+    recent JSONL, because hooks often run from a CWD that doesn't match the
+    active session's project dir.
 
-    For non-hook contexts (manual CLI), results are the same since the most
-    recently modified JSONL is almost always the currently active session.
+    Codex runtime: never guesses by mtime. Resolves the invoking thread
+    (CODEX_THREAD_ID) to its own transcript, and returns None when the
+    identity or its transcript is unavailable. Every Codex caller, including
+    checkpoint, cache and dashboard writers, therefore sees "no session" rather
+    than another thread's session.
     """
     if _use_codex_session_adapter():
-        # Deterministic resolution: prefer the state-DB-resolved
-        # active thread id over the mtime guess. `find_current_session_jsonl`
-        # picks the globally most-recently-modified JSONL, which can select an
-        # older session when several are open. Keying off the resolved current
-        # thread id makes `quality current` pick the live session. Fail-open:
-        # any error or miss falls back to the legacy mtime resolver.
-        try:
-            current_tid = codex_state.current_thread_id()
-        except Exception:
-            current_tid = None
-        if current_tid:
-            resolved = codex_session.find_session_jsonl_by_id(current_tid)
-            return resolved
-        return codex_session.find_current_session_jsonl()
+        return _codex_thread_resolution()["path"]
 
     # Hermes: no ~/.claude/projects JSONL to scan (sessions live in state.db).
     if _use_hermes_session_adapter():
@@ -36330,6 +36432,19 @@ def quality_analyzer(session_id=None, as_json=False):
         filepath = _find_session_jsonl_by_id(session_id)
     else:
         filepath = _find_current_session_jsonl()
+
+    if not filepath and (not session_id or session_id == "current") and _use_codex_session_adapter():
+        # One resolution outcome for the invoking Codex thread: either its
+        # transcript, or an explicit unresolved state with the reason. Never
+        # another thread's session, never the Claude-runtime message.
+        res = _codex_thread_resolution()
+        msg = _codex_unresolved_message(res)
+        if as_json:
+            print(json.dumps({"error": msg, "thread_resolution": "unresolved",
+                              "reason": res["reason"], "selected_thread_id": res["thread_id"]}))
+        else:
+            print(f"[Token Optimizer] {msg}")
+        return None
 
     if not filepath:
         if as_json:
@@ -36573,6 +36688,8 @@ def _resolve_jsonl_path(arg=None):
     found = _find_current_session_jsonl()
     if found:
         return found, None
+    if _use_codex_session_adapter():
+        return None, _codex_unresolved_message(_codex_thread_resolution())
     return None, "No active session found. Provide a session ID or path."
 
 
@@ -39336,9 +39453,7 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         # most recently active transcript, which on a new session is somebody
         # else's -- and a checkpoint captured from the wrong session is later
         # restored into this one's context. Same order checkpoint_trigger uses.
-        filepath = _find_session_jsonl_by_id(session_id) if session_id else None
-        if filepath is None:
-            filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     # Build trigger suffix for filename so restore/list logic can rank all semantic checkpoints.
     trigger_suffix = f"-{trigger}" if trigger and trigger != "auto" else ""
@@ -42267,10 +42382,8 @@ def checkpoint_trigger(milestone=None, session_id=None, transcript_path=None, qu
         candidate = Path(transcript_path)
         if candidate.exists():
             filepath = candidate
-    if filepath is None and session_id:
-        filepath = _find_session_jsonl_by_id(session_id)
     if filepath is None:
-        filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     if filepath is None:
         return None
@@ -44717,9 +44830,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     else:
         # Resolve by identity before falling back to an mtime guess: a wrong
         # guess writes this session's score into another session's cache.
-        filepath = _find_session_jsonl_by_id(session_id) if session_id else None
-        if filepath is None:
-            filepath = _find_current_session_jsonl()
+        filepath = _current_jsonl_for_hook(session_id)
 
     # Per-session cache: each session has its own file to avoid cross-session pollution
     cache_path = _quality_cache_path_for(filepath)
