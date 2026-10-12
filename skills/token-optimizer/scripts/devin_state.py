@@ -7,6 +7,7 @@ import secrets
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import stat
 import tempfile
@@ -186,3 +187,67 @@ def prepare_capture() -> Path:
         temporary = out.name
     os.replace(temporary, p)
     return result
+
+
+def directory_fd(path: Path) -> int:
+    """Open absolute directory components without following any symlink."""
+    if not path.is_absolute():
+        raise OSError('absolute directory required')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open('/', flags)
+    try:
+        for component in path.parts[1:]:
+            if component in ('.', '..'):
+                raise OSError('relative directory component refused')
+            next_fd = os.open(component, flags, dir_fd=fd)
+            os.close(fd); fd = next_fd
+        return fd
+    except Exception:
+        os.close(fd); raise
+
+
+def delete_capture(directory: Path) -> None:
+    """Unlink a capture's fixed leaves and remove the capture directory,
+    contained to already-opened descriptors so a renamed or swapped directory
+    cannot redirect deletion outside the captures root. Foreign or unsafe
+    content keeps the directory in place; no path string is followed once the
+    descriptors are open."""
+    root = data_dir() / 'captures'
+    if not isinstance(directory, Path) or directory.parent != root or not re.fullmatch(r'capture-[0-9a-f]{32}', directory.name):
+        raise OSError('adapter-prepared capture required')
+    # Lexical pre-check only; the descriptor operations below are the boundary.
+    no_symlinks(directory)
+    for name in ('stdout', 'stderr', '.prepared', 'complete.json'):
+        no_symlinks(directory / name)
+    root_fd = directory_fd(root)
+    capture_fd = None
+    try:
+        try:
+            capture_fd = os.open(directory.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+        except OSError:
+            return  # Missing or swapped away before open: nothing here is ours.
+        info = os.fstat(capture_fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise OSError('capture directory must be private')
+        for name in ('stdout', 'stderr', '.prepared', 'complete.json'):
+            try:
+                leaf = os.stat(name, dir_fd=capture_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(leaf.st_mode):
+                os.unlink(name, dir_fd=capture_fd)
+        # Remove the name only while it still resolves to the opened directory.
+        try:
+            current = os.stat(directory.name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            return
+        try:
+            os.rmdir(directory.name, dir_fd=root_fd)
+        except OSError:
+            pass
+    finally:
+        if capture_fd is not None:
+            os.close(capture_fd)
+        os.close(root_fd)

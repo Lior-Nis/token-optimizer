@@ -38,19 +38,8 @@ class FilterResult:
 
 def _directory_fd(path: Path) -> int:
     """Open absolute directory components without following any symlink."""
-    if not path.is_absolute():
-        raise OSError('absolute directory required')
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fd = os.open('/', flags)
-    try:
-        for component in path.parts[1:]:
-            if component in ('.', '..'):
-                raise OSError('relative directory component refused')
-            next_fd = os.open(component, flags, dir_fd=fd)
-            os.close(fd); fd = next_fd
-        return fd
-    except Exception:
-        os.close(fd); raise
+    from devin_state import directory_fd
+    return directory_fd(path)
 
 
 def _read_leaf(directory_fd: int, name: str, cap: int) -> tuple[bytes, object]:
@@ -204,16 +193,8 @@ def _remove_capture(directory: Path) -> None:
     """Remove a passthrough capture once its raw bytes were delivered.
     Only the adapter's fixed private leaf names are unlinked; foreign content
     keeps its directory (and itself) in place."""
-    from devin_state import no_symlinks
-    no_symlinks(directory)
-    for name in ('stdout', 'stderr', '.prepared', 'complete.json'):
-        leaf = directory / name
-        no_symlinks(leaf)
-        leaf.unlink(missing_ok=True)
-    try:
-        directory.rmdir()
-    except OSError:
-        pass
+    from devin_state import delete_capture
+    delete_capture(directory)
 
 
 def seal_capture(directory: Path, exit_code: int) -> None:

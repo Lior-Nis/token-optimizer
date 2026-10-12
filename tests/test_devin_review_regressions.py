@@ -701,3 +701,64 @@ def test_real_interpreter_trust_is_not_bypassed(tmp_path, devin_real_python):
     run = subprocess.run([str(untrusted), str(SCRIPTS / 'devin_install.py'),
                           'install', '--dry-run'], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def _swap_hook(source_check, capture, swapped):
+    """Rename the capture away and replace its name with a symlink the moment
+    the lexical check on its stdout leaf completes."""
+    outside = capture.parent / 'outside'
+    outside.mkdir(exist_ok=True)
+    for leaf in ('stdout', 'stderr', '.prepared', 'complete.json'):
+        (outside / leaf).write_bytes(b'KEEP ' + leaf.encode())
+        (outside / leaf).chmod(0o600)
+    def hook(path):
+        source_check(path)
+        if path == capture / 'stdout' and not swapped:
+            swapped.append(True)
+            capture.rename(capture.with_name(capture.name + '-saved'))
+            capture.symlink_to(outside, target_is_directory=True)
+    return hook, outside
+
+
+def test_capture_removal_cannot_follow_a_swapped_directory(capture, tmp_path, monkeypatch):
+    """A capture directory renamed and replaced by a symlink after the lexical
+    check must not redirect deletion into the linked directory."""
+    import devin_state as s
+    import devin_compress as d
+    (capture / 'stdout').write_bytes(b'payload\n' * 500)
+    d.seal_capture(capture, 1)
+    swapped = []
+    hook, outside = _swap_hook(s.no_symlinks, capture, swapped)
+    monkeypatch.setattr(s, 'no_symlinks', hook)
+    try:
+        d._remove_capture(capture)
+    except OSError:
+        pass
+    assert swapped
+    assert (outside / 'stdout').exists()
+    assert (outside / 'stderr').exists()
+
+
+def test_purge_cannot_follow_a_swapped_capture_directory(tmp_path, monkeypatch):
+    """The same rename-and-symlink swap must stay contained through purge."""
+    import contextlib
+    import io
+    import devin_state as s
+    import devin_compress as d
+    import devin_install as inst
+    monkeypatch.setenv('HOME', str(tmp_path))
+    s.enable_consent()
+    capture = s.prepare_capture()
+    (capture / 'stdout').write_bytes(b'payload\n' * 500)
+    d.seal_capture(capture, 1)
+    swapped = []
+    hook, outside = _swap_hook(s.no_symlinks, capture, swapped)
+    monkeypatch.setattr(s, 'no_symlinks', hook)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            inst.uninstall(purge=True)
+    except OSError:
+        pass
+    assert swapped
+    assert (outside / 'stdout').exists()
+    assert (outside / 'stderr').exists()
