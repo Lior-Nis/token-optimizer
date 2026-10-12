@@ -1,0 +1,28 @@
+---
+title: Devin
+description: "Contract-only beta: explicit captured-output filtering through a user-triggered Devin CLI skill, not automatic hooks."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="No live Devin session proof">
+No live Devin workspace available: the adapter has not been run against a live Devin instance. Local filter tests and genuine CLI skill discovery do not prove model adherence or delivery.
+</Aside>
+
+## Explicit filter, not hook parity
+
+Devin CLI supports command rewriting, but persistent-shell state and permission timing cannot be assumed safe for a wrapper. This adapter installs no lifecycle hooks and changes no permissions. `/token-optimizer-output` is user-triggered with `triggers: [user]`.
+
+Prepare a private capture pair, run a finite foreground command in the native shell, save its real status, seal the completed captures, then filter explicitly. Redirection changes TTY/buffering behavior and loses cross-stream timing/order. Completion/status are caller assertions, not authenticated receipts; malicious same-UID producers are outside the guarantee.
+
+The filter reads only prepared owner-only regular files bounded at 8 MiB each. It refuses symlinks, hardlinks, substitutions and changed seals. Failures, stderr, invalid UTF-8/control data and recognized credentials remain raw. Raw passthrough is not redaction and can expose private content to Devin/model context. Compression is lossy.
+
+A compressed result carries an opaque capture ID. Recovery validates the pair and seal again. Captures persist until explicitly cleaned up; the adapter makes no second durable raw copy. Other imported Claude hooks may make their own copies and are outside this adapter's control.
+
+## What is measured
+
+`devin-summary` reports numeric local output estimates with source `devin_captured_output_estimate` and HMAC caller correlation labels, not native Devin sessions. Estimates include the emitted recovery pointer but exclude skill/tool orchestration, duplicate invocations and recovery reads. No end-to-end savings, provider usage, quality, cost, ACU or dashboard parity is claimed.
+
+See [Devin install](/install/devin/), [Configuration](/reference/configuration/#devin), [CLI](/reference/cli/#devin) and the [capability matrix](/reference/capability-matrix/#devin).
+
+Hosted Devin has an optional manual playbook template in the repository. It is not deployed or live-tested. Knowledge/playbooks deliver instructions, not automatic interception. [Primary skill contract](https://docs.devin.ai/cli/extensibility/skills/creating-skills) and [hook contract](https://docs.devin.ai/cli/extensibility/hooks).

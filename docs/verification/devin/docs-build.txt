@@ -1,0 +1,86 @@
+01:11:42 [build] output: "static"
+01:11:42 [build] mode: "static"
+01:11:42 [build] directory: <checkout>/docs-site/dist/
+01:11:42 [build] Collecting build info...
+01:11:42 [build] ✓ Completed in 1.18s.
+01:11:42 [build] Building static entrypoints...
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/compaction-model.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/start/quickstart.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/cache-economics.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/how-it-works.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/quality-scoring.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/trust-and-safety.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/manage-tab.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/concepts/why-first.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/active-compression.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/hermes.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/attention-optimizer.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/audit.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/bash-compression.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/cache-watchdog.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/dashboard.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/fleet-auditor.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/keep-warm.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/memory-health.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/quality-signals.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/read-cache.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/routing-and-coach-injection.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/session-continuity.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/smart-compaction.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/status-line.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/subagent-cache.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/task-routing.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/token-coach.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/tool-result-archive.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/claude-desktop.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/usage-analytics.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/features/waste-detectors.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/index.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/antigravity.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/codex-cli.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/openclaw.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/claude-code-cli.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/claude-code-vscode.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/codex-desktop.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/copilot-cli.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/copilot-vscode.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/cursor.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/devin.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/grok.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/hermes.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/opencode.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/overview.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/install/pi.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/antigravity.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/claude-code.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/codex.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/openclaw.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/copilot.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/cowork.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/opencode.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/cursor.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/devin.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/grok.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/overview.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/platforms/pi.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/benchmarks/controlled-a-b.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/benchmarks/index.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/benchmarks/real-world.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/benchmarks/terminal-bench.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/hooks.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/capability-matrix.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/cli.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/comparison.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/configuration.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/data-and-privacy.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/diagnostics.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/reference/license.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/start/feature-map.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [WARN] [vite] [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use astro:head-inject" in "src/content/docs/start/first-audit.mdx?astroPropagatedAssets" may not be preserved when bundling.
+01:11:46 [build] Rearranging server assets...
+01:11:46 [WARN] [content] The collection "i18n" does not exist or is empty. Please check your content config file for errors.
+01:11:46   ├─ /404.html01:11:46 [WARN] [content] Entry docs → 404 was not found.
+01:11:47 [build] ✓ Completed in 4.31s.
+01:11:47 [starlight:pagefind] Found 75 HTML files.
+01:11:47 [build] 74 page(s) built in 5.83s
+01:11:47 [build] Complete!

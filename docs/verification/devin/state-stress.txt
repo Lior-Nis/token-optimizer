@@ -1,0 +1,10 @@
+..                                                                       [100%]
+2 passed in 1.38s
+..                                                                       [100%]
+2 passed in 1.30s
+..                                                                       [100%]
+2 passed in 1.27s
+..                                                                       [100%]
+2 passed in 1.29s
+..                                                                       [100%]
+2 passed in 1.28s

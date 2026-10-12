@@ -168,6 +168,7 @@ _RUNTIME_COPILOT = "copilot"
 _RUNTIME_CURSOR = "cursor"
 _RUNTIME_ANTIGRAVITY = "antigravity"
 _RUNTIME_GROK = "grok"
+_RUNTIME_DEVIN = "devin"
 _VALID_RUNTIMES = frozenset(
     {
         _RUNTIME_CLAUDE,
@@ -178,6 +179,7 @@ _VALID_RUNTIMES = frozenset(
         _RUNTIME_CURSOR,
         _RUNTIME_ANTIGRAVITY,
         _RUNTIME_GROK,
+        _RUNTIME_DEVIN,
     }
 )
 # Unrecognised TOKEN_OPTIMIZER_RUNTIME values already reported by this process.
@@ -1608,6 +1610,10 @@ def runtime_home() -> Path:
     if runtime == _RUNTIME_GROK:
         return grok_home()
 
+    if runtime == _RUNTIME_DEVIN:
+        from devin_state import home as devin_home
+        return devin_home()
+
     return claude_home()
 
 
@@ -1621,6 +1627,7 @@ def plugin_data_env_vars() -> tuple[str, ...]:
         _RUNTIME_CURSOR,
         _RUNTIME_ANTIGRAVITY,
         _RUNTIME_GROK,
+        _RUNTIME_DEVIN,
     ):
         return ("TOKEN_OPTIMIZER_PLUGIN_DATA",)
     return ("CLAUDE_PLUGIN_DATA", "TOKEN_OPTIMIZER_PLUGIN_DATA")
@@ -1643,6 +1650,8 @@ def runtime_name_for_humans() -> str:
         return "Google Antigravity"
     if runtime == _RUNTIME_GROK:
         return "Grok Build"
+    if runtime == _RUNTIME_DEVIN:
+        return "Devin CLI"
     # Cowork is the claude runtime in a VM; label the refinement without changing
     # the runtime it resolves to.
     if runtime == _RUNTIME_CLAUDE and is_cowork():
