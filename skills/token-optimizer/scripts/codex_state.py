@@ -507,12 +507,13 @@ def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
     except (sqlite3.Error, OSError):
         return _empty_memory()
 
-    if not rows:
-        return {**_empty_memory(), "available": True}
-
     # Fetched one past the cap so a binding cap is detectable, never silent.
     truncated = len(rows) > _MAX_ROWS
     rows = rows[:_MAX_ROWS]
+    # Only threads that actually carry memory text count; null/empty rows do not.
+    rows = [r for r in rows if int(r["raw_chars"] or 0) + int(r["summary_chars"] or 0) > 0]
+    if not rows:
+        return {**_empty_memory(), "available": True, "truncated": truncated}
 
     total_raw = total_summary = max_tokens = 0
     by_thread: list[dict[str, Any]] = []

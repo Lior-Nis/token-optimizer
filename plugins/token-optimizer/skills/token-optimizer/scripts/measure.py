@@ -10641,6 +10641,8 @@ def generate_coach_data(focus=None, components=None, trends=None, include_determ
             "claude_md_tokens": claude_tokens,
             "instruction_label": instruction_label,
             "memory_md_lines": mem_lines,
+            "memory_md_scope": components.get("memory_md", {}).get("scope", "file"),
+            "memory_md_lines_measured": components.get("memory_md", {}).get("scope", "file") != "all_threads",
             "mcp_server_count": mcp_servers,
             "mcp_tokens": mcp_tokens,
             "rules_count": rules_count,

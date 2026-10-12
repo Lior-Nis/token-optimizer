@@ -987,7 +987,7 @@ def test_dashboard_marks_partial_codex_memory_total():
         )
         assert json.loads(subprocess.run([node, "-e", rjs], capture_output=True, text=True,
                                          check=True).stdout) == [
-            "9 tokens / 5+ thread(s) (partial: scan cap reached)", "9 tokens / 5 thread(s)", "none recorded"]
+            "9 tokens / 5+ thread(s) (partial: scan cap reached)", "9 tokens / 5 thread(s)", "unavailable (Codex state database not found or unreadable)"]
         assert "codexMemRuntimeValue(mem, fn)" in html
         assert "mr.codex" in html and "Codex Memory</span>" in html
         assert "lines across Codex memory files" not in html
@@ -1068,3 +1068,94 @@ def test_dashboard_generation_uses_real_codex_memory_review_counts():
     src = Path(measure.__file__).read_text(encoding="utf-8")
     assert "mr_data = _codex_memory_review_data(mem)" in src
     assert 'len(mem.get("files", []))' not in src
+
+
+def test_memory_overhead_counts_only_threads_with_memory_text():
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[(f"t{i}", 1, i) for i in range(4)], edges=[])
+        _make_memory_table(home, [("t0", "x" * 400, ""), ("t1", None, None), ("t2", "", ""),
+                                  ("t3", "", "y" * 400)])
+        over = codex_state.memory_overhead()
+        assert over["thread_count"] == 2 and over["available"] is True
+        assert {r["thread_id"] for r in over["by_thread"]} == {"t0", "t3"}
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("t1", 1, 1)], edges=[])
+        _make_memory_table(home, [("t1", None, None)])
+        over = codex_state.memory_overhead()
+        assert over["available"] is True and over["thread_count"] == 0
+
+
+def test_coach_snapshot_qualifies_codex_memory_lines(monkeypatch):
+    monkeypatch.setattr(measure, "detect_runtime", lambda: "codex")
+    monkeypatch.setattr(measure, "detect_context_window", lambda: (258400, "test"))
+    monkeypatch.setattr(measure, "_find_all_jsonl_files", lambda **kw: [])
+    monkeypatch.setattr(measure, "_get_compression_coverage", lambda **kw: {})
+    comps = {"skills": {"count": 1, "tokens": 10, "names": ["a"]},
+             "skills_detail": {"a": {"name": "a", "frontmatter_tokens": 10}},
+             "memory_md": {"tokens": 9000, "lines": 0, "exists": True, "scope": "all_threads"}}
+    snap = measure.generate_coach_data(components=comps, trends={"skills": {"never_used": []}, "daily": [],
+                                                                 "total_cost_usd": 0, "session_count": 0})["snapshot"]
+    assert snap["memory_md_scope"] == "all_threads"
+    assert snap["memory_md_lines_measured"] is False
+    comps["memory_md"] = {"tokens": 100, "lines": 12, "exists": True}
+    snap = measure.generate_coach_data(components=comps, trends={"skills": {"never_used": []}, "daily": [],
+                                                                 "total_cost_usd": 0, "session_count": 0})["snapshot"]
+    assert snap["memory_md_scope"] == "file" and snap["memory_md_lines_measured"] is True
+
+
+def _dashboard_html_copies():
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("skills", "plugins/token-optimizer/skills", "cowork/token-optimizer/skills"):
+        yield (root / rel / "token-optimizer/assets/dashboard.html").read_text(encoding="utf-8")
+
+
+def _node_eval(js):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    return json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True,
+                                     check=True).stdout)
+
+
+def _extract_fn(html, name):
+    import re
+    start = html.index("function " + name + "(")
+    end = html.index("\nfunction ", start + 1)
+    return html[start:end]
+
+
+def test_dashboard_runtime_row_distinguishes_unavailable_from_empty():
+    for html in _dashboard_html_copies():
+        js = _extract_fn(html, "codexMemRuntimeValue") + (
+            "\nvar f=function(n){return String(n)};console.log(JSON.stringify(["
+            "codexMemRuntimeValue({available:false},f),"
+            "codexMemRuntimeValue({available:true,thread_count:0},f),"
+            "codexMemRuntimeValue({unresolved:true,available:false},f)]));")
+        out = _node_eval(js)
+        assert out[0].startswith("unavailable") and out[1] == "none recorded"
+        assert out[2].startswith("unresolved")
+
+
+def test_dashboard_codex_card_renders_both_directions():
+    for html in _dashboard_html_copies():
+        js = (_extract_fn(html, "codexMemCardHtml") + "\n" + _extract_fn(html, "memCountSuffix") +
+              "\nvar f=function(n){return String(n)};console.log(JSON.stringify(["
+              "codexMemCardHtml({total_tokens:900,thread_count:5,largest_thread_tokens:300,scan_partial:true},f),"
+              "codexMemCardHtml({total_tokens:900,thread_count:5,largest_thread_tokens:300,scan_partial:false},f)]));")
+        partial, whole = _node_eval(js)
+        assert "5+" in partial and "partial: cap reached" in partial and "(partial)" in partial
+        assert "5<" in whole and "partial" not in whole
+        for card in (partial, whole):
+            assert "Codex Memory" in card and "900" in card and "Largest thread" in card
+            assert "Entries" not in card and "Orphaned" not in card and "Healthy" not in card
+
+
+def test_dashboard_codex_component_title_and_unavailable_subtitle():
+    for html in _dashboard_html_copies():
+        assert "name: isCodex ? 'Codex Memory (all threads)' : 'MEMORY.md'" in html
+        assert ("if (mr && !mr.error && mr.codex) {\n      healthCardsHtml += codexMemCardHtml(mr, fn);\n"
+                "    } else if (mr && !mr.error) {") in html
+        assert "No Codex local memory files detected" not in html
+        assert "Codex state database not found or unreadable" in html
