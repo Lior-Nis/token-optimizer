@@ -472,8 +472,8 @@ def test_quality_current_does_not_pick_other_thread_session():
         assert measure._find_current_session_jsonl() is None
         # No identity at all: the manual quality path must surface unresolved.
         os.environ.pop("CODEX_THREAD_ID")
-        assert measure._find_current_session_jsonl(require_identity=True) is None
-        assert measure._codex_identity_unresolved() is True
+        assert measure._find_current_session_jsonl() is None
+        assert measure._codex_thread_resolution()["reason"] == "identity_absent"
 
 
 def test_quality_current_does_not_match_id_substrings():
@@ -537,8 +537,18 @@ def test_summary_resolved_identity_still_scopes_to_subtree():
         )
         os.environ["CODEX_THREAD_ID"] = "caller-A"
         summary = measure._codex_state_summary()
-        assert summary["thread_resolution"] == "invoking"
+        # Identity known (totals scoped) but no transcript: reported, not hidden.
+        assert summary["thread_resolution"] == "unresolved"
+        assert summary["thread_resolution_reason"] == "transcript_not_found"
+        assert summary["selected_thread_id"] == "caller-A"
         assert summary["subagents"]["total_child_tokens"] == 70
+        (home / "sessions" / "caller-A.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8",
+        )
+        summary = measure._codex_state_summary()
+        assert summary["thread_resolution"] == "resolved"
+        assert summary["thread_resolution_reason"] is None
 
 
 def test_quality_analyzer_missing_transcript_names_caller_thread(capsys):
@@ -583,6 +593,98 @@ def test_identity_absent_from_db_is_still_the_identity():
         os.environ["CODEX_THREAD_ID"] = "nonexistent-id"
         assert codex_state.current_thread_id() == "nonexistent-id"
         assert measure._find_current_session_jsonl() is None
+
+
+def _make_memory_table(home, rows):
+    conn = sqlite3.connect(str(home / "state_1.sqlite"))
+    try:
+        conn.execute("CREATE TABLE stage1_outputs (thread_id TEXT, raw_memory TEXT, rollout_summary TEXT)")
+        conn.executemany("INSERT INTO stage1_outputs VALUES (?, ?, ?)", rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_memory_overhead_scoped_to_invoking_thread_never_other_threads(capsys):
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100), ("other-B", 5, 200)], edges=[])
+        _make_memory_table(home, [("caller-A", "x" * 400, ""), ("other-B", "y" * 8000, "")])
+        # Unresolved: no memory numbers at all.
+        s = measure._codex_state_summary()
+        assert s["memory"]["unresolved"] is True and s["memory"]["total_memory_tokens"] == 0
+        assert s["memory"]["by_thread"] == []
+        measure.codex_state_report()
+        assert "Memory overhead: unresolved" in capsys.readouterr().out
+        # Resolved: only the caller's rows.
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        m = measure._codex_state_summary()["memory"]
+        assert m["thread_count"] == 1
+        assert [r["thread_id"] for r in m["by_thread"]] == ["caller-A"]
+        # Machine-wide audit view (no root) is unchanged.
+        assert codex_state.memory_overhead()["thread_count"] == 2
+
+
+def test_report_shows_transcript_not_found(capsys):
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100)], edges=[])
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        measure.codex_state_report()
+        out = capsys.readouterr().out
+        assert "unresolved" in out and "no transcript found for caller-A" in out
+
+
+def test_exact_resolver_verifies_session_meta_and_rejects_placeholders():
+    uuid_a = "019a2abc-1111-2222-3333-444455556666"
+    uuid_b = "019a2abc-1111-2222-3333-777788889999"
+    with _CodexHome() as home:
+        def write(name, meta_id):
+            (home / "sessions" / name).write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": meta_id, "cwd": "/tmp"}}) + "\n",
+                encoding="utf-8")
+        # (a) placeholder-prefixed file never wins over the genuine one
+        write(f"rollout-UNKNOWN-{uuid_a}.jsonl", uuid_a)
+        write(f"rollout-2026-10-12T10-00-00-{uuid_a}.jsonl", uuid_a)
+        got = codex_session.find_session_jsonl_exact(uuid_a)
+        assert got is not None and "UNKNOWN" not in got.name
+        # (b) stem says B but session_meta says A: not B's transcript
+        write(f"rollout-2026-10-12T11-00-00-{uuid_b}.jsonl", uuid_a)
+        assert codex_session.find_session_jsonl_exact(uuid_b) is None
+
+
+def test_exact_resolver_deterministic_and_not_capped_by_file_count():
+    with _CodexHome() as home:
+        for i in range(60):
+            (home / "sessions" / f"noise-caller-A-{i:03d}.jsonl").write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": f"other-{i}", "cwd": "/tmp"}}) + "\n",
+                encoding="utf-8")
+        (home / "sessions" / "zz-caller-A-real.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8")
+        assert codex_session.find_session_jsonl_exact("caller-A").name == "zz-caller-A-real.jsonl"
+
+
+def test_exact_resolver_ignores_symlinks():
+    with _CodexHome() as home:
+        target = home / "other-B.jsonl"
+        target.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "caller-D", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8")
+        link = home / "sessions" / "rollout-2026-10-12T10-00-00-019a2abc-1111-2222-3333-444455556666.jsonl"
+        link.symlink_to(target)
+        (home / "sessions" / "caller-D-link.jsonl").symlink_to(target)
+        assert codex_session.find_session_jsonl_exact("caller-D") is None
+
+
+def test_every_codex_caller_is_identity_bound_not_mtime():
+    """Hooks/checkpoint/cache callers share _find_current_session_jsonl: no mtime guess."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 100), ("other-B", 5, 200)], edges=[])
+        (home / "sessions" / "other-B.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "other-B", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8")
+        assert measure._find_current_session_jsonl() is None  # no identity
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert measure._find_current_session_jsonl() is None  # identity w/o transcript
 
 
 def test_codex_summary_reports_selected_thread_from_identity():

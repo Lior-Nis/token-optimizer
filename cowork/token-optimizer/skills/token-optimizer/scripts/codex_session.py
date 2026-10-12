@@ -334,30 +334,51 @@ def _raw_session_meta_id(path: Path) -> str | None:
 
 
 def find_session_jsonl_exact(thread_id: str) -> Path | None:
-    """Resolve a transcript for exactly ``thread_id``; never normalized.
+    """Resolve the transcript for exactly ``thread_id``; never normalized.
 
     Unlike ``find_session_jsonl_by_id`` (an explicit-session convenience that
-    strips ``rollout-`` prefixes and illegal characters), this matches the
-    id verbatim against the file stem, the UUID suffix of a
-    ``rollout-<ts>-<uuid>`` stem, or the raw ``session_meta`` id. Used for
-    the invoking-thread identity, where silently changing the id would bind
-    to a different thread.
+    strips ``rollout-`` prefixes and illegal characters), this is for the
+    invoking-thread identity, where silently changing the id would bind to a
+    different thread. A candidate is accepted only when:
+      * it is a regular file inside a sessions root (no symlinks out),
+      * its raw ``session_meta`` id equals ``thread_id``; a file with no
+        readable ``session_meta`` falls back to its exact stem / the UUID
+        suffix of a ``rollout-<ts>-<uuid>`` stem, and
+      * its name is not a ``rollout-UNKNOWN-`` placeholder.
+    Ties resolve deterministically (newest mtime, then path).
     """
     if not thread_id or not re.fullmatch(r"[A-Za-z0-9_-]{6,128}", thread_id):
         return None
-    matches: list[Path] = []
+    matches: list[tuple[float, str, Path]] = []
     for root in session_roots():
         if not root.exists():
             continue
-        for jf in itertools.islice(root.rglob(f"*{thread_id}*.jsonl"), 50):
-            m = _ROLLOUT_STEM_RE.fullmatch(jf.stem)
-            file_id = m.group(1) if m else jf.stem
-            if file_id == thread_id or _raw_session_meta_id(jf) == thread_id:
-                matches.append(jf)
+        try:
+            root_real = root.resolve()
+        except OSError:
+            continue
+        for jf in root.rglob(f"*{thread_id}*.jsonl"):
+            try:
+                if jf.is_symlink() or not jf.is_file():
+                    continue
+                if root_real not in jf.resolve().parents:
+                    continue
+                if jf.stem.startswith("rollout-UNKNOWN-"):
+                    continue
+                meta_id = _raw_session_meta_id(jf)
+                if meta_id is not None:
+                    ok = meta_id == thread_id
+                else:
+                    m = _ROLLOUT_STEM_RE.fullmatch(jf.stem)
+                    ok = (m.group(1) if m else jf.stem) == thread_id
+                if ok:
+                    matches.append((jf.stat().st_mtime, str(jf), jf))
+            except OSError:
+                continue
     if not matches:
         return None
-    matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
-    return matches[0]
+    matches.sort(key=lambda t: (-t[0], t[1]))
+    return matches[0][2]
 
 
 def _session_meta_id(path: Path) -> str | None:

@@ -3060,6 +3060,8 @@ def _measure_codex_components():
 
     components["claude_md_global"] = {"path": str(CLAUDE_DIR / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
     components["claude_md_home"] = {"path": str(HOME / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
+    # Machine-wide audit view by design (not a current-thread claim): the
+    # Codex install's total memory overhead across all threads.
     state_memory = codex_state.memory_overhead()
     components["memory_md"] = {
         "path": str(runtime_home() / "state_*.sqlite"),
@@ -6085,19 +6087,22 @@ def _codex_state_summary():
         current_tid = codex_state.current_thread_id()
     except Exception:
         current_tid = None
+    res = _codex_thread_resolution()
     if current_tid:
         subagents = codex_state.subagent_costs(root_thread_id=current_tid)
         goals = codex_state.goal_budgets(root_thread_id=current_tid)
+        memory = codex_state.memory_overhead(root_thread_id=current_tid)
     else:
         subagents = {**codex_state._empty_subagents(), "unresolved": True}
         goals = {**codex_state._empty_goals(), "unresolved": True}
+        memory = {**codex_state._empty_memory(), "unresolved": True}
     summary = {
         "subagents": subagents,
-        "memory": codex_state.memory_overhead(),
+        "memory": memory,
         "goals": goals,
         "selected_thread_id": current_tid,
-        "thread_resolution": "invoking" if current_tid else "unresolved",
-        "thread_identity_status": codex_state.thread_identity_status(),
+        "thread_resolution": res["status"],
+        "thread_resolution_reason": res["reason"],
         "rate_limits": None,
         "effort": None,
         "compaction": None,
@@ -6106,7 +6111,7 @@ def _codex_state_summary():
     summary['available_models'] = codex_models.visible_models()
     try:
         # Session signals follow the same identity: never the newest-mtime file.
-        current = codex_session.find_session_jsonl_exact(current_tid) if current_tid else None
+        current = res["path"]
         if current:
             session = codex_session.parse_session_jsonl(current)
             if session:
@@ -6144,8 +6149,12 @@ def codex_state_report(as_json=False):
     print("=" * 38)
 
     if summary.get("thread_resolution") == "unresolved":
-        print(f"\nCurrent thread: unresolved ({_codex_identity_reason()}). "
-              "Thread-scoped subagent and goal totals are not shown.")
+        reason = summary.get("thread_resolution_reason")
+        why = (f"no transcript found for {summary.get('selected_thread_id')}"
+               if reason == "transcript_not_found" else _codex_identity_reason())
+        print(f"\nCurrent thread: unresolved ({why}). "
+              "Session signals are not shown"
+              + ("; thread-scoped subagent, goal and memory totals are not shown." if not summary.get("selected_thread_id") else "."))
 
     sub = summary["subagents"]
     if sub.get("unresolved"):
@@ -6162,7 +6171,9 @@ def codex_state_report(as_json=False):
         print("\nSubagents: no state data yet (no spawn edges recorded)")
 
     mem = summary["memory"]
-    if mem.get("available") and mem["thread_count"]:
+    if mem.get("unresolved"):
+        print("\nMemory overhead: unresolved (no invoking thread id)")
+    elif mem.get("available") and mem["thread_count"]:
         print(f"\nMemory overhead: {mem['total_memory_tokens']:,} tokens across {mem['thread_count']} thread(s); "
               f"largest {mem['max_thread_memory_tokens']:,}")
     else:
@@ -36195,46 +36206,53 @@ def _codex_identity_reason():
     return "CODEX_THREAD_ID is not set"
 
 
-def _codex_identity_unresolved():
-    """True on the Codex adapter when the invoking thread id is unavailable."""
-    if not _use_codex_session_adapter():
-        return False
+def _codex_thread_resolution():
+    """Single resolution outcome for the invoking Codex thread.
+
+    Returns ``{"status", "thread_id", "path", "reason"}``. ``status`` is
+    ``resolved`` (identity and transcript found) or ``unresolved`` with a
+    ``reason`` of ``identity_absent``, ``identity_invalid`` or
+    ``transcript_not_found``. Every Codex consumer renders this one outcome;
+    none falls back to another thread's session.
+    """
     try:
-        return not codex_state.current_thread_id()
+        tid = codex_state.current_thread_id()
     except Exception:
-        return True
+        tid = None
+    if not tid:
+        invalid = codex_state.thread_identity_status() == "invalid"
+        return {"status": "unresolved", "thread_id": None, "path": None,
+                "reason": "identity_invalid" if invalid else "identity_absent"}
+    path = codex_session.find_session_jsonl_exact(tid)
+    if path is None:
+        return {"status": "unresolved", "thread_id": tid, "path": None,
+                "reason": "transcript_not_found"}
+    return {"status": "resolved", "thread_id": tid, "path": path, "reason": None}
 
 
-def _find_current_session_jsonl(require_identity=False):
+def _codex_unresolved_message(res):
+    if res["reason"] == "transcript_not_found":
+        return (f"Could not resolve the current Codex thread: no transcript found for "
+                f"{res['thread_id']}. Pass a session id explicitly if it lives elsewhere.")
+    return (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
+            "Pass a session id explicitly instead of guessing the newest session.")
+
+
+def _find_current_session_jsonl():
     """Find the most recently modified JSONL file across all project directories.
 
-    Searches ALL project dirs and picks the globally most recent JSONL.
-    This is necessary because hooks often run from a CWD that doesn't match
-    the active session's project dir (e.g., when the session is in the home
-    dir but the hook runs from a skill directory).
+    Claude runtime: searches ALL project dirs and picks the globally most
+    recent JSONL, because hooks often run from a CWD that doesn't match the
+    active session's project dir.
 
-    For non-hook contexts (manual CLI), results are the same since the most
-    recently modified JSONL is almost always the currently active session.
+    Codex runtime: never guesses by mtime. Resolves the invoking thread
+    (CODEX_THREAD_ID) to its own transcript, and returns None when the
+    identity or its transcript is unavailable. Every Codex caller, including
+    checkpoint, cache and dashboard writers, therefore sees "no session" rather
+    than another thread's session.
     """
     if _use_codex_session_adapter():
-        # Deterministic resolution: prefer the state-DB-resolved
-        # active thread id over the mtime guess. `find_current_session_jsonl`
-        # picks the globally most-recently-modified JSONL, which can select an
-        # older session when several are open. Keying off the resolved current
-        # thread id makes `quality current` pick the live session. Fail-open:
-        # any error or miss falls back to the legacy mtime resolver.
-        try:
-            current_tid = codex_state.current_thread_id()
-        except Exception:
-            current_tid = None
-        if current_tid:
-            return codex_session.find_session_jsonl_exact(current_tid)
-        if require_identity:
-            # Manual `quality current`: without the caller's identity the
-            # newest-mtime session may belong to another thread. Report
-            # unresolved instead of presenting it as the current one.
-            return None
-        return codex_session.find_current_session_jsonl()
+        return _codex_thread_resolution()["path"]
 
     # Hermes: no ~/.claude/projects JSONL to scan (sessions live in state.db).
     if _use_hermes_session_adapter():
@@ -36325,24 +36343,17 @@ def quality_analyzer(session_id=None, as_json=False):
     if session_id and session_id != "current":
         filepath = _find_session_jsonl_by_id(session_id)
     else:
-        filepath = _find_current_session_jsonl(require_identity=True)
+        filepath = _find_current_session_jsonl()
 
     if not filepath and (not session_id or session_id == "current") and _use_codex_session_adapter():
         # One resolution outcome for the invoking Codex thread: either its
         # transcript, or an explicit unresolved state with the reason. Never
         # another thread's session, never the Claude-runtime message.
-        tid = codex_state.current_thread_id()
-        if tid:
-            reason = "transcript_not_found"
-            msg = (f"Could not resolve the current Codex thread: no transcript found for {tid}. "
-                   "Pass a session id explicitly if it lives elsewhere.")
-        else:
-            reason = "identity_invalid" if codex_state.thread_identity_status() == "invalid" else "identity_absent"
-            msg = (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
-                   "Pass a session id explicitly instead of guessing the newest session.")
+        res = _codex_thread_resolution()
+        msg = _codex_unresolved_message(res)
         if as_json:
             print(json.dumps({"error": msg, "thread_resolution": "unresolved",
-                              "reason": reason, "selected_thread_id": tid}))
+                              "reason": res["reason"], "selected_thread_id": res["thread_id"]}))
         else:
             print(f"[Token Optimizer] {msg}")
         return None

@@ -462,8 +462,12 @@ def _empty_memory() -> dict[str, Any]:
     }
 
 
-def memory_overhead() -> dict[str, Any]:
+def memory_overhead(root_thread_id: str | None = None) -> dict[str, Any]:
     """Per-thread memory overhead from ``stage1_outputs``.
+
+    ``root_thread_id=None`` is the machine-wide audit view (every thread's
+    memory rows). With a thread id, only that thread's rows are measured; the
+    id is bound as a SQL parameter, never interpolated.
 
     Codex's densified memory (``raw_memory`` + ``rollout_summary``) is injected
     into context. This measures its size in tokens per thread. Returns zeros
@@ -483,14 +487,18 @@ def memory_overhead() -> dict[str, Any]:
                 return _empty_memory()
             raw_expr = "length(raw_memory)" if "raw_memory" in cols else "0"
             summary_expr = "length(rollout_summary)" if "rollout_summary" in cols else "0"
+            where = "WHERE thread_id = ?" if root_thread_id else ""
+            params = (root_thread_id,) if root_thread_id else ()
             rows = conn.execute(
                 f"""
                 SELECT thread_id AS thread_id,
                        COALESCE({raw_expr}, 0) AS raw_chars,
                        COALESCE({summary_expr}, 0) AS summary_chars
                 FROM stage1_outputs
+                {where}
                 LIMIT {_MAX_ROWS}
-                """
+                """,
+                params,
             ).fetchall()
     except (sqlite3.Error, OSError):
         return _empty_memory()
