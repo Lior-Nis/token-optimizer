@@ -167,3 +167,18 @@ def test_fake_bash_hook_without_gate_fails_closed(monkeypatch, tmp_path, capsys)
             "tool_input": {"command": "git status"}, "conversation_id": "c",
         })
     assert capsys.readouterr().out == ""
+
+
+CODEX_WRITE_CAPABLE = [
+    "tree -o out.txt",
+    "tree -no out.txt",
+    "tree -R -H http://x -o index.html",
+]
+
+
+@pytest.mark.parametrize("command", DESTRUCTIVE_WHITELISTED + CODEX_WRITE_CAPABLE)
+def test_codex_rewrite_never_approves_write_capable_commands(command):
+    """Codex's opt-in rewrite answers "allow", so it must pass the shared gate too."""
+    import codex_command_compress
+
+    assert not codex_command_compress.eligible(command), command

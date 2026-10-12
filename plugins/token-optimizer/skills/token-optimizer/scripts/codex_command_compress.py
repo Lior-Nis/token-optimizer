@@ -36,7 +36,7 @@ import sys
 import tempfile
 import uuid
 
-from bash_whitelist import has_dangerous_chars, is_whitelisted
+from bash_whitelist import has_dangerous_chars, is_auto_approvable, is_whitelisted
 
 MAX_COMPRESS_BYTES = 8 * 1024 * 1024
 
@@ -103,8 +103,10 @@ def eligible(command):
     if args[0] == 'git':
         return len(args) > 1 and args[1] in ('status', 'log') and not any(
             a.startswith(('--output', '--ext-diff', '--textconv')) for a in args[2:])
-    if args[0] in ('rg', 'grep', 'ls', 'tree', 'wc', 'head', 'tail'):
-        return not any(a.startswith(('--pre', '--hostname-bin')) for a in args[1:]) and is_whitelisted(command)
+    if args[0] in ('rg', 'grep', 'ls', 'tree', 'wc', 'tail'):
+        # is_auto_approvable is the gate every host shares; it is what refuses
+        # write-capable forms such as `tree -o <file>`.
+        return is_auto_approvable(command)
     return False
 
 
