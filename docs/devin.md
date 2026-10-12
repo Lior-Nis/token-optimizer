@@ -51,7 +51,7 @@ A compressed result includes an opaque ID, not a raw-path instruction. Recovery 
 python3 "$FILTER" recover --capture-id capture-0123456789abcdef0123456789abcdef --exit-code 0
 ```
 
-Use the real ID and sealed exit code. Changed or missing captures are refused. The adapter never deletes captures: they persist until you clean them up. Compression is lossy; the original is the recovery source.
+Use the real ID and sealed exit code. Changed or missing captures are refused. A raw passthrough removes its capture once its bytes are delivered, and failed delivery keeps it; a compressed result keeps its capture for recovery until you delete it or uninstall with purge. Compression is lossy; the original is the recovery source.
 
 ## Measurement and consent
 
@@ -63,7 +63,7 @@ bash install.sh --devin --uninstall
 bash install.sh --devin --uninstall --purge
 ```
 
-Source: `devin_captured_output_estimate`. The output reduction includes the emitted recovery pointer but excludes skill instructions, extra tool calls, repeated filtering and recovery reads. It is not end-to-end token savings, provider tokens, confirmed delivery, dollars or ACUs. Numeric records retain 30 days and at most 10,000 rows. Purge removes adapter metrics/sidecars, salt and consent, never original captures.
+Source: `devin_captured_output_estimate`. The output reduction includes the emitted recovery pointer but excludes skill instructions, extra tool calls, repeated filtering and recovery reads. It is not end-to-end token savings, provider tokens, confirmed delivery, dollars or ACUs. Numeric records retain 30 days and at most 10,000 rows. Purge removes adapter metrics/sidecars, salt, consent and stored captures.
 
 If installed files have changed, refresh/uninstall refuses to overwrite them. Doctor reports ownership drift. To stop activation manually, move only the `token-optimizer-output` skill directory out of Devin's skill paths, preserving your edits. Existing imported Claude skills/hooks are not controlled by this adapter and may create their own raw copies; doctor warns about visible coexistence files.
 

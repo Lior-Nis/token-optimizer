@@ -250,9 +250,10 @@ def install(*, dry_run=False) -> None:
             _clear_pending(pending)
             raise
     print('Installed Devin explicit output skill (contract-only beta; no live session proof).')
-    print('Consent: private captures may contain confidential/personal data; the adapter makes no extra copies beyond the captures you create, which persist until you delete them.')
+    print('Consent: private captures may contain confidential/personal data; the adapter makes no extra copies beyond the captures you create.')
+    print('A raw passthrough removes its capture after delivery; a compressed result keeps its capture for recovery until you delete it or uninstall --purge. A failed delivery keeps the capture.')
     print('Failures, stderr, binary and credential-matching output pass through RAW to Devin/model context.')
-    print('Numeric local estimates retain 30 days, at most 10000 rows. Capture cleanup stays with you.')
+    print('Numeric local estimates retain 30 days, at most 10000 rows.')
 
 
 def uninstall(*, dry_run=False, purge=False) -> None:
@@ -263,7 +264,8 @@ def uninstall(*, dry_run=False, purge=False) -> None:
         with _lock():_recover_pending()
     owned = _ownership(allow_missing=True)
     if dry_run:
-        print('Would remove owned files and requested numeric state; captures remain unchanged.')
+        print('Would remove owned files and requested numeric state' +
+              ('; stored captures will be removed.' if purge else '; captures remain unchanged.'))
         return
     if not owned and not purge:
         print('No owned Devin install found.')

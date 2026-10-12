@@ -863,3 +863,28 @@ def test_concurrent_sealers_have_exactly_one_winner(capture, monkeypatch):
     assert len(winners) == 1, outcomes
     seal = _json.loads((capture / 'complete.json').read_bytes())
     assert seal['exit_code'] == winners[0][2]
+
+
+def test_purge_dry_run_says_captures_will_be_removed(tmp_path, monkeypatch, capsys):
+    """The purge dry-run line must state that stored captures get removed,
+    not that they remain unchanged."""
+    import re as _re
+    import devin_state as s
+    import devin_install as inst
+    monkeypatch.setenv('HOME', str(tmp_path))
+    s.enable_consent()
+    inst.uninstall(dry_run=True, purge=True)
+    text = capsys.readouterr().out
+    assert 'captures remain unchanged' not in text
+    assert _re.search(r'captures will be removed|removes? (stored )?captures|deletes? (stored )?captures', text)
+
+
+def test_install_text_describes_automatic_passthrough_removal(tmp_path, monkeypatch, capsys):
+    """Install consent must describe passthrough removal after delivery and
+    must not leave cleanup entirely to the user."""
+    import devin_install as inst
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    text = capsys.readouterr().out
+    assert 'cleanup stays with you' not in text
+    assert 'removes its capture' in text

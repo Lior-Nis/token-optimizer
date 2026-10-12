@@ -32,7 +32,7 @@ Automatic exec rewriting cannot be proven safe against Devin's persistent-shell 
 ### Scope Boundaries
 No lifecycle hooks, command execution, provider accounting, dashboard parity, smart compaction, native Windows, automatic hosted integration, MCP server or deployed knowledge. Existing imported Claude hooks remain unchanged and are diagnosed as a coexistence warning.
 ### Assumptions
-Users/Devin create stdout and stderr capture files explicitly in their own shell under normal permissions. Original capture cleanup is theirs, not the filter's. The extra invocation is intentional.
+Users/Devin create stdout and stderr capture files explicitly in their own shell under normal permissions. A delivered raw passthrough removes its own capture; compressed captures persist for recovery until the user deletes them or purges. The extra invocation is intentional.
 
 ---
 ## Planning Contract
@@ -40,12 +40,12 @@ Users/Devin create stdout and stderr capture files explicitly in their own shell
 - KTD1. Deliver a user-triggered SKILL.md under the documented user skills directory, with no allowed-tools, permissions or subagent frontmatter. https://docs.devin.ai/cli/extensibility/skills/creating-skills. This avoids unknown rewrite ordering, permission checks and persistent-shell state.
 - KTD2. Prepare a private capture directory with fixed stdout/stderr names, then seal only after foreground completion using both content hashes and the original status. Filtering rejects unsealed or changed captures. Filter two explicit absolute capture paths with a bounded original exit-code argument and a format hint from a fixed enum. No shell parsing or subprocess execution exists in the filter. Accept regular files only, owner UID, mode 0600, no symlink components; open with no-follow and compare file identity before/after reading.
 - KTD3. Reuse bash_compress.compress and token_estimate. Format hints select compression patterns; they are not commands to execute. UTF-8 success without stderr may compress, all other bounded captures pass through.
-- KTD4. Originals are caller-owned captures, not duplicated archives. Consent names possible confidential/personal contents, pointer lifetime and cleanup. Opaque recovery revalidates both files and seal, refusing changed or missing captures; the adapter never deletes captures. Numeric metrics retain 30 days and at most 10,000 rows in private SQLite.
+- KTD4. Originals are caller-owned captures, not duplicated archives. Consent names possible confidential/personal contents, pointer lifetime and cleanup. Opaque recovery revalidates both files and seal, refusing changed or missing captures; the adapter deletes a delivered passthrough capture and keeps compressed captures for recovery. Numeric metrics retain 30 days and at most 10,000 rows in private SQLite.
 - KTD5. Use split devin_compress.py, devin_state.py, devin_install.py and devin_doctor.py. Install a stable copied minimal dependency payload plus an ownership manifest; refuse symlink/foreign destinations and refuse uninstall if ownership or bytes changed. Respect absolute XDG_CONFIG_HOME only within HOME and a namespaced override with the same guard.
 - KTD6. Keep measure dispatch out of foreign collectors and add Devin to the foreign-runtime guard. No generic shared dashboard or usage command is allowed under Devin.
 ### High-Level Technical Design
 Data flow: host runs command normally -> private stdout/stderr captures and exit status -> explicit filter validation -> raw passthrough or shared compression plus recovery pointer -> numeric estimate record.
-Lifecycle: absent -> consent and owned skill/payload -> idempotent refresh -> uninstall owned files only; purge deletes only adapter metrics and consent, never original captures.
+Lifecycle: absent -> consent and owned skill/payload -> idempotent refresh -> uninstall owned files only; purge deletes adapter metrics, consent and stored captures.
 Decision flow: unsafe input -> error and recovery guidance; bounded failed/stderr/binary -> raw; success but no net reduction -> raw; otherwise compressed output with original-file pointer.
 ### Risks
 - Same-UID malicious producers are explicitly outside the guarantee. Sealing is an integrity snapshot, not an authenticated completion receipt; the caller asserts status and foreground completion. Retained writers can seal a prefix, which is accepted only until later mutation invalidates it.
@@ -80,7 +80,7 @@ Decision flow: unsafe input -> error and recovery guidance; bounded failed/stder
 **Approach:** KTD5-KTD6. Render stable installed Python/filter paths into the skill, without permission-grant fields.
 **Test scenarios:**
 - Dry run has no writes; foreign config/skills unchanged.
-- Install/reinstall/uninstall preserves original captures and unrelated files.
+- Install/reinstall/uninstall preserves original captures and unrelated files; only explicit purge removes stored captures.
 - Destination symlink, changed owned file and foreign skill collision refuse.
 - Installed filter works when checkout moved; doctor distinguishes local probe from live session.
 - Official downloaded Devin CLI discovers the installed skill without authentication.
