@@ -4174,6 +4174,8 @@ def _auto_snapshot(components, totals, ctx_window):
             ),
             "memory_md_tokens": components.get("memory_md", {}).get("tokens", 0),
             "memory_md_lines": components.get("memory_md", {}).get("lines", 0),
+            "memory_md_scope": components.get("memory_md", {}).get("scope", "file"),
+            "memory_md_truncated": bool(components.get("memory_md", {}).get("truncated")),
         }
         # Keep last 30 snapshots
         existing = sorted(snap_dir.glob("snap_*.json"))
@@ -5257,7 +5259,7 @@ def print_snapshot_summary(snapshot):
         mem = c["memory_md"]
         memory_label = "Codex memories (all threads)" if is_codex else "MEMORY.md"
         if is_codex and mem.get("truncated"):
-            memory_label = "Codex memories (partial, cap reached)"
+            memory_label = "Codex memories (all threads, partial)"
         print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
 
     # Skills
@@ -5478,8 +5480,13 @@ def compare_snapshots():
     rows.append(("CLAUDE.md (all)", before_claude, after_claude))
 
     # MEMORY.md
+    _mem_partial = bool(bc.get("memory_md", {}).get("truncated") or ac.get("memory_md", {}).get("truncated"))
+    _mem_all = "all_threads" in (bc.get("memory_md", {}).get("scope"), ac.get("memory_md", {}).get("scope"))
+    _mem_row = "Codex memories (all threads)" if _mem_all else "MEMORY.md"
+    if _mem_partial:
+        _mem_row = _mem_row[:-1] + ", partial)" if _mem_all else "MEMORY.md (partial)"
     rows.append((
-        "MEMORY.md",
+        _mem_row,
         bc.get("memory_md", {}).get("tokens", 0),
         ac.get("memory_md", {}).get("tokens", 0),
     ))
@@ -7774,6 +7781,25 @@ def _manage_mcp(action, name):
         return False
 
 
+def _codex_memory_review_data(mem):
+    """Dashboard memory-health card data for the Codex machine-wide memory component."""
+    # Real thread count, not the 20-row detail subset in mem["files"].
+    count = int(mem.get("thread_count", 0) or 0)
+    return {
+        "target": mem.get("path", ""),
+        "total_lines": mem.get("lines", 0),
+        "entry_count": count,
+        "topic_files_count": count,
+        "linked_files_count": count,
+        "scan_partial": bool(mem.get("truncated")),
+        "findings": [],
+        "severity_counts": {"high": 0, "medium": 0, "low": 0},
+        "savings": {"total_tokens": 0, "by_category": {}},
+        "truncated": False,
+        "truncated_lines": 0,
+    }
+
+
 def generate_standalone_dashboard(days=30, quiet=False, force=False):
     """Generate a persistent Trends + Health dashboard (no audit data needed).
 
@@ -7936,18 +7962,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     try:
         mem = components.get("memory_md", {})
         if detect_runtime() == "codex" and mem.get("exists"):
-            mr_data = {
-                "target": mem.get("path", ""),
-                "total_lines": mem.get("lines", 0),
-                "entry_count": len(mem.get("files", [])),
-                "topic_files_count": len(mem.get("files", [])),
-                "linked_files_count": len(mem.get("files", [])),
-                "findings": [],
-                "severity_counts": {"high": 0, "medium": 0, "low": 0},
-                "savings": {"total_tokens": 0, "by_category": {}},
-                "truncated": False,
-                "truncated_lines": 0,
-            }
+            mr_data = _codex_memory_review_data(mem)
         elif mem.get("exists") and mem.get("path"):
             mem_path = Path(mem["path"])
             memory_dir = mem_path.parent

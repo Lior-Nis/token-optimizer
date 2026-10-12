@@ -945,6 +945,12 @@ def test_quick_scan_and_snapshot_label_partial_memory_total(monkeypatch, capsys)
         assert ("partial" in line) is truncated, line
 
 
+def html_suffix_js(html):
+    import re
+    fn = re.search(r"^function memCountSuffix\(mr\) \{.*\}$", html, re.M).group(0)
+    return fn + "\nconsole.log(JSON.stringify([memCountSuffix({scan_partial:true}),memCountSuffix({scan_partial:false}),memCountSuffix(undefined)]));"
+
+
 def test_dashboard_marks_partial_codex_memory_total():
     """Run the dashboard's own helpers in node and check the call sites use them."""
     import re
@@ -969,6 +975,9 @@ def test_dashboard_marks_partial_codex_memory_total():
         )
         out = json.loads(subprocess.run([node, "-e", script], capture_output=True,
                                         text=True, check=True).stdout)
+        assert html.count("memCountSuffix(mr)") == 3, html.count("memCountSuffix(mr)")
+        assert json.loads(subprocess.run([node, "-e", html_suffix_js(html)], capture_output=True,
+                                         text=True, check=True).stdout) == ["+", "", ""]
         assert out == ["Partial total: Codex memory scan cap reached. ", "", "",
                        "Codex Memories (partial)", "Codex Memories", "Codex Memories"]
 
@@ -984,3 +993,46 @@ def test_state_report_memory_line_partial_suffix_end_to_end(monkeypatch, capsys)
         line = [ln for ln in capsys.readouterr().out.splitlines() if "Memory overhead" in ln][0]
         assert ("5+ thread(s) (partial: scan cap reached);" in line) is truncated, line
         assert ("5 thread(s);" in line) is (not truncated), line
+
+
+def test_codex_memory_review_counts_are_real_not_detail_subset():
+    mem = {"exists": True, "path": "/x", "lines": 0, "thread_count": 40,
+           "files": [{"thread_id": f"t{i}", "memory_tokens": 1} for i in range(20)],
+           "truncated": False}
+    mr = measure._codex_memory_review_data(mem)
+    assert mr["entry_count"] == mr["topic_files_count"] == mr["linked_files_count"] == 40
+    assert mr["scan_partial"] is False
+    assert measure._codex_memory_review_data({**mem, "truncated": True})["scan_partial"] is True
+
+
+def test_auto_snapshot_carries_scope_and_truncated(monkeypatch, tmp_path):
+    monkeypatch.setattr(measure, "SNAPSHOT_DIR", tmp_path)
+    totals = {"estimated_total": 1, "controllable_tokens": 1, "fixed_tokens": 0}
+    for truncated in (True, False):
+        for old in (tmp_path / "auto-snapshots").glob("*.json") if (tmp_path / "auto-snapshots").exists() else []:
+            old.unlink()
+        measure._auto_snapshot(_partial_components(truncated), totals, 200000)
+        snap = json.loads(next((tmp_path / "auto-snapshots").glob("snap_*.json")).read_text())
+        assert snap["memory_md_truncated"] is truncated
+        assert snap["memory_md_scope"] == "all_threads"
+
+
+def test_compare_snapshots_qualifies_partial_memory(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(measure, "SNAPSHOT_DIR", tmp_path)
+    for truncated in (True, False):
+        for name in ("before", "after"):
+            snap = {"timestamp": "2026-01-01T00:00:00", "label": name,
+                    "components": _partial_components(truncated),
+                    "totals": {"estimated_total": 9010, "context_window": 200000,
+                               "pct": 4.5, "effective_total": 9010}}
+            (tmp_path / f"snapshot_{name}.json").write_text(json.dumps(snap))
+        measure.compare_snapshots()
+        out = capsys.readouterr().out
+        line = [ln for ln in out.splitlines() if "Codex memories" in ln][0]
+        assert ("partial" in line) is truncated, line
+
+
+def test_dashboard_generation_uses_real_codex_memory_review_counts():
+    src = Path(measure.__file__).read_text(encoding="utf-8")
+    assert "mr_data = _codex_memory_review_data(mem)" in src
+    assert 'len(mem.get("files", []))' not in src

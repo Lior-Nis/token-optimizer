@@ -2373,6 +2373,7 @@ function extractFindings(auditMd) {
 /* ========== COMPONENT DETAILS BUILDER ========== */
 function codexMemPartialPrefix(m) { return m && m.truncated ? 'Partial total: Codex memory scan cap reached. ' : ''; }
 function codexMemBarLabel(m) { return m && m.truncated ? 'Codex Memories (partial)' : 'Codex Memories'; }
+function memCountSuffix(mr) { return mr && mr.scan_partial ? '+' : ''; }
 function getComponentDetails(data) {
   var c = data.snapshot.components;
   var cd = data.snapshot.component_details || {};
@@ -3154,8 +3155,8 @@ var DB = (function() {
         '<div style="font-size:13px;color:var(--c-text-dim);">' + memoryLimitText + '</div>' +
         '</div>' +
         '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;">' +
-        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Entries</span><span>' + (mr.entry_count || 0) + '</span></div>' +
-        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Topic files</span><span>' + (mr.topic_files_count || 0) + ' (' + (mr.linked_files_count || 0) + ' linked)</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Entries</span><span>' + (mr.entry_count || 0) + memCountSuffix(mr) + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Topic files</span><span>' + (mr.topic_files_count || 0) + memCountSuffix(mr) + ' (' + (mr.linked_files_count || 0) + ' linked)</span></div>' +
         (orphanCount > 0 ? '<div style="display:flex;justify-content:space-between;color:var(--c-warning, #ff9f43);"><span>Orphaned files</span><span>' + orphanCount + '</span></div>' : '') +
         '<div style="display:flex;justify-content:space-between;color:' + mrColor + ';margin-top:4px;font-weight:500;"><span>Status</span><span>' + esc(mrStatus) + '</span></div>' +
         (mr.savings && mr.savings.total_tokens > 0 ? '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);margin-top:2px;"><span>Recoverable</span><span>~' + fn(mr.savings.total_tokens) + ' tokens</span></div>' : '') +
