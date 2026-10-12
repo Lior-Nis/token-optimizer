@@ -6091,6 +6091,7 @@ def _codex_state_summary():
         "memory": codex_state.memory_overhead(),
         "goals": codex_state.goal_budgets(root_thread_id=current_tid),
         "selected_thread_id": current_tid,
+        "thread_resolution": "invoking" if current_tid else "unresolved",
         "rate_limits": None,
         "effort": None,
         "compaction": None,
@@ -36171,7 +36172,17 @@ def compute_quality_score(quality_data, session_id=None):
     }
 
 
-def _find_current_session_jsonl():
+def _codex_identity_unresolved():
+    """True on the Codex adapter when the invoking thread id is unavailable."""
+    if not _use_codex_session_adapter():
+        return False
+    try:
+        return not codex_state.current_thread_id()
+    except Exception:
+        return True
+
+
+def _find_current_session_jsonl(require_identity=False):
     """Find the most recently modified JSONL file across all project directories.
 
     Searches ALL project dirs and picks the globally most recent JSONL.
@@ -36196,6 +36207,11 @@ def _find_current_session_jsonl():
         if current_tid:
             resolved = codex_session.find_session_jsonl_by_id(current_tid)
             return resolved
+        if require_identity:
+            # Manual `quality current`: without the caller's identity the
+            # newest-mtime session may belong to another thread. Report
+            # unresolved instead of presenting it as the current one.
+            return None
         return codex_session.find_current_session_jsonl()
 
     # Hermes: no ~/.claude/projects JSONL to scan (sessions live in state.db).
@@ -36287,7 +36303,16 @@ def quality_analyzer(session_id=None, as_json=False):
     if session_id and session_id != "current":
         filepath = _find_session_jsonl_by_id(session_id)
     else:
-        filepath = _find_current_session_jsonl()
+        filepath = _find_current_session_jsonl(require_identity=True)
+
+    if not filepath and (not session_id or session_id == "current") and _codex_identity_unresolved():
+        msg = ("Could not resolve the current Codex thread (CODEX_THREAD_ID is not set). "
+               "Pass a session id explicitly instead of guessing the newest session.")
+        if as_json:
+            print(json.dumps({"error": msg, "thread_resolution": "unresolved"}))
+        else:
+            print(f"[Token Optimizer] {msg}")
+        return None
 
     if not filepath:
         if as_json:

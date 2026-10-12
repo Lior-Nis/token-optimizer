@@ -114,6 +114,9 @@ class _CodexHome:
         self._saved_detect = codex_state.detect_runtime
         self._saved_measure_detect = measure.detect_runtime
         self._saved_session_home = codex_session.codex_home
+        # Hermetic: a developer running these tests inside a real Codex thread
+        # would otherwise leak that thread's identity into every case.
+        self._saved_thread_env = os.environ.pop("CODEX_THREAD_ID", None)
         codex_state.codex_home = lambda: self.tmp
         codex_session.codex_home = lambda: self.tmp
         codex_state.detect_runtime = lambda: "codex"
@@ -125,6 +128,9 @@ class _CodexHome:
         codex_session.codex_home = self._saved_session_home
         codex_state.detect_runtime = self._saved_detect
         measure.detect_runtime = self._saved_measure_detect
+        os.environ.pop("CODEX_THREAD_ID", None)
+        if self._saved_thread_env is not None:
+            os.environ["CODEX_THREAD_ID"] = self._saved_thread_env
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -366,6 +372,9 @@ def test_current_thread_id_resolves_most_recently_updated():
             ],
             edges=[],
         )
+        os.environ["CODEX_THREAD_ID"] = "olderthread"
+        assert codex_state.current_thread_id() == "olderthread"
+        os.environ["CODEX_THREAD_ID"] = "newerthread"
         assert codex_state.current_thread_id() == "newerthread"
 
 
@@ -398,11 +407,108 @@ def test_quality_current_resolves_active_thread_not_older_mtime():
         os.utime(active_file, ns=(1_600_000_000_000_000_000, 1_600_000_000_000_000_000))
         os.utime(stale_file, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
 
+        os.environ["CODEX_THREAD_ID"] = "activeeee"
         resolved = measure._find_current_session_jsonl()
         assert resolved is not None
         assert resolved.name == "activeeee.jsonl", (
             f"expected the active thread's session, got {resolved.name}"
         )
+
+
+def test_current_thread_id_binds_to_invoking_thread_not_global_newest():
+    """Issue #108 follow-up: caller-A updated 100, other-B updated 200,
+    CODEX_THREAD_ID=caller-A must resolve caller-A, never other-B."""
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("caller-A", 5, 100), ("other-B", 5, 200)],
+            edges=[],
+        )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert codex_state.current_thread_id() == "caller-A"
+
+
+def test_current_thread_id_unresolved_without_identity():
+    """No CODEX_THREAD_ID: report unresolved (None), never the global newest."""
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("caller-A", 5, 100), ("other-B", 5, 200)],
+            edges=[],
+        )
+        assert codex_state.current_thread_id() is None
+        for bad in ("", "   ", "../etc/passwd", "a b", "x" * 200, "short"):
+            os.environ["CODEX_THREAD_ID"] = bad
+            assert codex_state.current_thread_id() is None, bad
+
+
+def test_current_thread_id_identity_missing_from_db_is_not_replaced():
+    """Identity absent from the threads table stays the identity (no fallback to newest)."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("other-B", 5, 200)], edges=[])
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert codex_state.current_thread_id() == "caller-A"
+
+
+def test_quality_current_does_not_pick_other_thread_session():
+    """With identity, `quality current` never returns another thread's session;
+    without identity it is unresolved instead of the newest-mtime file."""
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("caller-A", 5, 100), ("other-B", 5, 200)],
+            edges=[],
+        )
+        for tid in ("caller-A", "other-B"):
+            f = home / "sessions" / f"{tid}.jsonl"
+            f.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": tid, "cwd": "/tmp"}}) + "\n",
+                encoding="utf-8",
+            )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert measure._find_current_session_jsonl().name == "caller-A.jsonl"
+        # Identity set but its transcript is missing: unresolved, not other-B.
+        (home / "sessions" / "caller-A.jsonl").unlink()
+        assert measure._find_current_session_jsonl() is None
+        # No identity at all: the manual quality path must surface unresolved.
+        os.environ.pop("CODEX_THREAD_ID")
+        assert measure._find_current_session_jsonl(require_identity=True) is None
+        assert measure._codex_identity_unresolved() is True
+
+
+def test_quality_current_does_not_match_id_substrings():
+    """Identity caller-A must not pick caller-AB's or xcaller-A-old's transcript."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 1), ("caller-AB", 5, 9)], edges=[])
+        for n in ("caller-AB", "xcaller-A-old"):
+            (home / "sessions" / f"{n}.jsonl").write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": n, "cwd": "/tmp"}}) + "\n",
+                encoding="utf-8",
+            )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert measure._find_current_session_jsonl() is None
+
+
+def test_quality_analyzer_current_reports_unresolved_json(capsys):
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("caller-A", 5, 1), ("other-B", 5, 9)], edges=[])
+        assert measure.quality_analyzer(as_json=True) is None
+        out = json.loads(capsys.readouterr().out)
+        assert out["thread_resolution"] == "unresolved"
+        assert "other-B" not in json.dumps(out)
+
+
+def test_codex_summary_reports_selected_thread_from_identity():
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("caller-A", 5, 100), ("other-B", 5, 200)],
+            edges=[],
+        )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert codex_state.subagent_costs(
+            root_thread_id=codex_state.current_thread_id()
+        )["selected_thread_id"] == "caller-A"
 
 
 def test_non_codex_runtime_empty_shape_unchanged():

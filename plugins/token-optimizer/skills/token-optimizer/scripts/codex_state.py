@@ -31,6 +31,7 @@ intentionally out of scope.
 from __future__ import annotations
 
 import math
+import os
 import re
 import sqlite3
 import time
@@ -278,42 +279,37 @@ def _resolve_subtree(
     return subtree, aggregation_edges
 
 
+_THREAD_ID_ENV = "CODEX_THREAD_ID"
+_THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,128}")
+
+
+def invoking_thread_id() -> str | None:
+    """Return the invoking Codex thread id from ``CODEX_THREAD_ID``, or None.
+
+    Codex exports the id of the thread that launched the process. That is the
+    only identity of the caller we have; a malformed value is treated as
+    absent rather than sanitized into some other id.
+    """
+    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
+    return raw if _THREAD_ID_RE.fullmatch(raw) else None
+
+
 def current_thread_id() -> str | None:
-    """Resolve the active Codex thread id from the state database.
+    """Resolve the invoking Codex thread id.
 
-    The most-recently-updated row in ``threads`` is the live thread. This is
-    deterministic (keyed off the state DB's own update timestamps) rather than
-    the JSONL mtime guess used by the session resolver, which can pick an
-    older session when several are open concurrently (requirement
-    3: ``quality current`` must resolve to the active thread, not the
-    most-recent-mtime session).
+    Binds to the caller's own identity (``CODEX_THREAD_ID``) and returns it
+    as-is, whether or not the state DB has a row for it yet. It never infers
+    "current" from the newest ``threads`` row: with several threads open
+    concurrently that row belongs to whichever thread wrote last, which can be
+    a different thread from the caller (issue #108).
 
-    Returns ``None`` off-Codex, when no state DB exists, or on any sqlite/OS
-    error (fail-open). Tiebreaker on ``id DESC`` keeps the choice deterministic
-    when two threads share an update timestamp.
+    Returns ``None`` off-Codex, or on Codex when the caller's identity is not
+    available. ``None`` means *unresolved*; callers must surface that instead
+    of substituting a guess.
     """
     if not _is_codex():
         return None
-    db = _find_versioned_db("state", "threads")
-    if db is None:
-        return None
-    try:
-        with _ro_connect(db) as conn:
-            cols = _table_columns(conn, "threads")
-            if "id" not in cols:
-                return None
-            if "updated_at_ms" in cols:
-                order = "updated_at_ms DESC, id DESC"
-            elif "updated_at" in cols:
-                order = "updated_at DESC, id DESC"
-            else:
-                order = "id DESC"
-            row = conn.execute(
-                f"SELECT id AS id FROM threads ORDER BY {order} LIMIT 1"
-            ).fetchone()
-            return str(row["id"]) if row and row["id"] else None
-    except (sqlite3.Error, OSError):
-        return None
+    return invoking_thread_id()
 
 
 def _empty_subagents() -> dict[str, Any]:
