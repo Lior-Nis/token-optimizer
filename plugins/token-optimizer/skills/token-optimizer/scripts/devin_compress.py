@@ -114,7 +114,9 @@ def read_pair(directory: Path, *, sealed: bool, exit_code=None) -> tuple[bytes, 
         provenance = json.loads(marker)
         out, out_info = _read_leaf(fd, 'stdout', MAX_CAPTURE)
         err, err_info = _read_leaf(fd, 'stderr', MAX_CAPTURE)
-        if (provenance.get('stdout') != [out_info.st_dev, out_info.st_ino]
+        # Valid JSON of the wrong type must be the normal refusal, never a crash.
+        if (not isinstance(provenance, dict)
+                or provenance.get('stdout') != [out_info.st_dev, out_info.st_ino]
                 or provenance.get('stderr') != [err_info.st_dev, err_info.st_ino]):
             raise OSError('prepared capture identity changed')
         if sealed:
@@ -196,6 +198,22 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
         except Exception:
             pass
     return FilterResult(delivered.encode('utf-8'), b'', 0, outcome, measured)
+
+
+def _remove_capture(directory: Path) -> None:
+    """Remove a passthrough capture once its raw bytes were delivered.
+    Only the adapter's fixed private leaf names are unlinked; foreign content
+    keeps its directory (and itself) in place."""
+    from devin_state import no_symlinks
+    no_symlinks(directory)
+    for name in ('stdout', 'stderr', '.prepared', 'complete.json'):
+        leaf = directory / name
+        no_symlinks(leaf)
+        leaf.unlink(missing_ok=True)
+    try:
+        directory.rmdir()
+    except OSError:
+        pass
 
 
 def seal_capture(directory: Path, exit_code: int) -> None:
@@ -282,6 +300,13 @@ def main(argv=None) -> int:
         return 2
     sys.stdout.buffer.write(result.stdout)
     sys.stderr.buffer.write(result.stderr)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.flush()
+    if result.outcome != 'compressed':
+        # Passthrough emits no recovery pointer, so the stored original is
+        # unrecoverable anyway and may hold credentials. Remove it only after
+        # the raw bytes have been written out successfully.
+        _remove_capture(args.stdout.parent)
     return result.code
 
 

@@ -204,6 +204,44 @@ def test_devin_home_refuses_home_itself(tmp_path,monkeypatch):
     monkeypatch.setenv('TOKEN_OPTIMIZER_DEVIN_HOME',str(tmp_path))
     with pytest.raises(OSError):s.home()
 
+def test_credential_passthrough_removes_capture(tmp_path,monkeypatch):
+    """fix229-extra A: raw passthrough emits bytes, then removes the capture."""
+    import devin_state as s
+    import devin_compress as d
+    monkeypatch.setenv('HOME',str(tmp_path));s.enable_consent()
+    cap=s.prepare_capture()
+    raw=(b'github_pat_' + b'A'*40 + b' repeated filler\n')*80
+    (cap/'stdout').write_bytes(raw);d.seal_capture(cap,0)
+    run=subprocess.run([sys.executable,str(SCRIPTS/'devin_compress.py'),
+                        '--stdout',str(cap/'stdout'),'--stderr',str(cap/'stderr'),
+                        '--exit-code','0','--session','s'],capture_output=True)
+    assert run.returncode==0 and run.stdout==raw
+    assert not cap.exists()
+
+def test_purge_removes_stored_captures(tmp_path,monkeypatch):
+    """fix229-extra A: uninstall --purge must remove stored captures."""
+    import devin_install as d
+    import devin_state as s
+    import devin_compress as c
+    monkeypatch.setenv('HOME',str(tmp_path));d.install()
+    cap=s.prepare_capture()
+    (cap/'stdout').write_bytes(b'kept bytes\n'*100);c.seal_capture(cap,0)
+    d.uninstall();d.uninstall(purge=True)
+    assert not cap.exists()
+    captures=s.data_dir()/'captures'
+    assert not captures.exists() or not any(captures.iterdir())
+
+@pytest.mark.parametrize('marker',['[1,2]','null','42','"str"'])
+def test_wrong_type_prepared_refuses_without_traceback(capture,marker):
+    """fix229-extra B: valid JSON of the wrong type in .prepared is a clean refusal."""
+    import devin_compress as d
+    (capture/'stdout').write_bytes(b'line\n'*500);d.seal_capture(capture,0)
+    p=capture/'.prepared';p.write_bytes(marker.encode());p.chmod(0o600)
+    run=subprocess.run([sys.executable,str(SCRIPTS/'devin_compress.py'),
+                        '--stdout',str(capture/'stdout'),'--stderr',str(capture/'stderr'),
+                        '--exit-code','0','--session','s'],capture_output=True)
+    assert run.returncode==2 and not run.stdout and b'Traceback' not in run.stderr
+
 def test_symlinked_devin_home_names_symlink_as_the_cause(tmp_path,monkeypatch):
     """PR229 finding 10: a symlinked .config must report 'symlink', not 'inside HOME'."""
     import devin_state as s

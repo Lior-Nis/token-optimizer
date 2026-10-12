@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import stat
 import shutil
@@ -288,8 +289,27 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             for name in ('metrics.db', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm', 'consent.json', 'session-salt'):
                 p = state.private_path(state.data_dir() / name)
                 p.unlink(missing_ok=True)
-            print('Purged numeric metrics, SQLite sidecars, consent and HMAC key; original captures retained.')
-    print('Removed owned Devin skill/payload. Original captures unchanged.')
+            captures = state.data_dir() / 'captures'
+            if captures.exists():
+                state.no_symlinks(captures)
+                for folder in captures.iterdir():
+                    if not folder.is_dir() or folder.is_symlink() or not re.fullmatch(r'capture-[0-9a-f]{32}', folder.name):
+                        continue
+                    state.no_symlinks(folder)
+                    # Stored captures may hold credentials; purge removes them.
+                    # Foreign-named content keeps its directory (and itself).
+                    for leaf in ('stdout', 'stderr', '.prepared', 'complete.json'):
+                        target = folder / leaf
+                        state.no_symlinks(target)
+                        target.unlink(missing_ok=True)
+                    try: folder.rmdir()
+                    except OSError: pass
+                try: captures.rmdir()
+                except OSError: pass
+            print('Purged numeric metrics, SQLite sidecars, consent, HMAC key and stored captures.')
+    if not purge:
+        print('Original captures unchanged.')
+    print('Removed owned Devin skill/payload.')
 
 
 def main(argv=None) -> int:
