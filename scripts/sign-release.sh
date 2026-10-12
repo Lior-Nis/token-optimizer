@@ -54,6 +54,7 @@ fi
 
 git -C "$REPO_ROOT" ls-files \
     install.sh \
+    devin/SKILL.md \
     hooks/ \
     skills/ \
     .claude-plugin/ \

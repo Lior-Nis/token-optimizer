@@ -6,6 +6,7 @@
 - Session health only flags a session as outdated when its version is really older than the installed one.
 - Doctor and the Hooks tab now recognise the hooks that plugin installs ship, so Smart Compaction and Session Tracking show as on.
 - The desktop status bar finds Python on Windows machines where the Store alias reports a shortened exit code.
+- New for Devin CLI: an optional skill you trigger yourself that shrinks large command output, with the original kept privately on your machine and recoverable. No automatic hooks, no permission changes.
 
 ## [5.13.38] - 2026-10-12
 

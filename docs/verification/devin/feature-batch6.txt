@@ -1,0 +1,250 @@
+........................................................................ [  8%]
+..................................................................ss.... [ 17%]
+........................................................................ [ 26%]
+.....................................................FF................. [ 35%]
+........................................................................ [ 44%]
+........................................................................ [ 53%]
+........................................................................ [ 62%]
+......................sssss............................................. [ 71%]
+........................................................................ [ 80%]
+........................................................................ [ 89%]
+.............................................................FF.F..F.... [ 98%]
+....FFF.......                                                           [100%]
+=================================== FAILURES ===================================
+_______________ test_setup_daemon_uninstall_still_removes_plist ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_setup_daemon_uninstall_st0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f152b050>
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="launchd plist / os.getuid is POSIX/macOS-only; Windows uninstall uses Task Scheduler")
+    def test_setup_daemon_uninstall_still_removes_plist(tmp_path, monkeypatch):
+        """Non-negotiable: an explicit ``setup_daemon --uninstall`` still fully
+        removes the daemon plist + per-identity files. The req-1 protection lives
+        in the reconcile classification only; the sweep path is untouched."""
+        import importlib
+        import tempfile
+        launch_agents = tmp_path / "Library" / "LaunchAgents"
+        launch_agents.mkdir(parents=True)
+        plist = launch_agents / "com.token-optimizer.dashboard.plist"
+        plist.write_text("<plist/>", encoding="utf-8")
+
+        snap = tempfile.mkdtemp(prefix="to-uninstall-protect-")
+        monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", snap)
+        if "measure" in sys.modules:
+            del sys.modules["measure"]
+        mod = importlib.import_module("measure")
+        importlib.reload(mod)
+        monkeypatch.setattr(mod, "PLIST_PATH", plist)
+        monkeypatch.setattr(mod, "LAUNCH_AGENTS_DIR", launch_agents)
+        monkeypatch.setattr(mod, "_normalized_platform", lambda: "Darwin")
+        # Make launchctl a no-op so the uninstall doesn't depend on the host.
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Result(0))
+        # No port reclaim / process killing in the test host.
+        monkeypatch.setattr(mod, "_reclaim_daemon_ports", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_reclaim_posix_daemon_port", lambda *a, **k: None)
+        # All launchd paths/process calls are isolated above; bypass only to test
+        # the low-level removal semantics themselves.
+        monkeypatch.setattr(mod, "_daemon_snapshot_sandboxed", lambda: False)
+        # Plant a per-identity daemon file so the sweep has something to remove.
+        (Path(snap) / "dashboard-server.py").write_text("# daemon", encoding="utf-8")
+        (Path(snap) / "daemon-token").write_text("tok", encoding="utf-8")
+
+        mod._uninstall_launchd_daemon(this_install_only=True)
+
+>       assert not plist.exists(), "explicit uninstall must still remove the plist"
+E       AssertionError: explicit uninstall must still remove the plist
+E       assert not True
+E        +  where True = exists()
+E        +    where exists = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_setup_daemon_uninstall_st0/Library/LaunchAgents/com.token-optimizer.dashboard.plist').exists
+
+tests/test_daemon_reconcile_protects_live.py:181: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[Token Optimizer] Dashboard daemon removed.
+  Deleted: /tmp/to-uninstall-protect-vnjwjien/dashboard-server.py
+  Deleted: /tmp/to-uninstall-protect-vnjwjien/daemon-token
+___ test_sidechain_marker_is_first_prompt_only_and_nested_paths_are_explicit ___
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_sidechain_marker_is_first0')
+
+    def test_sidechain_marker_is_first_prompt_only_and_nested_paths_are_explicit(measure, tmp_path):
+        """A later echoed marker is not a delegation, while an agent path is."""
+        watcher = _write_jsonl(
+            tmp_path / "watcher.jsonl",
+            [_user("watch the delegate"), _tool_result("OSRC::PROGRESS#abc running") , _user("OSRC::DONE#abc echoed")],
+        )
+        parsed = measure._parse_session_jsonl(watcher)
+>       assert parsed["is_sidechain"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_dashboard_data.py:53: TypeError
+_________ test_collector_refreshes_growing_session_without_duplicating _________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f0b52ae0>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_collector_refreshes_growi0')
+
+    def test_collector_refreshes_growing_session_without_duplicating(measure, monkeypatch, tmp_path):
+        p = tmp_path / 'growing.jsonl'
+        p.write_text(json.dumps(_turn('one', '2026-09-04T00:00:00Z'))+'\n')
+        monkeypatch.setattr(measure, '_find_all_jsonl_files', lambda days: [(p, p.stat().st_mtime, 'test')])
+        monkeypatch.setattr(measure, '_find_subagent_jsonl_files', lambda p: [])
+        measure.collect_sessions(quiet=True)
+        with p.open('a') as f:
+            f.write(json.dumps(_turn('two', '2026-09-04T00:01:00Z'))+'\n')
+        measure.collect_sessions(quiet=True)
+        c = sqlite3.connect(measure.TRENDS_DB)
+>       assert c.execute('SELECT count(*), sum(api_calls) FROM session_log').fetchone() == (1, 2)
+E       assert (0, None) == (1, 2)
+E
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/test_weekly_full_savings.py:27: AssertionError
+______ test_window_parser_excludes_outside_activity_and_dedups_streaming _______
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_window_parser_excludes_ou0')
+
+    def test_window_parser_excludes_outside_activity_and_dedups_streaming(measure, tmp_path):
+        p = tmp_path / 'cross-reset.jsonl'
+        rows = [_turn('before', '2026-09-03T16:59:00Z'),
+                _turn('inside', '2026-09-03T17:01:00Z', output=2),
+                _turn('inside', '2026-09-03T17:01:01Z', output=10),
+                _turn('after', '2026-09-10T17:00:00Z')]
+        p.write_text('\n'.join(map(json.dumps, rows)))
+        start = datetime(2026, 9, 3, 17, tzinfo=timezone.utc)
+        end = start + timedelta(days=7)
+        parsed = measure._parse_session_jsonl(p, window_start=start, window_end=end)
+>       assert parsed['api_calls'] == 1
+               ^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_weekly_full_savings.py:43: TypeError
+________ test_activity_window_uses_grown_old_session_and_includes_child ________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f09bb1d0>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_activity_window_uses_grow0')
+
+    def test_activity_window_uses_grown_old_session_and_includes_child(measure, monkeypatch, tmp_path):
+        parent, child = tmp_path / 'parent.jsonl', tmp_path / 'child.jsonl'
+        parent.write_text('\n'.join(map(json.dumps, [
+            _turn('before', '2026-09-03T16:59:00Z', input_tokens=999999),
+            _turn('inside', '2026-09-03T17:01:00Z'),
+            _turn('after', '2026-09-10T17:00:00Z', input_tokens=999999)])))
+        child.write_text(json.dumps(_turn('child', '2026-09-03T17:02:00Z', input_tokens=500)))
+        monkeypatch.setattr(measure, '_find_subagent_jsonl_files', lambda p: [child] if str(p)==str(parent) else [])
+        c=measure._init_trends_db()
+        c.execute("INSERT INTO session_log (jsonl_path,date,input_tokens,output_tokens,api_calls) VALUES (?,?,?,?,?)", (str(parent),'2026-08-01',1,0,1))
+        c.commit()
+        start=datetime(2026,9,3,17,tzinfo=timezone.utc)
+        result=measure._price_parent_activity_window(c,start,start+timedelta(days=7),'anthropic')
+        c.close()
+>       assert result['api_calls']==1
+               ^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_weekly_full_savings.py:75: TypeError
+________ test_child_growth_refresh_does_not_double_count_cached_parent _________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f0b447a0>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_child_growth_refresh_does0')
+
+    def test_child_growth_refresh_does_not_double_count_cached_parent(measure, monkeypatch, tmp_path):
+        parent, child=tmp_path/'main.jsonl',tmp_path/'child.jsonl'
+        parent.write_text(json.dumps(_turn('parent','2026-09-04T00:00:00Z'))+'\n')
+        child.write_text(json.dumps(_turn('child1','2026-09-04T00:00:01Z'))+'\n')
+        monkeypatch.setattr(measure,'_find_all_jsonl_files',lambda days:[(parent,parent.stat().st_mtime,'test')])
+        monkeypatch.setattr(measure,'_find_subagent_jsonl_files',lambda p:[child] if str(p)==str(parent) else [])
+        measure.collect_sessions(quiet=True)
+        with child.open('a') as f:
+            f.write(json.dumps(_turn('child2','2026-09-04T00:00:02Z'))+'\n')
+        measure.collect_sessions(quiet=True)
+        c=sqlite3.connect(measure.TRENDS_DB)
+>       assert c.execute('SELECT count(*),sum(input_tokens),sum(api_calls) FROM session_log').fetchone()==(1,3000,1)
+E       assert (0, None, None) == (1, 3000, 1)
+E
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/test_weekly_full_savings.py:125: AssertionError
+__________________ test_new_uncollected_activity_is_included ___________________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f0b4a3f0>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_new_uncollected_activity_0')
+
+    def test_new_uncollected_activity_is_included(measure, monkeypatch, tmp_path):
+        p = tmp_path / 'uncollected.jsonl'
+        p.write_text(json.dumps(_turn('new', '2026-09-04T00:00:00Z')))
+        monkeypatch.setattr(measure, '_find_all_jsonl_files', lambda days: [(p, p.stat().st_mtime, 'test')])
+        monkeypatch.setattr(measure, '_find_subagent_jsonl_files', lambda p: [])
+        conn = measure._init_trends_db()
+        start = datetime(2026, 9, 3, tzinfo=timezone.utc)
+        result = measure._price_parent_activity_window(conn, start, start+timedelta(days=7), 'anthropic')
+        conn.close()
+>       assert result['api_calls'] == 1
+               ^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_weekly_full_savings.py:214: TypeError
+___________ test_child_activity_after_parent_stops_is_still_charged ____________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f09e9b80>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_child_activity_after_pare0')
+
+    def test_child_activity_after_parent_stops_is_still_charged(measure, monkeypatch, tmp_path):
+        parent, child = tmp_path/'parent.jsonl', tmp_path/'child.jsonl'
+        parent.write_text(json.dumps(_turn('parent', '2026-09-02T00:00:00Z')))
+        child.write_text(json.dumps(_turn('child', '2026-09-04T00:00:00Z')))
+        monkeypatch.setattr(measure, '_find_subagent_jsonl_files', lambda p: [child])
+        conn = measure._init_trends_db()
+        conn.execute('INSERT INTO session_log (jsonl_path,date,input_tokens,api_calls) VALUES (?,?,?,?)',
+                     (str(parent), '2026-09-02', 1000, 1))
+        conn.commit()
+        start = datetime(2026, 9, 3, tzinfo=timezone.utc)
+        result = measure._price_parent_activity_window(conn, start, start+timedelta(days=7), 'anthropic')
+        conn.close()
+>       assert result['api_calls'] == 0  # preserve the existing parent work unit
+               ^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_weekly_full_savings.py:230: TypeError
+_______________ test_older_collector_cannot_overwrite_newer_row ________________
+
+measure = <module 'measure' from '<checkout>/skills/token-optimizer/scripts/measure.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f72f0b31910>
+tmp_path = PosixPath('/tmp/pytest-of-sandbox/pytest-31/test_older_collector_cannot_ov0')
+
+    def test_older_collector_cannot_overwrite_newer_row(measure, monkeypatch, tmp_path):
+        p = tmp_path / 'concurrent.jsonl'
+        p.write_text(json.dumps(_turn('one', '2026-09-04T00:00:00Z')))
+        monkeypatch.setattr(measure, '_find_all_jsonl_files', lambda days: [(p, p.stat().st_mtime, 'test')])
+        monkeypatch.setattr(measure, '_find_subagent_jsonl_files', lambda p: [])
+        measure.collect_sessions(quiet=True)
+        conn = measure._init_trends_db()
+        conn.execute('UPDATE session_log SET collected_at=?,api_calls=2',
+                     ((datetime.now()+timedelta(seconds=30)).isoformat(),))
+        conn.commit()
+        monkeypatch.setattr(measure, '_is_file_collected', lambda *a, **kw: False)
+        measure.collect_sessions(quiet=True)
+>       assert conn.execute('SELECT api_calls FROM session_log').fetchone()[0] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+tests/test_weekly_full_savings.py:246: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_daemon_reconcile_protects_live.py::test_setup_daemon_uninstall_still_removes_plist
+FAILED tests/test_dashboard_data.py::test_sidechain_marker_is_first_prompt_only_and_nested_paths_are_explicit
+FAILED tests/test_weekly_full_savings.py::test_collector_refreshes_growing_session_without_duplicating
+FAILED tests/test_weekly_full_savings.py::test_window_parser_excludes_outside_activity_and_dedups_streaming
+FAILED tests/test_weekly_full_savings.py::test_activity_window_uses_grown_old_session_and_includes_child
+FAILED tests/test_weekly_full_savings.py::test_child_growth_refresh_does_not_double_count_cached_parent
+FAILED tests/test_weekly_full_savings.py::test_new_uncollected_activity_is_included
+FAILED tests/test_weekly_full_savings.py::test_child_activity_after_parent_stops_is_still_charged
+FAILED tests/test_weekly_full_savings.py::test_older_collector_cannot_overwrite_newer_row
+9 failed, 790 passed, 7 skipped in 47.93s
