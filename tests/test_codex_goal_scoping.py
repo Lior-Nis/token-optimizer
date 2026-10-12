@@ -617,6 +617,10 @@ def test_memory_overhead_scoped_to_invoking_thread_never_other_threads(capsys):
         assert "Memory overhead: unresolved" in capsys.readouterr().out
         # Resolved: only the caller's rows.
         os.environ["CODEX_THREAD_ID"] = "caller-A"
+        measure.codex_state_report()
+        out = capsys.readouterr().out
+        assert "Memory overhead: 100 tokens across 1 thread(s)" in out
+        assert "2,000" not in out and "2000" not in out
         m = measure._codex_state_summary()["memory"]
         assert m["thread_count"] == 1
         assert [r["thread_id"] for r in m["by_thread"]] == ["caller-A"]
@@ -661,6 +665,25 @@ def test_exact_resolver_deterministic_and_not_capped_by_file_count():
             json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n",
             encoding="utf-8")
         assert codex_session.find_session_jsonl_exact("caller-A").name == "zz-caller-A-real.jsonl"
+
+
+def test_exact_resolver_tiebreak_newest_mtime_then_path_and_stem_fallback():
+    with _CodexHome() as home:
+        sess = home / "sessions"
+        def write(name, meta=True, mtime=None):
+            f = sess / name
+            f.write_text((json.dumps({"type": "session_meta", "payload": {"id": "caller-A", "cwd": "/tmp"}}) + "\n") if meta else "not json\n", encoding="utf-8")
+            if mtime:
+                os.utime(f, (mtime, mtime))
+        write("b-caller-A.jsonl", mtime=1_700_000_000)
+        write("a-caller-A.jsonl", mtime=1_700_000_000)   # same mtime: path order wins
+        for _ in range(3):
+            assert codex_session.find_session_jsonl_exact("caller-A").name == "a-caller-A.jsonl"
+        write("c-caller-A.jsonl", mtime=1_800_000_000)   # newer mtime wins
+        assert codex_session.find_session_jsonl_exact("caller-A").name == "c-caller-A.jsonl"
+    with _CodexHome() as home:
+        (home / "sessions" / "caller-A.jsonl").write_text("not json\n", encoding="utf-8")
+        assert codex_session.find_session_jsonl_exact("caller-A").name == "caller-A.jsonl"  # no meta: exact stem
 
 
 def test_exact_resolver_ignores_symlinks():

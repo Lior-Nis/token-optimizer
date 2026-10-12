@@ -6092,6 +6092,9 @@ def _codex_state_summary():
     if current_tid:
         subagents = codex_state.subagent_costs(root_thread_id=current_tid)
         goals = codex_state.goal_budgets(root_thread_id=current_tid)
+        # Memory rows are keyed per thread and are measured for the invoking
+        # thread only (its own injected memory), whereas subagent and goal
+        # totals roll up the invoking thread's spawn subtree.
         memory = codex_state.memory_overhead(root_thread_id=current_tid)
     else:
         subagents = {**codex_state._empty_subagents(), "unresolved": True}
