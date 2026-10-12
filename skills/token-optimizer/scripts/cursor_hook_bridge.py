@@ -714,7 +714,9 @@ def handle_pre_tool_use(payload):
     if fields["tool_name"] == "Shell" and _compression_enabled():
         command = fields["tool_args"].get("command")
         if isinstance(command, str) and command:
-            if not _bash_hook._has_dangerous_chars(command) and _bash_hook._is_whitelisted(command):
+            # The rewrite is emitted with permission "allow", so it is limited
+            # to commands that cannot write, delete or run other programs.
+            if _bash_hook._is_auto_approvable(command):
                 try:
                     original_tokens = shlex.split(command)
                 except ValueError:

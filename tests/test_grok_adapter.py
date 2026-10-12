@@ -298,7 +298,8 @@ def test_pre_tool_use_emits_rewrite_contract(gb, monkeypatch, capsys):
     monkeypatch.setattr(
         gb, "_bash_hook",
         types.SimpleNamespace(_has_dangerous_chars=lambda c: False,
-                              _is_whitelisted=lambda c: True),
+                              _is_whitelisted=lambda c: True,
+                              _is_auto_approvable=lambda c: True),
     )
     payload = {
         "hook_event_name": "PreToolUse",

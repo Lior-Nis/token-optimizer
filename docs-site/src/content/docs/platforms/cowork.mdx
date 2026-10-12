@@ -64,7 +64,7 @@ Because Cowork runs the full engine and the four retained events carry the featu
 - Quality scoring and the per-prompt quality-cache warn
 - Prompt-continuity hint and lean-output verbosity steering
 - Read cache, delta read, and structure-map substitution (via `read_cache` on the Read `PreToolUse` hook)
-- Bash output compression (via `bash_hook` on the Bash `PreToolUse` hook)
+- Bash output compression (after the command runs, on the `PostToolUse` hook)
 - Checkpoint capture on subagent dispatch and MCP refetch guarding
 - Large-result archiving on `PostToolUse`
 - Session-continuity capture on `Stop`

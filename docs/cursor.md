@@ -81,8 +81,10 @@ If a hook field upstream changes, the evidence is on disk, and
 | `sessionEnd` | finalise tally + unthrottled rollup/dashboard | none |
 
 The bridge always exits 0 and never blocks a Cursor session. The `Shell`
-rewrite inherits `bash_hook.py`'s whitelist and dangerous-character exclusions
-and **fails closed** (emits nothing) on any uncertainty.
+rewrite is limited to inspection commands that cannot write, delete or run
+other programs (`ls`, `git status`, `git log`, `rg`, `grep`, `wc`, `du`, `df`,
+`tail`, `tree`), because Cursor approves a rewritten command. It **fails
+closed** (emits nothing) on any uncertainty.
 
 ### Honest gaps
 
