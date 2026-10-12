@@ -294,6 +294,14 @@ def invoking_thread_id() -> str | None:
     return raw if _THREAD_ID_RE.fullmatch(raw) else None
 
 
+def thread_identity_status() -> str:
+    """``"ok"``, ``"absent"`` (CODEX_THREAD_ID unset/empty) or ``"invalid"``."""
+    raw = os.environ.get(_THREAD_ID_ENV, "").strip()
+    if not raw:
+        return "absent"
+    return "ok" if _THREAD_ID_RE.fullmatch(raw) else "invalid"
+
+
 def current_thread_id() -> str | None:
     """Resolve the invoking Codex thread id.
 

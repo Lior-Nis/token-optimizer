@@ -6076,22 +6076,28 @@ def _codex_state_summary():
     """
     if detect_runtime() != "codex":
         return None
-    # Resolve the active thread id ONCE from the state DB and scope every
-    # Codex-state metric to its goal subtree. Without this, subagent_costs and
-    # goal_budgets aggregate EVERY spawn edge/goal in the DB (including closed
-    # historical ones from unrelated prior work), inflating totals and letting
-    # `quality current` pick a stale session. Fail-open: a None
-    # resolution falls back to the legacy whole-DB aggregation.
+    # Resolve the invoking thread id ONCE (CODEX_THREAD_ID) and scope every
+    # thread-specific Codex-state metric to its goal subtree. When the identity
+    # is unresolved, do NOT fall back to the whole-DB aggregation: that would
+    # present other threads' tokens and goals as the current thread's. Report
+    # an explicit unresolved state instead.
     try:
         current_tid = codex_state.current_thread_id()
     except Exception:
         current_tid = None
+    if current_tid:
+        subagents = codex_state.subagent_costs(root_thread_id=current_tid)
+        goals = codex_state.goal_budgets(root_thread_id=current_tid)
+    else:
+        subagents = {**codex_state._empty_subagents(), "unresolved": True}
+        goals = {**codex_state._empty_goals(), "unresolved": True}
     summary = {
-        "subagents": codex_state.subagent_costs(root_thread_id=current_tid),
+        "subagents": subagents,
         "memory": codex_state.memory_overhead(),
-        "goals": codex_state.goal_budgets(root_thread_id=current_tid),
+        "goals": goals,
         "selected_thread_id": current_tid,
         "thread_resolution": "invoking" if current_tid else "unresolved",
+        "thread_identity_status": codex_state.thread_identity_status(),
         "rate_limits": None,
         "effort": None,
         "compaction": None,
@@ -6099,7 +6105,8 @@ def _codex_state_summary():
     import codex_models
     summary['available_models'] = codex_models.visible_models()
     try:
-        current = codex_session.find_current_session_jsonl()
+        # Session signals follow the same identity: never the newest-mtime file.
+        current = codex_session.find_session_jsonl_by_id(current_tid) if current_tid else None
         if current:
             session = codex_session.parse_session_jsonl(current)
             if session:
@@ -6136,8 +6143,14 @@ def codex_state_report(as_json=False):
     print("\nToken Optimizer - Codex Runtime State")
     print("=" * 38)
 
+    if summary.get("thread_resolution") == "unresolved":
+        print(f"\nCurrent thread: unresolved ({_codex_identity_reason()}). "
+              "Thread-scoped subagent and goal totals are not shown.")
+
     sub = summary["subagents"]
-    if sub.get("available"):
+    if sub.get("unresolved"):
+        print("\nSubagents: unresolved (no invoking thread id)")
+    elif sub.get("available"):
         print(f"\nSubagents: {sub['total_subagents']} total "
               f"({sub['open_subagents']} open, {sub['closed_subagents']} closed, "
               f"{sub['leaked_subagents']} leaked)")
@@ -6156,7 +6169,9 @@ def codex_state_report(as_json=False):
         print("\nMemory overhead: none recorded")
 
     goals = summary["goals"]
-    if goals.get("available") and goals["total_goals"]:
+    if goals.get("unresolved"):
+        print("\nGoals: unresolved (no invoking thread id)")
+    elif goals.get("available") and goals["total_goals"]:
         print(f"\nGoals: {goals['total_goals']} ({goals['active_goals']} active)")
         if goals["budget_limited"] or goals["usage_limited"] or goals["over_budget"]:
             print(f"  ! {goals['budget_limited']} budget-limited, {goals['usage_limited']} usage-limited, "
@@ -36172,6 +36187,14 @@ def compute_quality_score(quality_data, session_id=None):
     }
 
 
+def _codex_identity_reason():
+    """Human reason the invoking Codex thread id is unavailable."""
+    status = codex_state.thread_identity_status()
+    if status == "invalid":
+        return "CODEX_THREAD_ID is set but not a valid thread id"
+    return "CODEX_THREAD_ID is not set"
+
+
 def _codex_identity_unresolved():
     """True on the Codex adapter when the invoking thread id is unavailable."""
     if not _use_codex_session_adapter():
@@ -36306,10 +36329,22 @@ def quality_analyzer(session_id=None, as_json=False):
         filepath = _find_current_session_jsonl(require_identity=True)
 
     if not filepath and (not session_id or session_id == "current") and _codex_identity_unresolved():
-        msg = ("Could not resolve the current Codex thread (CODEX_THREAD_ID is not set). "
+        msg = (f"Could not resolve the current Codex thread ({_codex_identity_reason()}). "
                "Pass a session id explicitly instead of guessing the newest session.")
         if as_json:
             print(json.dumps({"error": msg, "thread_resolution": "unresolved"}))
+        else:
+            print(f"[Token Optimizer] {msg}")
+        return None
+
+    if not filepath and (not session_id or session_id == "current") and _use_codex_session_adapter():
+        # Identity resolved but its transcript was not found. Say so for the
+        # caller's thread; never substitute another thread's session.
+        tid = codex_state.current_thread_id()
+        msg = (f"No transcript found for the current Codex thread ({tid}). "
+               "Pass a session id explicitly if it lives elsewhere.")
+        if as_json:
+            print(json.dumps({"error": msg, "thread_resolution": "invoking", "selected_thread_id": tid}))
         else:
             print(f"[Token Optimizer] {msg}")
         return None

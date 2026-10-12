@@ -496,6 +496,64 @@ def test_quality_analyzer_current_reports_unresolved_json(capsys):
         out = json.loads(capsys.readouterr().out)
         assert out["thread_resolution"] == "unresolved"
         assert "other-B" not in json.dumps(out)
+        assert "is not set" in out["error"]
+        os.environ["CODEX_THREAD_ID"] = "a b"
+        assert measure.quality_analyzer(as_json=True) is None
+        assert "not a valid thread id" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_summary_unresolved_identity_shows_no_other_thread_totals(capsys):
+    """P1: no identity must not fall back to whole-DB totals in summary/report."""
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("other-B", 5, 200), ("other-child", 98765, 201)],
+            edges=[("other-B", "other-child", "open")],
+        )
+        _make_goals_db(home, [("other-B", "someone else's goal", "active", 1000, 10)])
+        summary = measure._codex_state_summary()
+        assert summary["thread_resolution"] == "unresolved"
+        assert summary["subagents"]["total_child_tokens"] == 0
+        assert summary["subagents"]["unresolved"] is True
+        assert summary["goals"]["total_goals"] == 0
+        assert summary["goals"]["unresolved"] is True
+        measure.codex_state_report()
+        out = capsys.readouterr().out
+        assert "98,765" not in out
+        assert "unresolved" in out
+        assert "CODEX_THREAD_ID is not set" in out
+        os.environ["CODEX_THREAD_ID"] = "a b"
+        measure.codex_state_report()
+        assert "not a valid thread id" in capsys.readouterr().out
+
+
+def test_summary_resolved_identity_still_scopes_to_subtree():
+    with _CodexHome() as home:
+        _make_state_db(
+            home,
+            threads=[("caller-A", 5, 100), ("child-A1", 70, 101), ("other-B", 5, 200), ("other-child", 98765, 201)],
+            edges=[("caller-A", "child-A1", "open"), ("other-B", "other-child", "open")],
+        )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        summary = measure._codex_state_summary()
+        assert summary["thread_resolution"] == "invoking"
+        assert summary["subagents"]["total_child_tokens"] == 70
+
+
+def test_quality_analyzer_missing_transcript_names_caller_thread(capsys):
+    """P2: resolved id without a transcript -> Codex-specific error, no fallback."""
+    with _CodexHome() as home:
+        _make_state_db(home, threads=[("other-B", 5, 200)], edges=[])
+        (home / "sessions" / "other-B.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "other-B", "cwd": "/tmp"}}) + "\n",
+            encoding="utf-8",
+        )
+        os.environ["CODEX_THREAD_ID"] = "caller-A"
+        assert measure.quality_analyzer(as_json=True) is None
+        out = json.loads(capsys.readouterr().out)
+        assert "caller-A" in out["error"]
+        assert "Claude" not in out["error"]
+        assert out["thread_resolution"] == "invoking"
 
 
 def test_codex_summary_reports_selected_thread_from_identity():
