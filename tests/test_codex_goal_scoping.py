@@ -1158,4 +1158,5 @@ def test_dashboard_codex_component_title_and_unavailable_subtitle():
         assert ("if (mr && !mr.error && mr.codex) {\n      healthCardsHtml += codexMemCardHtml(mr, fn);\n"
                 "    } else if (mr && !mr.error) {") in html
         assert "No Codex local memory files detected" not in html
-        assert "Codex state database not found or unreadable" in html
+        assert ("(isCodex ? 'Codex state database not found or unreadable (legacy memory files are not counted)'"
+                " : 'Not configured. Auto-memory is off or no project match.')") in html
