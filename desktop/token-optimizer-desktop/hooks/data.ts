@@ -52,6 +52,8 @@ export const PYTHON_LAUNCHERS: readonly (readonly string[])[] = [['python3'], ['
 
 /** Windows' "app execution alias" stub for a missing python exits with this. */
 const WINDOWS_NOT_FOUND = 9009
+// Some Bun Windows runtimes expose only the low byte of the process exit code.
+const WINDOWS_NOT_FOUND_LOW_BYTE = WINDOWS_NOT_FOUND & 0xff
 
 let launcherIndex = 0
 
@@ -256,7 +258,16 @@ export async function runMeasure(
     try {
       const result = await io.run(measureArgv(root, args, PYTHON_LAUNCHERS[i]), init)
 
-      if (result.exitCode === WINDOWS_NOT_FOUND && i < PYTHON_LAUNCHERS.length - 1) {
+      const windowsRoot = /^[A-Za-z]:[\\/]/.test(root.scriptsDir) || root.scriptsDir.startsWith('\\\\')
+      // A real exit 49 repeating both alias diagnostics is indistinguishable here.
+      const storeAliasMissing = result.exitCode === WINDOWS_NOT_FOUND_LOW_BYTE
+        && windowsRoot
+        && (PYTHON_LAUNCHERS[i]?.[0] === 'python3' || PYTHON_LAUNCHERS[i]?.[0] === 'python')
+        && result.stdout.trim() === ''
+        && /Python was not found/i.test(result.stderr ?? '')
+        && /Microsoft Store|App execution aliases/i.test(result.stderr ?? '')
+
+      if ((result.exitCode === WINDOWS_NOT_FOUND || storeAliasMissing) && i < PYTHON_LAUNCHERS.length - 1) {
         lastError = new Error('python launcher not found')
         continue
       }
