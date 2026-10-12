@@ -12,6 +12,7 @@ import {
   mergeStored,
   readQuality,
   resetLauncher,
+  runMeasure,
   shouldReset,
   type DataIo,
 } from '../../hooks/data.ts'
@@ -461,4 +462,85 @@ test('an older Token Optimizer that reports no compact window changes nothing', 
   assert.equal(got.compactWindow, null)
   assert.equal(got.contextWindow, 1_000_000)
   assert.equal(got.contextPercent, 20)
+})
+
+const WINDOWS_SCRIPTS = 'C:\\Users\\me\\.claude\\skills\\token-optimizer\\scripts'
+const STORE_MISSING = 'Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.'
+
+for (const exitCode of [9009, 49]) {
+  test(`Windows missing-Python result ${exitCode} falls back and remembers the working launcher`, async () => {
+    resetLauncher()
+    const w = world()
+    const io = fakeIo(w)
+    io.run = async (argv, init) => {
+      w.runs.push({ argv, timeoutMs: init.timeoutMs })
+      return argv[0] === 'python3'
+        ? { exitCode, stdout: '', stderr: STORE_MISSING }
+        : { exitCode: 0, stdout: STATUS }
+    }
+    const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
+    assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
+    w.runs = []
+    await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })
+    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python'])
+    resetLauncher()
+  })
+}
+
+for (const scenario of [
+  { name: 'POSIX root', scriptsDir: SCRIPTS, stdout: '', stderr: STORE_MISSING },
+  { name: 'ordinary script error', scriptsDir: WINDOWS_SCRIPTS, stdout: '', stderr: 'measurement failed' },
+  { name: 'ambiguous Python not found', scriptsDir: WINDOWS_SCRIPTS, stdout: '', stderr: 'Python was not found in configuration' },
+  { name: 'command already produced output', scriptsDir: WINDOWS_SCRIPTS, stdout: STATUS, stderr: STORE_MISSING },
+]) {
+  test(`exit 49 is not retried for ${scenario.name}`, async () => {
+    resetLauncher()
+    const w = world()
+    const io = fakeIo(w)
+    io.run = async (argv, init) => {
+      w.runs.push({ argv, timeoutMs: init.timeoutMs })
+      return { exitCode: 49, stdout: scenario.stdout, stderr: scenario.stderr }
+    }
+    assert.equal((await runMeasure(io, { scriptsDir: scenario.scriptsDir, runner: null }, ['status-bar'], { timeoutMs: 1000 })).exitCode, 49)
+    assert.equal(w.runs.length, 1)
+    resetLauncher()
+  })
+}
+
+test('a real script exit 305 is not treated as a low-byte missing-Python result', async () => {
+  resetLauncher()
+  const w = world()
+  const io = fakeIo(w)
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    return { exitCode: 305, stdout: '', stderr: STORE_MISSING }
+  }
+  assert.equal((await runMeasure(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, ['status-bar'], { timeoutMs: 1000 })).exitCode, 305)
+  assert.equal(w.runs.length, 1)
+  resetLauncher()
+})
+
+test('both Store aliases exit 49 before py -3 works, without treating py itself as an alias', async () => {
+  resetLauncher()
+  const w = world()
+  const io = fakeIo(w)
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    return argv[0] === 'py' ? { exitCode: 0, stdout: STATUS }
+      : { exitCode: 49, stdout: '', stderr: STORE_MISSING }
+  }
+  const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
+  assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+  assert.deepEqual(w.runs.map(r => r.argv.slice(0, 2)), [
+    ['python3', `${WINDOWS_SCRIPTS}/measure.py`], ['python', `${WINDOWS_SCRIPTS}/measure.py`], ['py', '-3'],
+  ])
+  w.runs = []
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    return { exitCode: 49, stdout: '', stderr: STORE_MISSING }
+  }
+  assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 49)
+  assert.deepEqual(w.runs.map(r => r.argv[0]), ['py'])
+  resetLauncher()
 })
