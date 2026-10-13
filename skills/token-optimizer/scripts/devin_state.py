@@ -82,7 +82,7 @@ def private_dir(path: Path) -> Path:
     for ancestor in (cursor, *cursor.parents):
         info = ancestor.lstat()
         if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
-            raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor))
+            raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor) + ' (chmod go-w it, or set its sticky bit)')
     for folder in reversed(missing):
         folder.mkdir(mode=0o700)
     return path

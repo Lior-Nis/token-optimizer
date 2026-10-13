@@ -52,5 +52,9 @@ def verify_install():
         content=path.read_bytes()
         if hashlib.sha256(content).hexdigest()!=digest:raise OSError('installed payload missing or changed')
         if path.suffix=='.py':compile(content,str(path),'exec')
+    # Name an unsafe data directory or consent file before reporting consent
+    # as missing: the record may be present and merely unreadable by policy.
+    state.private_path(state.data_dir(),directory=True)
+    state.private_path(state.data_dir()/'consent.json')
     if not state.consent_ok():raise OSError('missing local data consent')
     return True

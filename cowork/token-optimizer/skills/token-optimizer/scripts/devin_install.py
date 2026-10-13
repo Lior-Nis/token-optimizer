@@ -164,11 +164,23 @@ def _ownership(*, allow_missing=False) -> dict | None:
 
 
 def _ownership_for_removal(*, purge: bool):
-    """Purge tolerates a manifest this version cannot map or read; a digest
-    mismatch still refuses, exactly like a plain uninstall."""
+    """Purge tolerates a manifest this version cannot map or read. A digest
+    mismatch still refuses, exactly like a plain uninstall, unless every
+    mismatching file holds bytes the adapter itself wrote (an interrupted
+    refresh): those are not user edits, and the purge sweep removes them."""
     try:
         return _ownership(allow_missing=True)
     except _EditedInstall:
+        if not purge:
+            raise
+        edited = _user_edited_file()
+        if edited is None:
+            return None
+        if edited:
+            # Name the file the user changed, not an interrupted-refresh leaf.
+            raise _EditedInstall('installed file changed; refusing overwrite/removal: ' + edited +
+                                 '; to remove the adapter anyway move ' + str(state.data_dir()) +
+                                 ' and ' + str(skill_dir()) + ' aside first') from None
         raise
     except (OSError, ValueError, RecursionError):
         if not purge:
@@ -196,11 +208,40 @@ def _purge_record_bytes(path):
             os.close(fd)
 
 
+def _user_edited_file():
+    """None when every installed file that differs from the manifest carries a
+    digest a transaction record or this checkout produced (an interrupted
+    refresh, not an edit). Otherwise the first file with an unknown digest, or
+    '' when that cannot be determined; either keeps the refusal."""
+    try:
+        record = json.loads(_purge_record_bytes(manifest_path()))
+        files = record['files'] if isinstance(record, dict) else None
+        if not isinstance(files, dict) or not files:
+            return ''
+        recorded, known = _purge_recorded(), _known_payload_digests()
+        for name, digest in files.items():
+            path = Path(name)
+            state.no_symlinks(path)
+            if not path.exists():
+                continue
+            actual = hashlib.sha256(_private_bytes(path)).hexdigest()
+            resolved = str(path.resolve())
+            if actual != digest and actual not in recorded.get(resolved, ()) and actual != known.get(resolved):
+                return name
+        return None
+    except (OSError, ValueError, TypeError, RuntimeError, RecursionError):
+        return ''
+
+
 def _purge_recorded() -> dict:
-    """Best-effort recorded digests for the purge sweep: a well-formed
-    manifest or pending transaction record contributes the digests it
-    committed; anything unreadable yields nothing."""
+    """Best-effort recorded digests for the purge sweep, as path -> set of
+    digests: a well-formed manifest or pending transaction record contributes
+    every digest it committed (the intended new bytes and the previous ones);
+    anything unreadable yields nothing."""
     out = {}
+
+    def _put(name, digest):
+        out.setdefault(str(Path(name).resolve()), set()).add(digest)
 
     def _add(files):
         if not isinstance(files, dict):
@@ -210,7 +251,7 @@ def _purge_recorded() -> dict:
                     or any(c not in '0123456789abcdef' for c in digest)):
                 continue
             try:
-                out[str(Path(name).resolve())] = digest
+                _put(name, digest)
             except (OSError, ValueError, RuntimeError):
                 continue
 
@@ -228,8 +269,7 @@ def _purge_recorded() -> dict:
                 if not isinstance(name, str) or not isinstance(content, str):
                     continue
                 try:
-                    out[str(Path(name).resolve())] = hashlib.sha256(
-                        base64.b64decode(content, validate=True)).hexdigest()
+                    _put(name, hashlib.sha256(base64.b64decode(content, validate=True)).hexdigest())
                 except (OSError, ValueError, RuntimeError):
                     continue
         old_manifest = record.get('previous_manifest')
@@ -416,7 +456,7 @@ def _preflight_ancestors(root, skill):
             if not stat.S_ISDIR(info.st_mode):
                 raise OSError('install ancestor is not a directory: ' + str(ancestor))
             if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
-                raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor))
+                raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor) + ' (chmod go-w it, or set its sticky bit)')
 
 
 
@@ -630,6 +670,9 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             and not skill_dir().exists() and not skill_dir().is_symlink()):
         print('No owned Devin install found.')
         return
+    # The removal lock refuses a group/other-writable ancestor; say so here so
+    # a dry-run predicts it.
+    _preflight_ancestors(root, skill_dir())
     state.private_path(root, directory=True)
     state.private_path(root / 'install.lock')
     if purge:
@@ -719,7 +762,7 @@ def uninstall(*, dry_run=False, purge=False) -> None:
                     except OSError:
                         continue
                     resolved = str(item.resolve())
-                    if recorded.get(resolved) == digest or known.get(resolved) == digest:
+                    if digest in recorded.get(resolved, ()) or known.get(resolved) == digest:
                         try: item.unlink()
                         except OSError: pass
                 try: folder.rmdir()

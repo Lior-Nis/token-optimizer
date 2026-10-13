@@ -203,6 +203,10 @@ def diagnose(probe=False):
     for base in (Path.cwd()/'.devin',Path.cwd()/'.claude'):
         if (base/'skills/token-optimizer-output/SKILL.md').exists():
             warnings.append('Project token-optimizer-output skill can shadow installed global skill: '+str(base))
+    try:
+        state.private_path(root / 'install.lock')
+    except OSError as exc:
+        warnings.append('Install, update and uninstall will refuse until this is fixed: ' + str(exc))
     for message in numeric_errors:
         warnings.append('Numeric estimates will not be recorded: ' + message)
     loader = state.loader_path_info()
