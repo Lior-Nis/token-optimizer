@@ -55,6 +55,9 @@ def loader_path_info() -> dict:
     }
 
 
+NUMERIC_STATE_LEAVES = ('metrics.db', 'session-salt', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm')
+
+
 def data_dir() -> Path:
     return home() / 'token-optimizer'
 
@@ -106,7 +109,8 @@ def private_path(path: Path, *, directory=False, create=False) -> Path:
         if directory != stat.S_ISDIR(info.st_mode):
             raise OSError('unexpected state type: ' + str(path))
         if info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1 and not directory:
-            raise OSError('adapter state must be owner-only: ' + str(path))
+            raise OSError('adapter state must be owner-only: ' + str(path) +
+                          ' (owned by you, ' + ('chmod 700' if directory else 'chmod 600, no extra hard links') + ')')
     return path
 
 
