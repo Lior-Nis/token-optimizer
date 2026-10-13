@@ -215,6 +215,68 @@ def read_capture(path: Path) -> bytes:
     return out if path.name == 'stdout' else err
 
 
+_STATUS_ENTRY = re.compile(
+    r'^(?:modified|new file|deleted|renamed|copied|typechange|unmerged|'
+    r'both (?:modified|added|deleted)|(?:added|deleted) by (?:us|them)):\s'
+    r'|^[MADRCU?!]{1,2}\s')
+
+
+def _looks_like_format(fmt: str, text: str) -> bool:
+    """Cheap strict gate: does this capture really look like <fmt> output?
+
+    Named compressors trust their input. On foreign text a coincidental
+    partial match (a prose line containing "ahead", an indented sentence
+    after a "Changes not staged" mention) collapses a large capture into a
+    few hundred bytes of mislabeled summary. When in doubt, say no: the
+    generic handler is the safe route.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    def majority(hit: int) -> bool:
+        return hit * 2 > len(lines)
+
+    # Header shortcuts are only evidence where the real command prints them:
+    # the first non-empty line. A quoted 'On branch', 'total N' or 'commit
+    # <hash>' appearing mid-document is prose, not a signature.
+    first = lines[0]
+    if fmt == 'git-status':
+        if re.match(r'(?:On branch |HEAD detached|## )', first):
+            return True
+        return majority(sum(
+            1 for line in lines
+            if _STATUS_ENTRY.match(line.lstrip()) or line.lstrip().startswith('?? ')))
+    if fmt == 'git-log':
+        if re.match(r'commit [0-9a-f]{7,40}\b', first):
+            return True
+        return majority(sum(
+            1 for line in lines if re.match(r'^[0-9a-f]{7,40}\s+\S', line)))
+    if fmt == 'listing':
+        if re.match(r'total \d+', first):
+            return True
+        return majority(sum(
+            1 for line in lines if re.match(r'^[-bcdlpsw][-rwxsStT]{9}[+@]?\s', line)))
+    if fmt == 'search':
+        return majority(sum(
+            1 for line in lines if re.match(r'^[^:\s][^:]*:\d+:', line)))
+    if fmt == 'tests':
+        if re.search(r'^=+.*\b(?:passed|failed|error|skipped|deselected|'
+                     r'test session)\b.*=+\s*$', text, re.M):
+            return True
+        return majority(sum(
+            1 for line in lines
+            if re.match(r'^\S+::\S+\s+(?:PASSED|FAILED|ERROR|XFAIL|SKIPPED)\b', line)
+            or re.match(r'^(?:FAILED|ERROR|PASSED)\s+\S+::', line)))
+    if fmt == 'build':
+        if re.search(r'\b(?:error|warning) TS\d+\b', text):
+            return True
+        return majority(sum(
+            1 for line in lines
+            if re.match(r'^\S+\(\d+,\d+\):\s*(?:error|warning)', line)))
+    return False
+
+
 def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
                    session: str, *, record_metrics: bool = True) -> FilterResult:
     if os.name != 'posix' or not consent_ok():
@@ -250,6 +312,12 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
             return FilterResult(raw, b'', 0, 'credential_passthrough')
         from bash_compress import compress
         from token_estimate import estimate_tokens
+        # A named hint only reaches its handler when the capture actually
+        # looks like that command's output; foreign text takes the generic
+        # route. The handlers' loose matches otherwise collapse foreign
+        # output into a mislabeled near-empty summary.
+        if format_hint != 'generic' and not _looks_like_format(format_hint, cleaned):
+            format_hint = 'generic'
         shortened = compress(FORMATS[format_hint], text)
         if 'expand key' in shortened:
             shortened = text

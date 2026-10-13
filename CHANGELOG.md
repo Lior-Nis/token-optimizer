@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.41] - 2026-10-13
+
+- On Devin, a named format hint is now only trusted when the capture actually looks like that command's output; foreign output like `git log` hinted as `git-status` gets the generic treatment instead of collapsing to a few mislabeled lines.
+
 ## [5.13.40] - 2026-10-13
 
 - The Devin output filter now verifies every installed payload file against the install manifest before it can run, and the doctor checks that the whole payload still imports.
