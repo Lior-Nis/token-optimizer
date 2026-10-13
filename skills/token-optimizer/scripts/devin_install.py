@@ -257,7 +257,9 @@ def install(*, dry_run=False) -> None:
             # Extra files are not owned; do not erase or publish over them.
             actual = {str(p) for folder in (skill, root / 'plugin') for p in folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
             if actual != set(owned['files']):
-                raise OSError('unowned files in install destination')
+                stray = sorted(actual - set(owned['files'])) + sorted(set(owned['files']) - actual)
+                raise OSError('unowned files in install destination: ' + ', '.join(stray) +
+                              '; remove them or run uninstall --purge first')
         # Fresh installs roll back only leaves/directories created by this attempt.
         # Refresh retains old bytes and manifest until a complete update succeeds.
         old_bytes={name:Path(name).read_bytes() for name in owned['files']} if owned else {}

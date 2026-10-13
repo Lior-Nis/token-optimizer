@@ -932,3 +932,23 @@ def test_doctor_flags_payload_that_fails_at_import(tmp_path, monkeypatch, capsys
     assert run.returncode == 1, (run.returncode, run.stderr)
     assert result['installed'] is False
     assert 'cannot import' in (result['readiness_error'] or '')
+
+
+def test_unmanifested_artifact_refusal_names_the_file(tmp_path, monkeypatch):
+    """A stray file in the installed payload must be named in the refusal so
+    the user knows what to remove."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    stray = s.data_dir() / 'plugin' / '.DS_Store'
+    stray.write_bytes(b'finder metadata')
+    stray.chmod(0o600)
+    from devin_verify import verify_install
+    try:
+        verify_install()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('stray payload file accepted')
+    assert '.DS_Store' in message and 'remove' in message.lower(), message
