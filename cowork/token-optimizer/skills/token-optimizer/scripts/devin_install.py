@@ -90,6 +90,17 @@ def _clear_pending(path: Path) -> None:
     finally:os.close(fd)
 
 
+def _resolved_keys(files) -> list:
+    """Recorded manifest keys may carry a non-canonical home spelling (for
+    example '..' segments) written before the override was resolved; compare
+    them by where they resolve."""
+    return sorted(str(Path(name).resolve()) for name in files)
+
+
+def _resolved_files(files) -> dict:
+    return {str(Path(name).resolve()): digest for name, digest in files.items()}
+
+
 def _ownership(*, allow_missing=False) -> dict | None:
     p = state.private_path(manifest_path())
     if not p.exists():
@@ -100,8 +111,8 @@ def _ownership(*, allow_missing=False) -> dict | None:
         raise OSError('invalid ownership record')
     expected = {str(state.data_dir() / 'plugin' / name) for name in PAYLOAD} | {str(skill_dir() / 'SKILL.md')}
     legacy = expected - {str(state.data_dir() / 'plugin' / name) for name in ('plugin_env.py', 'refetch_fingerprint.py')}
-    if set(record['files']) not in (expected, legacy):
-        raise OSError('ownership paths do not match this install')
+    if _resolved_keys(record['files']) not in (sorted(expected), sorted(legacy)):
+        raise OSError('ownership paths do not match this install; the manifest was recorded by a different adapter version or home spelling -- run uninstall --purge to discard adapter state')
     for name, digest in record['files'].items():
         if allow_missing and not Path(name).exists():
             state.no_symlinks(Path(name))
@@ -146,27 +157,27 @@ def _recover_pending() -> None:
     value=json.loads(_private_bytes(pending))
     expected={str(state.data_dir()/'plugin'/name) for name in PAYLOAD}|{str(skill_dir()/'SKILL.md')}
     if (not isinstance(value,dict) or value.get('owner')!=MARKER
-            or not isinstance(value.get('files'),dict) or set(value['files'])!=expected):
-        raise OSError('invalid pending install record; manual inspection required')
+            or not isinstance(value.get('files'),dict) or _resolved_keys(value['files'])!=sorted(expected)):
+        raise OSError('invalid pending install record; preserved; run uninstall --purge to discard adapter state')
     # Reconcile published new bytes first: stale pending must not undo a completed update.
     if manifest_path().exists():
         try:
             published=_ownership()
         except OSError:
             published=None
-        if published and published['files']==value['files']:
+        if published and _resolved_files(published['files'])==_resolved_files(value['files']):
             _clear_pending(pending);return
     source=SCRIPTS.parents[2]/'devin/SKILL.md'
     if not source.is_file():raise OSError('pending repair requires original checkout')
     rendered=source.read_text().replace('@PYTHON@',shlex.quote(os.path.realpath(sys.executable))).replace('@FILTER@',shlex.quote(str(state.data_dir()/'plugin/devin_compress.py')))
     current={str(state.data_dir()/'plugin'/name):hashlib.sha256(_render_payload(name)).hexdigest() for name in PAYLOAD}
     current[str(skill_dir()/'SKILL.md')]=hashlib.sha256(rendered.encode()).hexdigest()
-    if value['files']!=current:
-        raise OSError('pending version/content ambiguous; preserved; use documented manual repair')
+    if _resolved_files(value['files'])!=current:
+        raise OSError('pending version/content ambiguous; preserved; run uninstall --purge to discard adapter state or follow the documented manual repair')
     old=value.get('previous')
     if old is not None:
         legacy=expected - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
-        if not isinstance(old,dict) or set(old) not in (expected,legacy):raise OSError('invalid refresh recovery record')
+        if not isinstance(old,dict) or _resolved_keys(old) not in (sorted(expected),sorted(legacy)):raise OSError('invalid refresh recovery record')
         if any(not isinstance(content,str) for content in old.values()) or not isinstance(value.get('previous_manifest'),str):
             raise OSError('invalid refresh recovery encoding')
         previous={name:base64.b64decode(content,validate=True) for name,content in old.items()}
@@ -207,6 +218,7 @@ def _recover_pending() -> None:
     if manifest_path().exists():
         _ownership();_clear_pending(pending);return
     removable=[]
+    recorded=_resolved_files(value['files'])
     for folder in (skill_dir(),state.data_dir()/'plugin'):
         state.no_symlinks(folder)
         if not folder.exists():continue
@@ -221,7 +233,7 @@ def _recover_pending() -> None:
             info=item.stat()
             if info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1:
                 raise OSError('unsafe interrupted install content; preserved')
-            if _hash(item)!=value['files'][original]:
+            if _hash(item)!=recorded[original]:
                 raise OSError('edited interrupted install content; preserved')
             removable.append(item)
     for item in removable:item.unlink()
@@ -256,8 +268,9 @@ def install(*, dry_run=False) -> None:
         if owned:
             # Extra files are not owned; do not erase or publish over them.
             actual = {str(p) for folder in (skill, root / 'plugin') for p in folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
-            if actual != set(owned['files']):
-                stray = sorted(actual - set(owned['files'])) + sorted(set(owned['files']) - actual)
+            recorded = set(_resolved_files(owned['files']))
+            if actual != recorded:
+                stray = sorted(actual - recorded) + sorted(recorded - actual)
                 raise OSError('unowned files in install destination: ' + ', '.join(stray) +
                               '; remove them or run uninstall --purge first')
         # Fresh installs roll back only leaves/directories created by this attempt.
@@ -319,9 +332,16 @@ def uninstall(*, dry_run=False, purge=False) -> None:
     if os.name != 'posix':
         raise OSError('native Windows unsupported')
     # Purge is independent of an install manifest: plain uninstall may precede it.
-    if not dry_run:
+    # Under purge a stale or foreign-version pending record is deleted, not
+    # reconciled, so it must never block the purge path.
+    if not dry_run and not purge:
         with _lock():_recover_pending()
-    owned = _ownership(allow_missing=True)
+    try:
+        owned = _ownership(allow_missing=True)
+    except OSError:
+        if not purge:
+            raise
+        owned = None
     if dry_run:
         print('Would remove owned files and requested numeric state' +
               ('; stored captures will be removed.' if purge else '; captures remain unchanged.'))
@@ -330,7 +350,12 @@ def uninstall(*, dry_run=False, purge=False) -> None:
         print('No owned Devin install found.')
         return
     with _lock():
-        owned = _ownership(allow_missing=True)
+        try:
+            owned = _ownership(allow_missing=True)
+        except OSError:
+            if not purge:
+                raise
+            owned = None
         if owned:
             for name in owned['files']:
                 Path(name).unlink(missing_ok=True)
@@ -347,9 +372,26 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             try: folder.rmdir()
             except OSError: pass
         if purge:
-            for name in ('metrics.db', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm', 'consent.json', 'session-salt'):
+            for name in ('metrics.db', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm',
+                         'consent.json', 'session-salt', 'install.json', 'pending-install.json'):
                 p = state.private_path(state.data_dir() / name)
                 p.unlink(missing_ok=True)
+            # A manifest recorded by another version or spelling can leave
+            # files the current manifest cannot name; purge removes every
+            # regular file inside the adapter-owned directories regardless.
+            for folder in (state.data_dir() / 'plugin', skill_dir()):
+                try:
+                    if folder.is_symlink() or not folder.is_dir():
+                        continue
+                    state.no_symlinks(folder)
+                except OSError:
+                    continue
+                for item in folder.iterdir():
+                    if item.is_file() and not item.is_symlink():
+                        try: item.unlink()
+                        except OSError: pass
+                try: folder.rmdir()
+                except OSError: pass
             captures = state.data_dir() / 'captures'
             if captures.exists():
                 state.no_symlinks(captures)

@@ -952,3 +952,81 @@ def test_unmanifested_artifact_refusal_names_the_file(tmp_path, monkeypatch):
     else:
         raise AssertionError('stray payload file accepted')
     assert '.DS_Store' in message and 'remove' in message.lower(), message
+
+
+def test_noncanonical_recorded_paths_still_refresh_and_uninstall(tmp_path, monkeypatch):
+    """A manifest whose keys carry a '..' home spelling recorded before the
+    home was resolved must still refresh and uninstall once the recorded keys
+    resolve to this install."""
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    pivot = s.data_dir() / 'seg'
+    pivot.mkdir()
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    record['files'] = {
+        name.replace(str(s.data_dir()), str(s.data_dir() / 'seg/../'), 1): digest
+        for name, digest in record['files'].items()}
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    inst.install()
+    inst.uninstall(purge=True)
+    assert not (s.data_dir() / 'plugin').exists()
+
+
+def test_foreign_version_manifest_guides_to_purge_and_purge_cleans(tmp_path, monkeypatch, capsys):
+    """A manifest recorded by another adapter version must refuse a plain
+    uninstall with guidance, while purge still removes adapter state."""
+    import hashlib
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    extra = s.data_dir() / 'plugin' / 'other_version_module.py'
+    extra.write_text('VALUE=1\n')
+    extra.chmod(0o600)
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    record['files'][str(extra)] = hashlib.sha256(extra.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    capsys.readouterr()
+    try:
+        inst.uninstall()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('foreign-version manifest accepted for plain uninstall')
+    assert 'purge' in message, message
+    inst.uninstall(purge=True)
+    assert not extra.exists() and not manifest.exists()
+    assert not (s.data_dir() / 'plugin').exists()
+
+
+def test_stale_pending_record_names_escape_and_purge_survives(tmp_path, monkeypatch):
+    """A pending-install record from an interrupted older install must refuse
+    with guidance, and purge must still complete and drop the record."""
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    pending = s.data_dir() / 'pending-install.json'
+    record = {'owner': 'devin-output-filter-v1',
+              'files': {str(s.data_dir() / 'plugin' / name): '0' * 64 for name in inst.PAYLOAD}}
+    record['files'][str(s.home() / 'skills/token-optimizer-output/SKILL.md')] = '0' * 64
+    pending.write_text(json.dumps(record))
+    pending.chmod(0o600)
+    try:
+        inst.install()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('stale pending record silently ignored')
+    assert 'uninstall' in message and 'purge' in message, message
+    inst.uninstall(purge=True)
+    assert not pending.exists()
