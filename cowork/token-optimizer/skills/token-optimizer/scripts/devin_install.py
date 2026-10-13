@@ -218,7 +218,7 @@ def _user_edited_file():
         files = record['files'] if isinstance(record, dict) else None
         if not isinstance(files, dict) or not files:
             return ''
-        recorded, known = _purge_recorded(), _known_payload_digests()
+        recorded, known = _purge_recorded(expected_only=True), _known_payload_digests()
         for name, digest in files.items():
             path = Path(name)
             state.no_symlinks(path)
@@ -233,21 +233,21 @@ def _user_edited_file():
         return ''
 
 
-def _purge_recorded() -> dict:
+def _purge_recorded(*, expected_only=False) -> dict:
     """Best-effort recorded digests for the purge sweep, as path -> set of
     digests: a well-formed manifest or pending transaction record contributes
     every digest it committed (the intended new bytes and the previous ones);
     anything unreadable yields nothing."""
     out = {}
 
-    # A record may only speak for the adapter's own files: a key naming any
-    # other path is ignored, so it can never mark foreign content removable.
+    # Lifting the edited-file refusal is limited to this version's own payload
+    # paths; the sweep also honours another version's recorded file names.
     expected = ({str((state.data_dir() / 'plugin' / name).resolve()) for name in PAYLOAD}
                 | {str((skill_dir() / 'SKILL.md').resolve())})
 
     def _put(name, digest):
         resolved = str(Path(name).resolve())
-        if resolved in expected:
+        if not expected_only or resolved in expected:
             out.setdefault(resolved, set()).add(digest)
 
     def _add(files):
