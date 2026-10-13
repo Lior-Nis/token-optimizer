@@ -1056,3 +1056,238 @@ def test_docs_site_devin_page_matches_installed_isolated_contract():
     assert 'python3 -I' in mdx
     assert 'captures persist until you explicitly clean them up' not in mdx
     assert 'never original captures' not in mdx
+
+
+def test_purge_refuses_on_edited_installed_file(tmp_path, monkeypatch):
+    """Purge must keep refusing on a digest mismatch exactly like a plain
+    uninstall; an edited installed file is never deleted."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    edited = s.data_dir() / 'plugin' / 'devin_state.py'
+    edited.write_text(edited.read_text() + '# user edit\n')
+    skill_edited = s.home() / 'skills' / 'token-optimizer-output' / 'SKILL.md'
+    skill_edited.write_text(skill_edited.read_text() + 'user edit\n')
+    try:
+        inst.uninstall(purge=True)
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('purge deleted an edited install')
+    assert 'changed' in message
+    assert edited.exists() and skill_edited.exists()
+
+
+def test_purge_preserves_unrecorded_user_file_in_skill_dir(tmp_path, monkeypatch):
+    """A file the user dropped into the skill folder is not adapter state;
+    purge leaves it in place."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    notes = s.home() / 'skills' / 'token-optimizer-output' / 'user-notes.md'
+    notes.write_text('keep me\n')
+    inst.uninstall(purge=True)
+    assert notes.exists() and notes.read_text() == 'keep me\n'
+
+
+def test_purge_with_foreign_manifest_removes_only_recorded_files(tmp_path, monkeypatch):
+    """With a foreign-version manifest the purge sweep removes only files
+    whose digest the manifest recorded; unrelated files stay."""
+    import hashlib
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    extra = s.data_dir() / 'plugin' / 'other_version_module.py'
+    extra.write_text('VALUE=1\n')
+    extra.chmod(0o600)
+    stray = s.data_dir() / 'plugin' / 'user-file.txt'
+    stray.write_text('keep\n')
+    stray.chmod(0o600)
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    record['files'][str(extra)] = hashlib.sha256(extra.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    inst.uninstall(purge=True)
+    assert not extra.exists()
+    assert stray.exists() and stray.read_text() == 'keep\n'
+    assert not manifest.exists()
+
+
+def test_purge_guidance_discloses_capture_removal(tmp_path, monkeypatch):
+    """Every message steering a user to --purge must say it removes stored
+    captures."""
+    import hashlib
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    extra = s.data_dir() / 'plugin' / 'other_version_module.py'
+    extra.write_text('V=1\n')
+    extra.chmod(0o600)
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    record['files'][str(extra)] = hashlib.sha256(extra.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    try:
+        inst.uninstall()
+    except OSError as exc:
+        ownership_msg = str(exc)
+    else:
+        raise AssertionError('foreign-version manifest accepted')
+    assert 'captur' in ownership_msg.lower(), ownership_msg
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    pending = s.data_dir() / 'pending-install.json'
+    pending.write_text(json.dumps({'owner': 'devin-output-filter-v1', 'files': {
+        str(s.data_dir() / 'plugin' / name): '0' * 64 for name in inst.PAYLOAD} |
+        {str(s.home() / 'skills' / 'token-optimizer-output' / 'SKILL.md'): '0' * 64}}))
+    pending.chmod(0o600)
+    try:
+        inst.install()
+    except OSError as exc:
+        pending_msg = str(exc)
+    else:
+        raise AssertionError('stale pending record silently ignored')
+    assert 'captur' in pending_msg.lower(), pending_msg
+
+
+def test_purge_survives_unreadable_manifest(tmp_path, monkeypatch):
+    """A hand-restored or truncated manifest must not block purge."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    manifest = s.data_dir() / 'install.json'
+    manifest.write_bytes(b'not json at all')
+    manifest.chmod(0o600)
+    inst.uninstall(purge=True)
+    assert not manifest.exists()
+    assert not (s.data_dir() / 'plugin').exists()
+
+
+def test_purge_survives_manifest_with_nul_key(tmp_path, monkeypatch):
+    """A manifest key containing a NUL byte must not block purge."""
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    record['files'][str(s.data_dir() / 'plugin' / 'x\x00y.py')] = '0' * 64
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    inst.uninstall(purge=True)
+    assert not manifest.exists()
+    assert not (s.data_dir() / 'plugin').exists()
+
+
+def test_unmanifested_artifact_gives_one_working_instruction(tmp_path, monkeypatch):
+    """Stray-file guidance must not loop: name the file, say remove it, and
+    do not point at a reinstall that itself refuses on the same stray."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    stray = s.data_dir() / 'plugin' / '.DS_Store'
+    stray.write_bytes(b'finder metadata')
+    stray.chmod(0o600)
+    from devin_verify import verify_install
+    try:
+        verify_install()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('stray payload file accepted')
+    assert '.DS_Store' in message and 'remove' in message.lower(), message
+    assert 'reinstall' not in message.lower() and 'uninstall' not in message.lower(), message
+
+
+def test_foreign_destination_refusal_names_paths(tmp_path, monkeypatch):
+    """A stray left by uninstall must be named when install next refuses on
+    the foreign destination."""
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    stray = s.data_dir() / 'plugin' / 'leftover.txt'
+    stray.write_text('mine\n')
+    stray.chmod(0o600)
+    inst.uninstall()
+    assert stray.exists()
+    try:
+        inst.install()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('install accepted a foreign destination')
+    assert 'leftover.txt' in message or str(s.data_dir() / 'plugin') in message, message
+
+
+def test_ownership_refuses_undeliverable_dotdot_key(tmp_path, monkeypatch):
+    """A manifest key like plugin/ghost/../x.py resolves to an owned path but
+    cannot be traversed; ownership must refuse it instead of leaving the file
+    behind after a 'successful' uninstall."""
+    import hashlib
+    import json
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    plugin = s.data_dir() / 'plugin'
+    manifest = s.data_dir() / 'install.json'
+    record = json.loads(manifest.read_text())
+    real = plugin / 'devin_state.py'
+    record['files'][str(plugin / 'ghost' / '..' / 'devin_state.py')] = (
+        hashlib.sha256(real.read_bytes()).hexdigest())
+    del record['files'][str(real)]
+    manifest.write_text(json.dumps(record))
+    manifest.chmod(0o600)
+    try:
+        inst.uninstall()
+    except OSError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError('undeliverable manifest key accepted')
+    assert 'ghost' in message or 'cannot be reached' in message, message
+    assert (plugin / 'devin_state.py').exists()
+
+
+def test_bump_script_arguments_print_usage_and_change_nothing(tmp_path):
+    """--help or any argument must print usage and leave every manifest alone."""
+    import shutil
+    import subprocess
+    repo = tmp_path / 'repo'
+    (repo / 'scripts').mkdir(parents=True)
+    shutil.copy2(SCRIPTS.parents[2] / 'scripts' / 'bump_patch_version.py',
+                 repo / 'scripts' / 'bump_patch_version.py')
+    for rel, content in {
+        '.claude-plugin/plugin.json': '{"version": "5.13.40"}',
+        '.codex-plugin/plugin.json': '{"version": "5.13.40"}',
+        '.claude-plugin/marketplace.json': ('{"plugins": ['
+            '{"name": "token-optimizer", "version": "5.13.40"}, '
+            '{"name": "token-optimizer-cowork", "version": "5.13.40"}]}'),
+        'package.json': '{"name": "token-optimizer-pi-package", "version": "5.13.40"}',
+        'openclaw/src/dashboard.ts': 'const CORE_VERSION_FALLBACK = "5.13.40";',
+        'opencode/src/dashboard/generator.ts': 'const CORE_VERSION = "5.13.40";',
+    }.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    before = {p: p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+    for arg, ok in (('--help', True), ('--bogus', False)):
+        result = subprocess.run(
+            [sys.executable, str(repo / 'scripts' / 'bump_patch_version.py'), arg],
+            capture_output=True, text=True)
+        text = (result.stdout + result.stderr).lower()
+        assert 'usage' in text, result.stdout + result.stderr
+        assert (result.returncode == 0) == ok, result.returncode
+    for path, content in before.items():
+        assert path.read_bytes() == content

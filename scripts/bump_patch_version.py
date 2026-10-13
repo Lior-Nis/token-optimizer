@@ -46,6 +46,13 @@ def _set_core_fallback(path: Path, constant: str, old: str, new: str) -> str:
 
 
 def main() -> int:
+    if len(sys.argv) != 1:
+        usage = "usage: bump_patch_version.py   # bump patch version in every release manifest"
+        if sys.argv[1] in ("-h", "--help"):
+            print(usage)
+            return 0
+        print(usage, file=sys.stderr)
+        return 2
     current = json.loads(PLUGIN.read_text(encoding="utf-8"))["version"]
     codex = json.loads(CODEX.read_text(encoding="utf-8"))["version"]
     market = {p["name"]: p.get("version") for p in json.loads(MARKETPLACE.read_text(encoding="utf-8"))["plugins"]}
