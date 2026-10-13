@@ -1097,3 +1097,95 @@ def test_desktop_unremovable_owned_file_keeps_record_and_rerun_completes(tmp_pat
     monkeypatch.setattr(Path, 'unlink', original)
     d.uninstall()
     assert not stuck.exists() and not d.manifest_path().exists() and not d.skill_dir().exists()
+
+
+@pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
+def test_desktop_purge_with_inaccessible_foreign_plugin_dir_preserves_it(tmp_path, monkeypatch, capsys):
+    # Path.exists() raises on EACCES before Python 3.14; purge must not die on
+    # a foreign folder it never inspects.
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    plugin = d.state.data_dir() / 'plugin'
+    plugin.mkdir(parents=True, mode=0o700)
+    d.state.data_dir().chmod(0o700)
+    (plugin / 'mine.txt').write_text('mine')
+    plugin.chmod(0o000)
+    try:
+        d.uninstall(purge=True)
+        text = capsys.readouterr().out
+        assert 'were preserved under ' + str(plugin) in text
+        assert 'No owned Devin skill/payload was installed.' in text
+    finally:
+        plugin.chmod(0o700)
+    assert (plugin / 'mine.txt').read_text() == 'mine'
+
+
+@pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
+@pytest.mark.parametrize('dry', [True, False])
+def test_desktop_purge_refuses_before_purging_when_adapter_files_cannot_be_removed(tmp_path, monkeypatch, dry):
+    # With no usable ownership record the sweep removes unchanged adapter
+    # files. If their folder is read-only, purging the records first would
+    # strand them, so the whole purge refuses and nothing changes.
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    root = d.state.data_dir()
+    d.manifest_path().chmod(0o644)
+    plugin = root / 'plugin'
+    before = sorted((str(p), p.lstat().st_mode) for p in (tmp_path / '.config/devin').rglob('*'))
+    plugin.chmod(0o555)
+    try:
+        with pytest.raises(OSError, match=str(plugin) + '; it holds unchanged adapter files') as caught:
+            d.uninstall(dry_run=dry, purge=True)
+        assert 'chmod u+wx' in str(caught.value)
+    finally:
+        plugin.chmod(0o700)
+    assert sorted((str(p), p.lstat().st_mode) for p in (tmp_path / '.config/devin').rglob('*')) == before
+
+
+def test_desktop_purge_without_usable_record_says_what_it_removed(tmp_path, monkeypatch, capsys):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    d.manifest_path().chmod(0o644)
+    capsys.readouterr()
+    d.uninstall(purge=True)
+    text = capsys.readouterr().out
+    assert 'Removed owned Devin skill/payload.' in text
+    assert 'No owned Devin skill/payload was installed.' not in text
+    assert not d.skill_dir().exists() and not (d.state.data_dir() / 'plugin').exists()
+
+
+def test_desktop_forged_record_for_a_foreign_path_cannot_lift_the_edit_refusal(tmp_path, monkeypatch):
+    # A pending record naming a non-payload path must not make a user edit
+    # look like adapter bytes.
+    import devin_install as d
+    import hashlib, json
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    root = d.state.data_dir()
+    edited = root / 'plugin/token_estimate.py'
+    edited.write_bytes(edited.read_bytes() + b'# my edit\n')
+    notes = root / 'plugin/my_notes.txt'
+    notes.write_text('mine')
+    pending = root / 'pending-install.json'
+    pending.write_text(json.dumps({'owner': d.MARKER, 'files': {
+        str(notes): hashlib.sha256(edited.read_bytes()).hexdigest(),
+        str(tmp_path / 'elsewhere.py'): hashlib.sha256(edited.read_bytes()).hexdigest()}}))
+    pending.chmod(0o600)
+    with pytest.raises(OSError, match='installed file changed; refusing overwrite/removal: ' + str(edited)):
+        d.uninstall(purge=True)
+    assert edited.read_bytes().endswith(b'# my edit\n') and notes.read_text() == 'mine'
+
+
+def test_desktop_finder_metadata_is_not_foreign_content(tmp_path, monkeypatch):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.skill_dir().mkdir(parents=True, mode=0o700)
+    (d.skill_dir() / '.DS_Store').write_bytes(b'\x00')
+    d.install()
+    d.install()
+    d.uninstall()
+    assert (d.skill_dir() / '.DS_Store').exists()
+    d.install()
+    assert (d.skill_dir() / 'SKILL.md').is_file()
