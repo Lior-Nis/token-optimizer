@@ -26,10 +26,10 @@ def verify_install():
                 info=cached.lstat()
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
                         or info.st_nlink!=1 or info.st_mode&0o022 or not cached.name.endswith('.pyc')):
-                    raise OSError('unmanifested artifact in incidental cache: ' + cached.name +
+                    raise OSError('unmanifested artifact in incidental cache: ' + str(cached) +
                                   '; remove it and retry')
             continue
-        raise OSError('unmanifested artifact in installed payload: ' + entry.name +
+        raise OSError('unmanifested artifact in installed payload: ' + str(entry) +
                       '; remove it and retry')
     manifest=state.private_path(root/'install.json')
     if manifest.stat().st_nlink!=1:raise OSError('manifest hardlink refused')

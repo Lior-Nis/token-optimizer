@@ -1189,3 +1189,25 @@ def test_desktop_finder_metadata_is_not_foreign_content(tmp_path, monkeypatch):
     assert (d.skill_dir() / '.DS_Store').exists()
     d.install()
     assert (d.skill_dir() / 'SKILL.md').is_file()
+
+
+@pytest.mark.skipif(sys.platform != 'darwin' or os.geteuid() == 0, reason='user immutable flag semantics are macOS-specific here')
+def test_desktop_immutable_owned_file_refuses_every_lifecycle_command_before_changes(tmp_path, monkeypatch):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    stuck = d.state.data_dir() / 'plugin/devin_verify.py'
+    snapshot = lambda: sorted((str(p), p.lstat().st_mode, p.lstat().st_size) for p in (tmp_path / '.config/devin').rglob('*'))
+    os.chflags(stuck, stat.UF_IMMUTABLE)
+    try:
+        before = snapshot()
+        for call in (lambda: d.install(dry_run=True), d.install,
+                     lambda: d.uninstall(dry_run=True), d.uninstall,
+                     lambda: d.uninstall(dry_run=True, purge=True), lambda: d.uninstall(purge=True)):
+            with pytest.raises(OSError, match='immutable and cannot be replaced or removed: ' + str(stuck)):
+                call()
+            assert snapshot() == before
+    finally:
+        os.chflags(stuck, 0)
+    d.uninstall(purge=True)
+    assert not stuck.exists() and not d.skill_dir().exists()

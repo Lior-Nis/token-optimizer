@@ -522,6 +522,21 @@ def _preflight_write_access(root, skill):
         raise OSError('install lock is not readable/writable: ' + str(lock))
 
 
+def _preflight_file_flags(names) -> None:
+    """An immutable or append-only file cannot be replaced or removed. Only
+    platforms that expose file flags (macOS, BSD) are checked here."""
+    blocked = getattr(stat, 'UF_IMMUTABLE', 0) | getattr(stat, 'SF_IMMUTABLE', 0) | \
+        getattr(stat, 'UF_APPEND', 0) | getattr(stat, 'SF_APPEND', 0)
+    for name in names:
+        try:
+            flags = getattr(os.lstat(name), 'st_flags', 0)
+        except OSError:
+            continue
+        if flags & blocked:
+            raise OSError('owned file is immutable and cannot be replaced or removed: ' + str(name) +
+                          '; clear its flag (chflags nouchg) and retry')
+
+
 def _preflight_removal_access(root, skill, owned, *, purge=False):
     # Without an ownership record nothing in plugin/ or the skill folder is
     # removed by name: the purge sweep skips what it cannot change and reports
@@ -535,6 +550,8 @@ def _preflight_removal_access(root, skill, owned, *, purge=False):
     for folder in set(destinations):
         if folder.exists() and not os.access(folder, os.W_OK | os.X_OK, effective_ids=True):
             raise OSError('removal directory is not writable/searchable: ' + str(folder) + '; make it writable (chmod u+wx) and retry removal')
+    if owned:
+        _preflight_file_flags(owned['files'])
     cache = root / 'plugin' / '__pycache__'
     if not owned and (purge and (root / 'plugin').is_symlink()
                       or not os.access(root / 'plugin', os.W_OK | os.X_OK, effective_ids=True)):
@@ -571,6 +588,7 @@ def _preflight_destination(root, skill):
         raise OSError('foreign install destination already exists: ' + ', '.join(existing) + '; move aside or remove and retry')
     state.private_path(skill, directory=True)
     if owned:
+        _preflight_file_flags(owned['files'])
         actual = {str(p) for folder in (skill, root / 'plugin') for p in folder.rglob('*')
                   if p.is_file() and '__pycache__' not in p.parts and p.name != '.DS_Store'}
         recorded = set(_resolved_files(owned['files']))

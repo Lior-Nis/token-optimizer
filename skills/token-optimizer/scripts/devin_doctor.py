@@ -180,7 +180,7 @@ def diagnose(probe=False):
     warnings = []
     if recovery_pending:
         ready = False
-        error = (error + '; ' if error else '') + 'Recovery is pending'
+        error = (error + '; ' if error else '') + 'Recovery is pending: ' + str(root / 'pending-install.json')
         try:
             state.private_path(root / 'pending-install.json')
         except OSError as exc:

@@ -47,7 +47,7 @@ class SourceOnly(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             return None
         candidate=self.root/(fullname+'.py')
         try:info=candidate.lstat()
-        except FileNotFoundError as exc:raise ImportError('manifested payload source missing') from exc
+        except FileNotFoundError as exc:raise ImportError('manifested payload source missing: '+str(candidate)) from exc
         if not stat.S_ISREG(info.st_mode):raise ImportError('regular payload source required')
         return importlib.util.spec_from_file_location(fullname,candidate,loader=self)
     def create_module(self,spec):return None
@@ -67,7 +67,7 @@ class SourceOnly(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             if len(content)>8*1024*1024:raise ImportError('payload source exceeds bound')
         finally:os.close(fd)
         if hashlib.sha256(content).hexdigest()!=self.digests.get(str(source)):
-            raise ImportError('payload source differs from install manifest')
+            raise ImportError('payload source differs from install manifest: '+str(source))
         exec(compile(content,str(source),'exec'),module.__dict__)
 
 def activate(root):
