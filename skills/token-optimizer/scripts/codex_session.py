@@ -295,11 +295,6 @@ def find_all_jsonl_files(days: int = 30, max_files: int = 500) -> list[tuple[Pat
     return [(jf, mtime, _project_name_from_file(jf)) for jf, mtime in newest]
 
 
-def find_current_session_jsonl() -> Path | None:
-    files = find_all_jsonl_files(days=90, max_files=10)
-    return files[0][0] if files else None
-
-
 def find_session_jsonl_by_id(session_id: str) -> Path | None:
     safe_id = _safe_session_id(session_id)
     if not safe_id:
@@ -316,6 +311,69 @@ def find_session_jsonl_by_id(session_id: str) -> Path | None:
         return None
     exact_matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     return exact_matches[0]
+
+
+_ROLLOUT_STEM_RE = re.compile(
+    r'rollout-.*-([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})'
+)
+
+
+def _raw_session_meta_id(path: Path) -> str | None:
+    """session_meta id exactly as written (no normalization)."""
+    for record in _iter_json_records(path, skip_large_file=True):
+        if record.get("type") != "session_meta":
+            continue
+        value = _payload(record).get("id")
+        return str(value) if value else None
+    return None
+
+
+def find_session_jsonl_exact(thread_id: str) -> Path | None:
+    """Resolve the transcript for exactly ``thread_id``; never normalized.
+
+    Unlike ``find_session_jsonl_by_id`` (an explicit-session convenience that
+    strips ``rollout-`` prefixes and illegal characters), this is for the
+    invoking-thread identity, where silently changing the id would bind to a
+    different thread. A candidate is accepted only when:
+      * it is a regular file inside a sessions root (no symlinks out),
+      * its raw ``session_meta`` id equals ``thread_id``; a file with no
+        readable ``session_meta`` falls back to its exact stem / the UUID
+        suffix of a ``rollout-<ts>-<uuid>`` stem, and
+      * its name is not a ``rollout-UNKNOWN-`` placeholder.
+    Ties resolve deterministically (newest mtime, then path).
+    """
+    if not thread_id or not re.fullmatch(r"[A-Za-z0-9_-]{6,128}", thread_id):
+        return None
+    matches: list[tuple[float, str, Path]] = []
+    for root in session_roots():
+        if not root.exists():
+            continue
+        try:
+            root_real = root.resolve()
+        except OSError:
+            continue
+        for jf in root.rglob(f"*{thread_id}*.jsonl"):
+            try:
+                if jf.is_symlink() or not jf.is_file():
+                    continue
+                if root_real not in jf.resolve().parents:
+                    continue
+                if jf.stem.startswith("rollout-UNKNOWN-"):
+                    continue
+                meta_id = _raw_session_meta_id(jf)
+                if meta_id is not None:
+                    ok = meta_id == thread_id
+                else:
+                    m = _ROLLOUT_STEM_RE.fullmatch(jf.stem)
+                    ok = (m.group(1) if m else jf.stem) == thread_id
+                if ok:
+                    matches.append((jf.stat().st_mtime, str(jf), jf))
+            except OSError:
+                continue
+    if not matches:
+        return None
+    matches.sort(key=lambda t: (-t[0], t[1]))
+    return matches[0][2]
 
 
 def _session_meta_id(path: Path) -> str | None:

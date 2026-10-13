@@ -2371,6 +2371,24 @@ function extractFindings(auditMd) {
 }
 
 /* ========== COMPONENT DETAILS BUILDER ========== */
+function codexMemPartialPrefix(m) { return m && m.truncated ? 'Partial total: Codex memory scan cap reached. ' : ''; }
+function codexMemBarLabel(m) { return m && m.truncated ? 'Codex Memories (partial)' : 'Codex Memories'; }
+function codexMemRuntimeValue(mem, fnum) { if (mem.unresolved) return 'unresolved (no invoking thread id)'; if (!mem.available) return 'unavailable (Codex state database not found or unreadable)'; return mem.thread_count ? fnum(mem.total_memory_tokens) + ' tokens / ' + mem.thread_count + (mem.truncated ? '+' : '') + ' thread(s)' + (mem.truncated ? ' (partial: scan cap reached)' : '') : 'none recorded'; }
+function codexSubRuntimeValue(sub, fnum) { if (sub.unresolved) return 'unresolved (no invoking thread id)'; if (!sub.available) return 'no state data yet'; var leakWarn = sub.leaked_subagents > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + sub.leaked_subagents + ' leaked</span>' : ''; return sub.total_subagents + ' total (' + sub.open_subagents + ' open)' + leakWarn + ' &middot; ' + fnum(sub.total_child_tokens) + ' tokens'; }
+function codexGoalsRuntimeValue(goals) { if (goals.unresolved) return 'unresolved (no invoking thread id)'; if (!goals.available || !goals.total_goals) return 'none active'; var limited = (goals.budget_limited || 0) + (goals.usage_limited || 0); var goalWarn = limited > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + limited + ' limited</span>' : ''; return goals.total_goals + ' (' + goals.active_goals + ' active)' + goalWarn; }
+function codexMemCardHtml(mr, fn) { return '<div class="card"><div class="card-header"><span>Codex Memory</span></div>' +
+        '<div style="text-align:center;padding:var(--s-3) 0;">' +
+        '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:var(--c-accent-cyan);">' + fn(mr.total_tokens || 0) + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim);">tokens across all threads' + (mr.scan_partial ? ' (partial)' : '') + '</div>' +
+        '</div>' +
+        '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;">' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Threads with memory text</span><span>' + (mr.thread_count || 0) + memCountSuffix(mr) + '</span></div>' +
+        '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Largest thread</span><span>' + fn(mr.largest_thread_tokens || 0) + ' tokens</span></div>' +
+        (mr.scan_partial ? '<div style="display:flex;justify-content:space-between;color:var(--c-warning, #ff9f43);margin-top:4px;font-weight:500;"><span>Scan</span><span>partial: cap reached</span></div>' : '') +
+        '</div>' +
+        '<div style="text-align:center;padding:0 0 var(--s-3);font-size:12px;color:var(--c-text-dim);">Measured from Codex state; no file structure audit</div>' +
+        '</div>'; }
+function memCountSuffix(mr) { return mr && mr.scan_partial ? '+' : ''; }
 function getComponentDetails(data) {
   var c = data.snapshot.components;
   var cd = data.snapshot.component_details || {};
@@ -2414,11 +2432,11 @@ function getComponentDetails(data) {
         ]
     },
     {
-      key: 'memory_md', name: 'MEMORY.md',
+      key: 'memory_md', name: isCodex ? 'Codex Memory (all threads)' : 'MEMORY.md',
       tokens: c.memory_md ? c.memory_md.tokens : 0,
       sub: (c.memory_md && c.memory_md.exists !== false)
-        ? (isCodex ? c.memory_md.lines + ' lines across Codex memory files' : c.memory_md.lines + ' lines loaded every session')
-        : (isCodex ? 'No Codex local memory files detected' : 'Not configured. Auto-memory is off or no project match.'),
+        ? (isCodex ? codexMemPartialPrefix(c.memory_md) + (c.memory_md.thread_count || 0) + ' thread(s) in Codex state (machine-wide)' : c.memory_md.lines + ' lines loaded every session')
+        : (isCodex ? 'Codex state database not found or unreadable (legacy memory files are not counted)' : 'Not configured. Auto-memory is off or no project match.'),
       what: isCodex
         ? 'Codex local memories live under the Codex home and can be injected as developer guidance when memory support is active. They are separate from Claude MEMORY.md.'
         : 'Auto-memory file loaded into every conversation context. Contains accumulated patterns, decisions, and system notes. Lines after 200 are truncated but still counted.',
@@ -3017,7 +3035,7 @@ var DB = (function() {
       var logMax = Math.log10(ctxWindow);
       return Math.max(2, (logVal / logMax) * 80);
     }
-    var barLabels = [isCodexOverview ? 'AGENTS.md' : 'CLAUDE.md', isCodexOverview ? 'Codex Memories' : 'MEMORY.md', 'Skills'];
+    var barLabels = [isCodexOverview ? 'AGENTS.md' : 'CLAUDE.md', isCodexOverview ? codexMemBarLabel(c.memory_md) : 'MEMORY.md', 'Skills'];
     if (!isCodexOverview) barLabels.push('Commands');
     if (rulesTokens > 0) barLabels.push('Rules');
     if (importsTokens > 0) barLabels.push('@imports');
@@ -3138,7 +3156,9 @@ var DB = (function() {
 
     // Memory health card
     var mr = data.memory_review;
-    if (mr && !mr.error) {
+    if (mr && !mr.error && mr.codex) {
+      healthCardsHtml += codexMemCardHtml(mr, fn);
+    } else if (mr && !mr.error) {
       var memoryLabel = isCodexOverview ? 'Codex Memory Health' : 'MEMORY.md Health';
       var memoryLimitText = isCodexOverview ? 'local memory lines' : 'lines (200-line visible limit)';
       var memoryCountText = isCodexOverview ? String(mr.total_lines || 0) : ((mr.total_lines || 0) + ' / 200');
@@ -3198,26 +3218,15 @@ var DB = (function() {
         if (existingCsCard) existingCsCard.parentNode.removeChild(existingCsCard);
         var sub = cs.subagents || {}, mem = cs.memory || {}, goals = cs.goals || {};
         var rows = '';
-        if (sub.available) {
-          var leakWarn = sub.leaked_subagents > 0
-            ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + sub.leaked_subagents + ' leaked</span>' : '';
-          rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">' +
-            sub.total_subagents + ' total (' + sub.open_subagents + ' open)' + leakWarn +
-            ' &middot; ' + fn(sub.total_child_tokens) + ' tokens</span></div>';
-        } else {
-          rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">no state data yet</span></div>';
-        }
-        rows += '<div class="bar-row"><span class="bar-label">Memory</span><span class="bar-value">' +
-          ((mem.available && mem.thread_count) ? fn(mem.total_memory_tokens) + ' tokens / ' + mem.thread_count + ' thread(s)' : 'none recorded') +
+        rows += '<div class="bar-row"><span class="bar-label">Subagents</span><span class="bar-value">' +
+          codexSubRuntimeValue(sub, fn) +
           '</span></div>';
-        if (goals.available && goals.total_goals) {
-          var limited = (goals.budget_limited || 0) + (goals.usage_limited || 0);
-          var goalWarn = limited > 0 ? ' &middot; <span style="color:var(--c-warning, #ff9f43);font-weight:600;">' + limited + ' limited</span>' : '';
-          rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">' +
-            goals.total_goals + ' (' + goals.active_goals + ' active)' + goalWarn + '</span></div>';
-        } else {
-          rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">none active</span></div>';
-        }
+        rows += '<div class="bar-row"><span class="bar-label">Memory (all threads)</span><span class="bar-value">' +
+          codexMemRuntimeValue(mem, fn) +
+          '</span></div>';
+        rows += '<div class="bar-row"><span class="bar-label">Goals</span><span class="bar-value">' +
+          codexGoalsRuntimeValue(goals) +
+          '</span></div>';
         var rl = cs.rate_limits && cs.rate_limits.primary;
         if (rl && rl.used_percent != null) {
           rows += '<div class="bar-row"><span class="bar-label">Rate limit</span><span class="bar-value">' + Math.round(rl.used_percent) + '% used (primary)</span></div>';

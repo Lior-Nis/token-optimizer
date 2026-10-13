@@ -285,3 +285,67 @@ def trusted_python(tmp_path_factory, monkeypatch):
     _os.chmod(d, 0o755)
     monkeypatch.setenv("TOKEN_OPTIMIZER_PYTHON", str(f))
     return Path(f)
+
+
+_DEVIN_TEST_FILES = {
+    'test_devin_compress.py', 'test_devin_install.py',
+    'test_devin_review_regressions.py', 'test_devin_state.py',
+}
+
+
+def _devin_isolated_env(env, home):
+    """Keep inherited host configuration out of a synthetic Devin home."""
+    result = dict(env)
+    for key in ('XDG_CONFIG_HOME', 'TOKEN_OPTIMIZER_DEVIN_HOME',
+                'TOKEN_OPTIMIZER_RUNTIME', 'DEVIN_CONFIG_DIR'):
+        result.pop(key, None)
+    result.update({'HOME': str(home), 'USERPROFILE': str(home),
+                   'CLAUDE_CONFIG_DIR': str(home)})
+    return result
+
+
+@pytest.fixture(scope='session')
+def devin_real_python(tmp_path_factory):
+    """Copy executable bytes, never mock or bypass the production trust gate."""
+    import shutil
+    import sys
+    folder = tmp_path_factory.mktemp('devin-real-python')
+    folder.chmod(0o700)
+    import subprocess
+    subprocess.run([sys.executable, '-m', 'venv', '--copies', '--without-pip',
+                    str(folder)], check=True, capture_output=True)
+    binary = folder / 'bin' / 'python3'
+    assert not binary.is_symlink()
+    binary.chmod(0o700)
+    binary.parent.chmod(0o700)
+    scripts = REPO / 'skills/token-optimizer/scripts'
+    sys.path.insert(0, str(scripts))
+    from py_trust import py_trust_reason
+    reason = py_trust_reason(str(binary))
+    assert reason is None, f'copied real interpreter refused: {reason}'
+    return binary, sys.base_prefix
+
+
+@pytest.fixture(autouse=True)
+def devin_isolation(request, monkeypatch):
+    """Scoped to Devin tests; other runtime suites keep their own fixtures."""
+    if request.node.path.name not in _DEVIN_TEST_FILES:
+        return
+    import sys
+    if os.name != 'posix':
+        pytest.skip('Devin adapter explicitly requires a POSIX environment')
+    tmp_path = request.getfixturevalue('tmp_path')
+    binary, prefix = request.getfixturevalue('devin_real_python')
+    tmp_path.chmod(0o700)
+    env = _devin_isolated_env(os.environ, tmp_path)
+    for key in ('XDG_CONFIG_HOME', 'TOKEN_OPTIMIZER_DEVIN_HOME',
+                'TOKEN_OPTIMIZER_RUNTIME', 'DEVIN_CONFIG_DIR'):
+        monkeypatch.delenv(key, raising=False)
+    for key in ('HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR'):
+        monkeypatch.setenv(key, env[key])
+    # A copied binary still needs its real stdlib and shared-library prefix.
+    monkeypatch.setenv('PYTHONHOME', prefix)
+    monkeypatch.setenv('LD_LIBRARY_PATH', str(Path(prefix) / 'lib'))
+    monkeypatch.setenv('PATH', str(binary.parent) + os.pathsep + os.environ.get('PATH', ''))
+    monkeypatch.setattr(sys, 'executable', str(binary))
+    return env

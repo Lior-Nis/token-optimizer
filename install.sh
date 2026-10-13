@@ -1066,6 +1066,29 @@ uninstall_grok() {
 # Claude Code prerequisite checks (OpenCode needs bun; Hermes, Copilot, Cursor,
 # Antigravity, Grok, and the Cowork packager need python3, not the Claude Code plugin env).
 
+install_devin() {
+    command -v python3 >/dev/null || fail "Python 3 is required for Devin"
+    local script_dir action
+    local -a extra
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ ! -f "$script_dir/skills/token-optimizer/scripts/devin_install.py" ] || [ ! -f "$script_dir/devin/SKILL.md" ]; then
+        _materialize_from_pin "$script_dir" "$script_dir/devin/SKILL.md" skills/token-optimizer/ devin/
+    fi
+    [ -f "$script_dir/skills/token-optimizer/scripts/devin_install.py" ] || fail "Devin source missing from pinned checkout"
+    info "Devin source checkout: $(git -C "$script_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    action=install
+    extra=()
+    for option in "$@"; do
+        case "$option" in
+            --devin) ;;
+            --uninstall) action=uninstall ;;
+            --dry-run|--purge) extra+=("$option") ;;
+            *) printf 'Unknown Devin installer option: %s\n' "$option" >&2; exit 2 ;;
+        esac
+    done
+    TOKEN_OPTIMIZER_RUNTIME=devin python3 "$script_dir/skills/token-optimizer/scripts/devin_install.py" "$action" ${extra[@]+"${extra[@]}"}
+}
+
 # Allow tests to source this script for function unit-testing (e.g.
 # _copilot_wsl_root_warning) without triggering the install flow or
 # prerequisite checks. Set _TO_INSTALL_SH_TEST_MODE=1 before sourcing.
@@ -1075,6 +1098,10 @@ fi
 
 for arg in "$@"; do
     case "$arg" in
+        --devin)
+            install_devin "$@"
+            exit $?
+            ;;
         --opencode)
             # Route --opencode --uninstall to the uninstaller; otherwise install.
             for a in "$@"; do
@@ -1278,7 +1305,7 @@ repair_and_verify_skill_payload() {
     fi
     warn "Incomplete skill payload detected (missing referenced files). Repairing sparse checkout..."
     git -C "$INSTALL_DIR" sparse-checkout set \
-        skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+        skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
         2>/dev/null || git -C "$INSTALL_DIR" sparse-checkout disable 2>/dev/null || true
     if verify_skill_payload; then
         info "Skill payload restored"
@@ -1307,6 +1334,7 @@ verify_checksum_manifest_coverage() {
     awk 'NF >= 2 {print $2}' "$CHECKSUM_FILE" | sort -u > "$manifest_list"
     git -C "$target_dir" ls-files \
         install.sh \
+        devin/SKILL.md \
         hooks/ \
         skills/ \
         .claude-plugin/ \
@@ -1343,7 +1371,7 @@ verify_release_candidate_before_live_update() {
     git clone --depth 1 --filter=blob:none --sparse --branch "$RELEASE_TAG" \
         "$candidate_url" "$candidate_dir" >/dev/null 2>&1 || return 1
     git -C "$candidate_dir" sparse-checkout set \
-        skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+        skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
         >/dev/null 2>&1 || return 1
     verify_checksums_in_dir "$candidate_dir" || return 1
     VERIFIED_RELEASE_HEAD=$(git -C "$candidate_dir" rev-parse HEAD 2>/dev/null || echo "")
@@ -1382,7 +1410,7 @@ clone_repo() {
         fi
         # Cone mode only accepts directories; root-level files are included automatically
         git -C "$INSTALL_DIR" sparse-checkout set \
-            skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+            skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
             2>>"$clone_log" || return 1
     }
 
@@ -1457,7 +1485,7 @@ if [ -d "${INSTALL_DIR}/.git" ]; then
         git -C "$INSTALL_DIR" sparse-checkout init --cone 2>/dev/null || true
         # Cone mode only accepts directories; root-level files are included automatically
         git -C "$INSTALL_DIR" sparse-checkout set \
-            skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+            skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
             2>/dev/null || true
     fi
 
@@ -1466,7 +1494,7 @@ if [ -d "${INSTALL_DIR}/.git" ]; then
     if [ ! -d "${INSTALL_DIR}/skills" ] || [ ! -d "${INSTALL_DIR}/hooks" ]; then
         warn "Broken sparse checkout detected (skills/ or hooks/ missing). Repairing..."
         git -C "$INSTALL_DIR" sparse-checkout set \
-            skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+            skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
             2>/dev/null || git -C "$INSTALL_DIR" sparse-checkout disable 2>/dev/null || true
         if [ ! -d "${INSTALL_DIR}/skills" ]; then
             warn "Sparse checkout repair failed. Disabling sparse checkout..."
@@ -1485,7 +1513,7 @@ if [ -d "${INSTALL_DIR}/.git" ]; then
     if [ ! -d "${INSTALL_DIR}/skills" ] || [ ! -d "${INSTALL_DIR}/hooks" ]; then
         warn "Broken sparse checkout detected after update. Repairing..."
         git -C "$INSTALL_DIR" sparse-checkout set \
-            skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+            skills/ hooks/ devin/ .claude-plugin/ .codex-plugin/ .codex/ \
             2>/dev/null || git -C "$INSTALL_DIR" sparse-checkout disable 2>/dev/null || true
         if [ ! -d "${INSTALL_DIR}/skills" ]; then
             warn "Sparse checkout repair failed. Disabling sparse checkout..."

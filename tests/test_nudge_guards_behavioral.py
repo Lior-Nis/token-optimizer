@@ -254,31 +254,74 @@ def test_producer_does_not_flag_an_exactly_full_window():
 # context, and quality_cache writes the computed score into the resolved
 # session's cache. A wrong guess there is worse than a wrong percentage.
 
-def _fn_body(name, span=1400):
-    """Function source with comment lines stripped.
-
-    Comments mention these helper names in prose, and an ordering assertion that
-    matches a comment is measuring documentation, not code. (This bit first.)
-    """
-    src = (SCRIPTS / "measure.py").read_text(encoding="utf-8")
-    body = src[src.index(f"def {name}("):][:span]
-    return "\n".join(
-        line for line in body.splitlines() if not line.strip().startswith("#")
-    )
+_TWO_SESSION_FIXTURE = f"""
+import json, os, pathlib, tempfile
+base = pathlib.Path(tempfile.mkdtemp())
+claude = base / ".claude"
+proj = claude / "projects" / "proj"
+proj.mkdir(parents=True)
+live = proj / ({LIVE_SID!r} + ".jsonl")
+other = proj / ({OTHER_SID!r} + ".jsonl")
+live.write_text(json.dumps({{"type": "user",
+    "message": {{"content": "LIVE-ONLY-MARKER ?"}}}}) + "\\n", encoding="utf-8")
+other.write_text(json.dumps({{"type": "user",
+    "message": {{"content": "OTHER-ONLY-MARKER ?"}}}}) + "\\n", encoding="utf-8")
+# The OTHER session is the newest transcript on disk: an mtime-based guess
+# resolves to it, so only identity-first resolution picks the live session.
+os.utime(live, (1_000_000, 1_000_000))
+os.utime(other, (2_000_000, 2_000_000))
+(base / "checkpoints").mkdir()
+(base / "quality-cache").mkdir()
+measure.CLAUDE_DIR = claude
+measure.CHECKPOINT_DIR = base / "checkpoints"
+measure.QUALITY_CACHE_DIR = base / "quality-cache"
+measure.detect_runtime = lambda: "claude"
+measure._capture_git_state = lambda cwd=None: (None, None)
+"""
 
 
 def test_compact_capture_resolves_by_identity_first():
-    body = _fn_body("compact_capture", span=3000)
-    by_id = body.index("_find_session_jsonl_by_id(session_id)")
-    guess = body.index("_find_current_session_jsonl()")
-    assert by_id < guess, "identity lookup must precede the mtime guess"
+    """compact_capture must checkpoint the session the hook named, not the
+    newest transcript on disk."""
+    r = _run(f"""
+{_TWO_SESSION_FIXTURE}
+p = measure.compact_capture(session_id={LIVE_SID!r}, trigger="stop", cwd=str(base))
+print("RESULT:1")
+print("CKPT:" + str(p))
+print("BODY:" + pathlib.Path(p).read_text(encoding="utf-8"))
+""")
+    assert r.returncode == 0, r.stderr
+    assert "CKPT:None" not in r.stdout, f"no checkpoint written: {r.stdout!r}"
+    body = r.stdout.split("BODY:", 1)[1]
+    assert "LIVE-ONLY-MARKER" in body, (
+        f"checkpoint captured the wrong session: {body[:400]!r}")
+    assert "OTHER-ONLY-MARKER" not in body, (
+        "checkpoint content came from the newest unrelated transcript")
 
 
 def test_quality_cache_resolves_by_identity_first():
-    body = _fn_body("quality_cache", span=2600)
-    by_id = body.index("_find_session_jsonl_by_id(session_id)")
-    guess = body.index("_find_current_session_jsonl()")
-    assert by_id < guess, "identity lookup must precede the mtime guess"
+    """quality_cache must score and cache the session the hook named, not the
+    newest transcript on disk."""
+    r = _run(f"""
+{_TWO_SESSION_FIXTURE}
+measure.detect_context_window = lambda: (200000, "env")
+seen = []
+def spy(fp):
+    seen.append(pathlib.Path(fp).name)
+    return None
+measure._parse_jsonl_for_quality = spy
+measure.quality_cache(force=True, quiet=True, session_id={LIVE_SID!r})
+print("RESULT:1")
+print("SEEN:" + ",".join(seen))
+print("CACHES:" + ",".join(sorted(
+    p.name for p in measure.QUALITY_CACHE_DIR.glob("quality-cache-*.json"))))
+""")
+    assert r.returncode == 0, r.stderr
+    seen = r.stdout.split("SEEN:", 1)[1].split("\n", 1)[0]
+    assert seen == f"{LIVE_SID}.jsonl", f"parser ran on: {seen!r}"
+    caches = r.stdout.split("CACHES:", 1)[1].strip()
+    assert f"quality-cache-{LIVE_SID}.json" in caches, caches
+    assert f"quality-cache-{OTHER_SID}.json" not in caches, caches
 
 
 def test_quality_cache_receives_the_hook_session_id():
