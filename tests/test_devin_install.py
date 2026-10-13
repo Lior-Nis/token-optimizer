@@ -174,7 +174,10 @@ def test_absent_desktop_and_cli_are_separate_facts(tmp_path, monkeypatch):
     assert facts['cli_on_path'] is False
 
 
-@pytest.mark.parametrize('content',[b'\xff',b'[]',b'{',b'{"applicationName":"windsurf"}',b'x' * (1024*1024+1)])
+# Explicit ids: pytest derives the id from the parameter value, and a megabyte
+# id overflows the Windows environment limit when pytest exports the test name.
+@pytest.mark.parametrize('content',[b'\xff',b'[]',b'{',b'{"applicationName":"windsurf"}',b'x' * (1024*1024+1)],
+                         ids=['not-utf8','list','truncated','other-app','oversize'])
 def test_desktop_metadata_unusable_is_not_presence(tmp_path, monkeypatch, content):
     import devin_doctor as d
     root=tmp_path/'app';root.mkdir();(root/'product.json').write_bytes(content)

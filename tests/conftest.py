@@ -155,6 +155,21 @@ FAILURE_ADVICE = (
 )
 
 
+# Windows caps one environment variable at 32767 characters, and pytest exports
+# the running test's id as PYTEST_CURRENT_TEST. An id derived from a huge
+# parameter value errors there and stalls the run while it is reported, so an
+# oversized id is refused on every platform at collection time.
+MAX_TEST_ID_CHARS = 32500
+
+
+def pytest_collection_modifyitems(config, items):
+    oversized = [item.nodeid for item in items if len(item.nodeid) > MAX_TEST_ID_CHARS]
+    if oversized:
+        raise pytest.UsageError(
+            'test id longer than %d characters; pass explicit ids= to parametrize: %s'
+            % (MAX_TEST_ID_CHARS, ', '.join(nodeid[:120] + '...' for nodeid in oversized)))
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: timing-sensitive test (startup budgets)")
 
