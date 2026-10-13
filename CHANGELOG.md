@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Devin Desktop's Devin Local agent now has install guidance for the documented shared CLI skill contract; Desktop loading and execution remain unverified, and native Windows remains unsupported.
+- Devin dry-run install refuses deterministic unsafe-state/destination/ancestor and pending-transaction errors with exit 1 before writes. Purge preflights directory-shaped state leaves, symlinked or wrong-type capture roots, private writable capture directories and regular fixed capture leaves before removing payloads.
+- Devin doctor reports installed=false for bad-mode or wrong-type numeric state and pending recovery; pending recovery returns exit 1 and skips its local probe. Desktop metadata checks are bounded heuristics only.
+- Nondefault Devin home discovery warnings appear on install stdout; doctor normalizes equivalent HOME spellings. Local probe failures clean up their captures without recording metrics.
+
 ## [5.13.42] - 2026-10-13
 
 - On Devin, `git status --short` output keeps its file names: the `git-status` hint now applies to the long form only, and short or porcelain listings get generic compression.
