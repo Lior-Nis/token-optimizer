@@ -2,6 +2,7 @@
 """Install the explicit Devin output skill, never edit host config or hooks."""
 from __future__ import annotations
 import argparse
+import ast
 import base64
 from contextlib import contextmanager
 import hashlib
@@ -22,6 +23,35 @@ SCRIPTS = Path(__file__).resolve().parent
 from devin_verify import PAYLOAD
 SKILL_NAME = 'token-optimizer-output'
 MARKER = 'devin-output-filter-v1'
+
+
+def _render_payload(name: str) -> bytes:
+    """Commit installed bytes, with a direct-execution gate on internal modules."""
+    source = (SCRIPTS / name).read_bytes()
+    if name in ('devin_compress.py', 'devin_doctor.py'):
+        return source
+    tree = ast.parse(source)
+    prefix_end = 0
+    prefix_count = 0
+    for index, node in enumerate(tree.body):
+        docstring = (index == 0 and isinstance(node, ast.Expr)
+                     and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str))
+        future = isinstance(node, ast.ImportFrom) and node.module == '__future__'
+        if not (docstring or future):
+            break
+        prefix_end = node.end_lineno
+        prefix_count += 1
+    if any(node.lineno <= prefix_end for node in tree.body[prefix_count:]):
+        raise OSError('payload prefix shares a line with executable code')
+    lines = source.splitlines(keepends=True)
+    guard = (b"\n# Installed Devin payload: internal modules have no CLI contract.\n"
+             b"if __name__ == '__main__':\n"
+             b"    import sys\n"
+             b"    print('Token Optimizer: internal module requires an activated entrypoint. Originals remain unchanged.', file=sys.stderr)\n"
+             b"    raise SystemExit(2)\n\n")
+    result = b''.join(lines[:prefix_end]) + guard + b''.join(lines[prefix_end:])
+    compile(result, name, 'exec')
+    return result
 
 
 def skill_dir() -> Path:
@@ -69,7 +99,8 @@ def _ownership(*, allow_missing=False) -> dict | None:
     if not isinstance(record, dict) or record.get('owner') != MARKER or not isinstance(record.get('files'), dict):
         raise OSError('invalid ownership record')
     expected = {str(state.data_dir() / 'plugin' / name) for name in PAYLOAD} | {str(skill_dir() / 'SKILL.md')}
-    if set(record['files']) != expected:
+    legacy = expected - {str(state.data_dir() / 'plugin' / name) for name in ('plugin_env.py', 'refetch_fingerprint.py')}
+    if set(record['files']) not in (expected, legacy):
         raise OSError('ownership paths do not match this install')
     for name, digest in record['files'].items():
         if allow_missing and not Path(name).exists():
@@ -128,14 +159,31 @@ def _recover_pending() -> None:
     source=SCRIPTS.parents[2]/'devin/SKILL.md'
     if not source.is_file():raise OSError('pending repair requires original checkout')
     rendered=source.read_text().replace('@PYTHON@',shlex.quote(os.path.realpath(sys.executable))).replace('@FILTER@',shlex.quote(str(state.data_dir()/'plugin/devin_compress.py')))
-    current={str(state.data_dir()/'plugin'/name):hashlib.sha256((SCRIPTS/name).read_bytes()).hexdigest() for name in PAYLOAD}
+    current={str(state.data_dir()/'plugin'/name):hashlib.sha256(_render_payload(name)).hexdigest() for name in PAYLOAD}
     current[str(skill_dir()/'SKILL.md')]=hashlib.sha256(rendered.encode()).hexdigest()
     if value['files']!=current:
         raise OSError('pending version/content ambiguous; preserved; use documented manual repair')
     old=value.get('previous')
     if old is not None:
-        if not isinstance(old,dict) or set(old)!=expected:raise OSError('invalid refresh recovery record')
+        legacy=expected - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
+        if not isinstance(old,dict) or set(old) not in (expected,legacy):raise OSError('invalid refresh recovery record')
+        if any(not isinstance(content,str) for content in old.values()) or not isinstance(value.get('previous_manifest'),str):
+            raise OSError('invalid refresh recovery encoding')
         previous={name:base64.b64decode(content,validate=True) for name,content in old.items()}
+        previous_manifest=base64.b64decode(value['previous_manifest'],validate=True)
+        previous_record=json.loads(previous_manifest)
+        if (not isinstance(previous_record,dict) or previous_record.get('owner')!=MARKER
+                or not isinstance(previous_record.get('files'),dict)
+                or set(previous_record['files'])!=set(previous)
+                or any(not isinstance(digest,str) or len(digest)!=64
+                       or any(ch not in '0123456789abcdef' for ch in digest)
+                       for digest in previous_record['files'].values())):
+            raise OSError('invalid previous ownership commitments; preserved')
+        if _private_bytes(manifest_path())!=previous_manifest:
+            raise OSError('previous ownership differs from preserved manifest; preserved')
+        if any(hashlib.sha256(content).hexdigest()!=previous_record['files'][name]
+               for name,content in previous.items()):
+            raise OSError('previous rollback source differs from ownership commitments; preserved')
         for name,content in previous.items():
             path=Path(name);state.no_symlinks(path)
             if path.exists() and _hash(path) not in (hashlib.sha256(content).hexdigest(),value['files'][name]):
@@ -143,10 +191,17 @@ def _recover_pending() -> None:
             temporary=path.with_name(path.name+'.install-tmp')
             if temporary.exists():
                 raise OSError('pre-existing refresh temporary ownership ambiguous; preserved; use manual repair')
+        added=set(value['files']) - set(previous)
+        for name in added:
+            path=Path(name);state.no_symlinks(path)
+            if path.exists() and _hash(path)!=value['files'][name]:
+                raise OSError('edited newly added refresh leaf; preserved')
+        for name in added:
+            Path(name).unlink(missing_ok=True)
         for name,content in previous.items():
             path=Path(name)
             _atomic(path,content)
-        _atomic(manifest_path(),base64.b64decode(value['previous_manifest'],validate=True))
+        _atomic(manifest_path(),previous_manifest)
         _clear_pending(pending);return
     # If the fresh install completed publication, validate before clearing pending.
     if manifest_path().exists():
@@ -209,7 +264,7 @@ def install(*, dry_run=False) -> None:
         old_manifest=manifest_path().read_bytes() if owned else None
         new_leaves=[]
         pending=state.data_dir()/'pending-install.json'
-        intended={str(root/'plugin'/name):hashlib.sha256((SCRIPTS/name).read_bytes()).hexdigest() for name in PAYLOAD}
+        intended={str(root/'plugin'/name):hashlib.sha256(_render_payload(name)).hexdigest() for name in PAYLOAD}
         rendered=source.read_text().replace('@PYTHON@',shlex.quote(os.path.realpath(sys.executable))).replace('@FILTER@',shlex.quote(str(root/'plugin/devin_compress.py')))
         intended[str(skill/'SKILL.md')]=hashlib.sha256(rendered.encode()).hexdigest()
         transaction={'owner':MARKER,'files':intended}
@@ -224,7 +279,7 @@ def install(*, dry_run=False) -> None:
             for name in PAYLOAD:
                 target = root / 'plugin' / name
                 new_leaves.append(str(target))
-                _atomic(target, (SCRIPTS / name).read_bytes())
+                _atomic(target, _render_payload(name))
                 files[str(target)] = _hash(target)
             text = source.read_text().replace('@PYTHON@', shlex.quote(os.path.realpath(sys.executable)))
             text = text.replace('@FILTER@', shlex.quote(str(root / 'plugin' / 'devin_compress.py')))
@@ -237,6 +292,8 @@ def install(*, dry_run=False) -> None:
             _clear_pending(pending)
         except Exception:
             if owned:
+                for name in set(new_leaves) - set(old_bytes):
+                    Path(name).unlink(missing_ok=True)
                 for name,content in old_bytes.items():
                     _atomic(Path(name),content)
                 _atomic(manifest_path(),old_manifest)
@@ -322,6 +379,9 @@ def main(argv=None) -> int:
         else:
             uninstall(dry_run=args.dry_run, purge=args.purge)
         return 0
+    except RecursionError as exc:
+        print('Devin install refused: ' + str(exc), file=sys.stderr)
+        return 2
     except (OSError, ValueError) as exc:
         print('Devin install refused: ' + str(exc), file=sys.stderr)
         return 1
