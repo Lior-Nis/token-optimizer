@@ -190,7 +190,7 @@ def diagnose(probe=False):
             else:
                 warnings.append(error + '; ordinary recovery refuses this path. Move it aside or use uninstall --purge to discard adapter state and stored captures.')
         else:
-            warnings.append('Recovery is pending; real install/uninstall validates and attempts recovery, but invalid transaction contents can still refuse. Dry-run refuses pending recovery.')
+            warnings.append('Recovery is pending; real install/uninstall validates and attempts recovery, but invalid transaction contents can still refuse; uninstall --purge then discards adapter state and also removes stored captures. Dry-run refuses pending recovery.')
     for name in ('.claude/settings.json', '.claude.json'):
         if (Path.home() / name).is_file():
             warnings.append('Claude config exists and Devin imports may load its hooks: ' + name)
