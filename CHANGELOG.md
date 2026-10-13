@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.42] - 2026-10-13
+
+- On Devin, `git status --short` output keeps its file names: the `git-status` hint now applies to the long form only, and short or porcelain listings get generic compression.
+
 ## [5.13.41] - 2026-10-13
 
 - On Devin, a named format hint is now only trusted when the capture actually looks like that command's output; foreign output like `git log` hinted as `git-status` gets the generic treatment instead of collapsing to a few mislabeled lines.
