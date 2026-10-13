@@ -731,3 +731,184 @@ def test_uninstall_purge_after_full_removal_idempotent(tmp_path, monkeypatch):
         assert rc == 0, (kwargs, detail)
     _assert_no_owned_left(home)
     print('MATRIX|post_removal|uninstall+purge|rc=0|twice')
+
+
+# ---------------------------------------------------------------------------
+# Follow-up fix matrix: the commits on top of PR #241 (integ-5.13.43) fixed
+# purge after an interrupted refresh, made removal refuse a group/other
+# writable ancestor, and taught doctor to name unsafe state honestly.
+# ---------------------------------------------------------------------------
+
+
+def _crash_mid_refresh(home: Path):
+    """Interrupt a real refresh for real: a subprocess runs install() with a
+    renderer that appends a marker to every payload (so the refresh genuinely
+    changes bytes) and _atomic wrapped to kill the process with os._exit(77)
+    after the fifth payload-file write. Asserts the crash left a pending
+    record plus a manifest whose digests no longer match some payload files.
+    Returns the names of the files the crash rewrote."""
+    script = (
+        'import os, sys\n'
+        f'sys.path.insert(0, {str(SCRIPTS)!r})\n'
+        'import devin_install as inst\n'
+        '_render = inst._render_payload\n'
+        "inst._render_payload = lambda name: _render(name) + b'\\n# next version\\n'\n"
+        '_atomic = inst._atomic\n'
+        'count = [0]\n'
+        'def crashing_atomic(path, content):\n'
+        '    _atomic(path, content)\n'
+        "    if '/plugin/' in str(path):\n"
+        '        count[0] += 1\n'
+        '        if count[0] >= 5:\n'
+        '            os._exit(77)\n'
+        'inst._atomic = crashing_atomic\n'
+        'inst.install()\n'
+    )
+    run = subprocess.run([sys.executable, '-c', script], env=_env(home),
+                         capture_output=True, text=True, timeout=60)
+    assert run.returncode == 77, (run.returncode, run.stdout, run.stderr)
+    data = _data(home)
+    pending = data / 'pending-install.json'
+    manifest = data / 'install.json'
+    assert pending.is_file(), 'crash left no pending-install.json'
+    assert manifest.is_file(), 'crash left no install.json'
+    record = json.loads(manifest.read_text())
+    mismatched = sorted(Path(name).name for name, digest in record['files'].items()
+                        if not Path(name).exists()
+                        or hashlib.sha256(Path(name).read_bytes()).hexdigest() != digest)
+    assert mismatched, 'crash left no manifest/payload digest mismatch'
+    return mismatched
+
+
+def test_interrupted_refresh_purge_dry_run_is_noop(tmp_path, monkeypatch):
+    """`uninstall --purge --dry-run` on an interrupted refresh exits 0 and
+    changes nothing."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    _crash_mid_refresh(home)
+    before = _tree_snapshot(home)
+    rc, detail = _invoke(home, monkeypatch, 'uninstall', dry_run=True, purge=True)
+    assert rc == 0, detail
+    assert 'Would remove' in detail
+    _assert_tree_unchanged(before, home, 'purge --dry-run on interrupted refresh')
+    print('MATRIX|interrupted_refresh|purge_dry|rc=0')
+
+
+def test_interrupted_refresh_purge_removes_all_owned(tmp_path, monkeypatch):
+    """`uninstall --purge` on an interrupted refresh exits 0 and leaves
+    nothing owned behind, including the half-written new-version files."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    _crash_mid_refresh(home)
+    rc, detail = _invoke(home, monkeypatch, 'uninstall', purge=True)
+    assert rc == 0, detail
+    _assert_no_owned_left(home)
+    print('MATRIX|interrupted_refresh|purge|rc=0')
+
+
+def test_interrupted_refresh_purge_blames_only_user_edit(tmp_path, monkeypatch):
+    """Interrupted refresh plus a user edit to a payload file the crash did
+    not rewrite plus a user-added file in plugin/: purge refuses, names the
+    user-edited file (not a refresh-written one), and removes nothing."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    rewritten = _crash_mid_refresh(home)
+    data = _data(home)
+    edited = data / 'plugin' / 'bash_whitelist.py'
+    assert edited.name not in rewritten, 'test needs a file the crash did not rewrite'
+    edited.write_bytes(edited.read_bytes() + b'# user edit\n')
+    stray = data / 'plugin' / 'user-scratch.txt'
+    stray.write_text('keep me\n')
+    before = _tree_snapshot(home)
+    rc, detail = _invoke(home, monkeypatch, 'uninstall', purge=True)
+    assert rc != 0, detail
+    assert str(edited) in detail, detail
+    # Refresh-written files are adapter output, not user edits; the refusal
+    # must not blame them.
+    assert 'devin_compress.py' not in detail, detail
+    assert 'devin_state.py' not in detail, detail
+    _assert_tree_unchanged(before, home, 'purge refusal on edited interrupted refresh')
+    print(f'MATRIX|interrupted_refresh|purge_user_edit|rc={rc}')
+
+
+def test_interrupted_refresh_ordinary_commands_recover(tmp_path, monkeypatch):
+    """The pending record carries the fingerprinted previous bytes and
+    previous manifest, so an ordinary install can restore them and finish;
+    an ordinary uninstall can restore them and remove the install."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    _crash_mid_refresh(home)
+    rc, detail = _invoke(home, monkeypatch, 'install')
+    assert rc == 0, detail
+    import devin_verify as verify
+    monkeypatch.setenv('HOME', str(home))
+    assert verify.verify_install() is True
+    rc, detail = _invoke(home, monkeypatch, 'uninstall')
+    assert rc == 0, detail
+    # Plain uninstall removes owned payload/manifest; adapter numeric state
+    # and the lock remain by design, so finish with the documented purge.
+    rc, detail = _invoke(home, monkeypatch, 'uninstall', purge=True)
+    assert rc == 0, detail
+    _assert_no_owned_left(home)
+    print('MATRIX|interrupted_refresh|install_uninstall|rc=0')
+
+
+def test_writable_ancestor_refuses_all_removal_commands(tmp_path, monkeypatch):
+    """A group/other-writable ancestor (.config at 0775) makes every removal
+    spelling refuse: uninstall dry-run, uninstall, purge dry-run and purge.
+    Same reason, names the directory, says chmod go-w, changes nothing."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    config = home / '.config'
+    config.chmod(0o775)
+    try:
+        before = _tree_snapshot(home)
+        for label, kwargs in (('uninstall_dry', {'dry_run': True}),
+                              ('uninstall', {}),
+                              ('purge_dry', {'dry_run': True, 'purge': True}),
+                              ('purge', {'purge': True})):
+            rc, detail = _invoke(home, monkeypatch, 'uninstall', **kwargs)
+            assert rc != 0, (label, detail)
+            assert 'writable ancestor' in detail, (label, detail)
+            assert str(config) in detail, (label, detail)
+            assert 'chmod go-w' in detail, (label, detail)
+        _assert_tree_unchanged(before, home, 'removal commands under writable ancestor')
+        print('MATRIX|writable_ancestor|uninstall+purge x2|refused')
+    finally:
+        config.chmod(0o700)
+
+
+def test_doctor_names_loose_data_dir_not_missing_consent(tmp_path, monkeypatch):
+    """A 0755 data dir makes diagnose() report installed False with a
+    readiness_error naming the data dir and owner-only, not the misleading
+    'missing local data consent' the old code produced."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    data = _data(home)
+    data.chmod(0o755)
+    import devin_doctor as doctor
+    monkeypatch.setenv('HOME', str(home))
+    result = doctor.diagnose()
+    assert result['installed'] is False
+    error = result['readiness_error'] or ''
+    assert str(data) in error, error
+    assert 'owner-only' in error, error
+    assert 'missing local data consent' not in error, error
+    print('MATRIX|doctor|loose_data_dir|installed=False')
+
+
+def test_doctor_warns_install_lock_will_refuse(tmp_path, monkeypatch):
+    """A 0644 install.lock leaves the install valid but warns that lifecycle
+    commands will refuse, naming the lock path."""
+    home = _new_home(tmp_path, monkeypatch, 'home')
+    _install_current(home, monkeypatch)
+    lock = _data(home) / 'install.lock'
+    lock.chmod(0o644)
+    import devin_doctor as doctor
+    monkeypatch.setenv('HOME', str(home))
+    result = doctor.diagnose()
+    assert result['installed'] is True, result
+    lock_warnings = [w for w in result['warnings'] if 'will refuse' in w]
+    assert lock_warnings, result['warnings']
+    assert any(str(lock) in w for w in lock_warnings), lock_warnings
+    print('MATRIX|doctor|loose_lock|installed=True, warned')
