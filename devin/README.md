@@ -141,4 +141,4 @@ Dry-run checks effective access for the existing tree without writing. Default A
 
 If an interrupted refresh record no longer matches the current checkout, ordinary install/uninstall may refuse recovery. Use the documented private move-aside repair to preserve captures, or `bash install.sh --devin --uninstall --purge` to discard adapter state and stored captures; purge completes in this state unless you also edited an installed file. Recovery is not guaranteed across changed checkout content.
 
-Removal preflights check directory permissions, not per-file flags or ACLs. If one owned file cannot be removed, uninstall removes the rest, keeps the ownership record, names the file and exits nonzero; clear the flag and rerun the same command.
+Preflights check directory permissions and, on macOS and BSD, the immutable and append-only file flags; an owned file carrying one refuses install, uninstall and purge before anything changes. ACLs and Linux file attributes are not predicted. If one owned file still cannot be removed, uninstall removes the rest, keeps the ownership record, names the file and exits nonzero; clear the restriction and rerun the same command.
