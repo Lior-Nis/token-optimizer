@@ -149,9 +149,15 @@ def diagnose(probe=False):
     recovery_pending = (root/'pending-install.json').exists() or (root/'pending-install.json').is_symlink()
     from devin_verify import verify_install
     error=None
-    try:
-        for leaf in ('metrics.db', 'session-salt', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm'):
+    # Numeric estimates are optional: the filter works without them, so an
+    # unsafe metrics leaf is its own field and warning, not a readiness failure.
+    numeric_errors = []
+    for leaf in state.NUMERIC_STATE_LEAVES:
+        try:
             state.private_path(root / leaf)
+        except OSError as exc:
+            numeric_errors.append(str(exc))
+    try:
         ready=verify_install()
         from devin_verify import PAYLOAD
         # Import the whole manifested payload through the digest-checked
@@ -197,12 +203,14 @@ def diagnose(probe=False):
     for base in (Path.cwd()/'.devin',Path.cwd()/'.claude'):
         if (base/'skills/token-optimizer-output/SKILL.md').exists():
             warnings.append('Project token-optimizer-output skill can shadow installed global skill: '+str(base))
+    for message in numeric_errors:
+        warnings.append('Numeric estimates will not be recorded: ' + message)
     loader = state.loader_path_info()
     if loader['status'] != 'documented_default':
         warnings.append('Nondefault skill directory: CLI/Desktop discovery is unverified; check the loaded skill source.')
     surfaces = local_agent_surfaces()
     result = {'recovery_pending': recovery_pending, 'local_agent_surfaces': surfaces, 'loader_path': loader, 'surface': 'explicit_capture_filter', 'status': 'recovery-pending' if recovery_pending else 'contract-only beta',
-              'installed': ready, 'readiness_error': error, 'devin_cli_on_path': surfaces['cli_on_path'],
+              'installed': ready, 'readiness_error': error, 'numeric_state_ok': not numeric_errors, 'devin_cli_on_path': surfaces['cli_on_path'],
               'live_devin_session_tested': False, 'warnings': warnings,
               'local_probe_passed': None}
     if probe and ready:

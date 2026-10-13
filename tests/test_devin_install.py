@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import os
+import stat
 import pytest
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Native Windows unsupported by production design (installer refuses os.name != posix); tests gated accordingly.')
 
@@ -363,12 +364,19 @@ def test_desktop_preflight_refuses_file_parent(tmp_path, monkeypatch, dry):
 
 @pytest.mark.parametrize('leaf',['metrics.db','session-salt'])
 @pytest.mark.parametrize('dry',[True,False])
-def test_desktop_numeric_special_state_refused(tmp_path, monkeypatch, leaf, dry):
+def test_desktop_numeric_special_state_warns_without_blocking(tmp_path, monkeypatch, capsys, leaf, dry):
+    # Numeric estimates are optional: an unusable metrics leaf must not stop
+    # the skill from installing, and must be named with its reason.
     import devin_install as d
     monkeypatch.setenv('HOME',str(tmp_path))
     root=tmp_path/'.config/devin/token-optimizer';root.mkdir(parents=True);root.chmod(0o700)
     os.mkfifo(root/leaf,0o600)
-    with pytest.raises(OSError,match='regular'):d.install(dry_run=dry)
+    d.install(dry_run=dry)
+    text=capsys.readouterr().out
+    assert 'numeric estimates will not be recorded' in text
+    assert 'regular state file required: '+str(root/leaf) in text
+    assert stat.S_ISFIFO((root/leaf).lstat().st_mode)
+    assert (root/'install.json').exists() is (not dry)
 
 
 def test_desktop_file_parent_refusal_creates_no_state(tmp_path, monkeypatch):
@@ -530,7 +538,7 @@ def test_desktop_wrong_type_error_precedes_mode(tmp_path):
 
 @pytest.mark.parametrize('leaf', ['metrics.db', 'session-salt', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm'])
 @pytest.mark.parametrize('kind', ['loose-mode', 'directory', 'symlink'])
-def test_desktop_doctor_numeric_readiness_guard(tmp_path, monkeypatch, leaf, kind):
+def test_desktop_doctor_reports_unsafe_numeric_state_without_failing(tmp_path, monkeypatch, leaf, kind):
     import devin_install as d
     import devin_doctor as doctor
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -545,10 +553,13 @@ def test_desktop_doctor_numeric_readiness_guard(tmp_path, monkeypatch, leaf, kin
         target.chmod(0o644)
     before = target.lstat()
     result = doctor.diagnose(probe=True)
-    assert not result['installed']
-    assert result['readiness_error']
-    assert any(word in result['readiness_error'] for word in ('owner-only', 'regular state file', 'symlink'))
-    assert result['local_probe_passed'] is None
+    # The payload verifies and the filter works without numeric estimates, so
+    # readiness holds; the unsafe leaf is its own field and a named warning.
+    assert result['installed'] and result['readiness_error'] is None
+    assert result['numeric_state_ok'] is False
+    assert result['local_probe_passed'] is True
+    named = [w for w in result['warnings'] if w.startswith('Numeric estimates will not be recorded') and str(target) in w]
+    assert named and any(word in named[0] for word in ('owner-only', 'regular state file', 'symlink'))
     after = target.lstat()
     assert (before.st_ino, before.st_mode, before.st_size) == (after.st_ino, after.st_mode, after.st_size)
     if kind == 'loose-mode':
@@ -794,7 +805,7 @@ def test_desktop_dry_refuses_loose_destination(tmp_path, monkeypatch, part):
         d.install(dry_run=True)
 
 
-def test_desktop_private_state_hardlink_refused(tmp_path, monkeypatch):
+def test_desktop_numeric_state_hardlink_warns_and_names_leaf(tmp_path, monkeypatch, capsys):
     import devin_install as d
     monkeypatch.setenv('HOME', str(tmp_path))
     d.install()
@@ -802,8 +813,23 @@ def test_desktop_private_state_hardlink_refused(tmp_path, monkeypatch):
     leaf.write_bytes(b'local')
     leaf.chmod(0o600)
     os.link(leaf, tmp_path / 'linked')
-    with pytest.raises(OSError, match=str(leaf)):
-        d.install(dry_run=True)
+    capsys.readouterr()
+    d.install(dry_run=True)
+    text = capsys.readouterr().out
+    assert 'numeric estimates will not be recorded' in text and str(leaf) in text
+    assert leaf.read_bytes() == b'local' and leaf.stat().st_nlink == 2
+
+
+def test_desktop_install_state_hardlink_refused(tmp_path, monkeypatch):
+    # Install-critical state still refuses, and names the leaf.
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    leaf = d.state.data_dir() / 'consent.json'
+    os.link(leaf, tmp_path / 'linked')
+    for dry in (True, False):
+        with pytest.raises(OSError, match=str(leaf)):
+            d.install(dry_run=dry)
 
 @pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
 @pytest.mark.parametrize('mode', [0o000, 0o500])
@@ -970,7 +996,10 @@ def test_desktop_purge_search_only_ancestor_without_captures(tmp_path, monkeypat
         tmp_path.chmod(0o700)
 
 @pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
-def test_desktop_foreign_directory_refusal_has_repair_hint(tmp_path, monkeypatch):
+@pytest.mark.parametrize('dry', [False, True])
+def test_desktop_foreign_unwritable_directory_is_not_ours_to_refuse(tmp_path, monkeypatch, capsys, dry):
+    # Nothing is owned, so nothing would be removed: a foreign folder's mode is
+    # not a reason to refuse, and the message must not tell the user to move it.
     import devin_install as d
     monkeypatch.setenv('HOME', str(tmp_path))
     root = d.state.data_dir()
@@ -979,7 +1008,92 @@ def test_desktop_foreign_directory_refusal_has_repair_hint(tmp_path, monkeypatch
     root.chmod(0o700)
     plugin.chmod(0o000)
     try:
-        with pytest.raises(OSError, match='inspect it and move it aside before retrying removal'):
-            d.uninstall(dry_run=True)
+        d.uninstall(dry_run=dry)
+        assert 'No owned Devin install found.' in capsys.readouterr().out
+        assert plugin.is_dir()
     finally:
         plugin.chmod(0o700)
+
+
+@pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
+def test_desktop_purge_skips_foreign_readonly_skill_and_still_purges_captures(tmp_path, monkeypatch, capsys):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    foreign = d.skill_dir(); foreign.mkdir(parents=True)
+    (foreign / 'NOTES.md').write_text('mine')
+    root = d.state.data_dir(); root.mkdir(mode=0o700)
+    d.state.enable_consent()
+    capture = d.state.prepare_capture()
+    (root / 'metrics.db').write_bytes(b'x'); (root / 'metrics.db').chmod(0o600)
+    foreign.chmod(0o555)
+    try:
+        d.uninstall(purge=True)
+        text = capsys.readouterr().out
+        assert 'were preserved under ' + str(foreign) in text
+        assert 'No owned Devin skill/payload was installed.' in text
+        assert not capture.exists() and not (root / 'metrics.db').exists()
+        assert (foreign / 'NOTES.md').read_text() == 'mine'
+    finally:
+        foreign.chmod(0o755)
+
+
+@pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='root bypasses chmod access checks')
+def test_desktop_readonly_skills_parent_refuses_before_removal_then_recovers(tmp_path, monkeypatch, capsys):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    parent = d.skill_dir().parent
+    before = sorted(str(p) for p in (tmp_path / '.config/devin').rglob('*'))
+    parent.chmod(0o555)
+    try:
+        for dry in (True, False):
+            with pytest.raises(OSError, match=str(parent) + '; make it writable'):
+                d.uninstall(dry_run=dry)
+        assert sorted(str(p) for p in (tmp_path / '.config/devin').rglob('*')) == before
+    finally:
+        parent.chmod(0o755)
+    d.uninstall()
+    assert not d.skill_dir().exists()
+    d.install()
+    assert (d.skill_dir() / 'SKILL.md').is_file()
+
+
+def test_desktop_empty_leftover_skill_dir_is_not_foreign(tmp_path, monkeypatch):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.skill_dir().mkdir(parents=True, mode=0o700)
+    d.install(dry_run=True)
+    d.install()
+    assert (d.skill_dir() / 'SKILL.md').is_file()
+
+
+def test_desktop_uninstall_with_only_a_foreign_skill_writes_nothing(tmp_path, monkeypatch, capsys):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.skill_dir().mkdir(parents=True)
+    (d.skill_dir() / 'SKILL.md').write_text('mine')
+    d.uninstall()
+    assert 'No owned Devin install found.' in capsys.readouterr().out
+    assert not d.state.data_dir().exists()
+    assert (d.skill_dir() / 'SKILL.md').read_text() == 'mine'
+
+
+def test_desktop_unremovable_owned_file_keeps_record_and_rerun_completes(tmp_path, monkeypatch):
+    import devin_install as d
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    stuck = d.state.data_dir() / 'plugin/devin_verify.py'
+    original = Path.unlink
+    def refuse(path, *args, **kwargs):
+        if path == stuck:
+            raise PermissionError(1, 'Operation not permitted', str(path))
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'unlink', refuse)
+    with pytest.raises(OSError, match='could not remove owned files: ' + str(stuck)) as caught:
+        d.uninstall()
+    assert 'ownership record was kept' in str(caught.value)
+    assert stuck.exists() and d.manifest_path().exists()
+    assert (d.state.data_dir() / 'consent.json').exists()
+    monkeypatch.setattr(Path, 'unlink', original)
+    d.uninstall()
+    assert not stuck.exists() and not d.manifest_path().exists() and not d.skill_dir().exists()

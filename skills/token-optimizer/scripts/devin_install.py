@@ -290,7 +290,7 @@ def _recover_pending() -> None:
     """Resume only a fingerprinted fresh-install transaction, never foreign files."""
     pending=state.private_path(state.data_dir()/'pending-install.json')
     if not pending.exists():return
-    if pending.stat().st_nlink!=1:raise OSError('pending ownership hardlink refused')
+    if pending.stat().st_nlink!=1:raise OSError('pending ownership hardlink refused: ' + str(pending))
     try:
         value=json.loads(_private_bytes(pending))
     except (ValueError,RecursionError):
@@ -304,7 +304,7 @@ def _recover_pending() -> None:
         keys=None
     if (not isinstance(value,dict) or value.get('owner')!=MARKER
             or keys not in (sorted(expected),sorted(legacy))):
-        raise OSError('invalid pending install record; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
+        raise OSError('invalid pending install record: ' + str(pending) + '; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
     # Reconcile published new bytes first: stale pending must not undo a completed update.
     if manifest_path().exists():
         try:
@@ -321,7 +321,7 @@ def _recover_pending() -> None:
     # A previous-version record cannot match this tree's rendered digests; it
     # reconciles against the digests it committed, per file, in the loop below.
     if keys==sorted(expected) and _resolved_files(value['files'])!=current:
-        raise OSError('pending version/content ambiguous; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state, or follow the documented manual repair')
+        raise OSError('pending version/content ambiguous: ' + str(pending) + '; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state, or follow the documented manual repair')
     old=value.get('previous')
     if old is not None:
         if not isinstance(old,dict) or _resolved_keys(old) not in (sorted(expected),sorted(legacy)):raise OSError('invalid refresh recovery record')
@@ -521,7 +521,7 @@ def install(*, dry_run=False) -> None:
         print(warning)
     if dry_run:
         if (root / 'pending-install.json').exists():
-            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending')
+            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending: ' + str(root / 'pending-install.json') + '; run a real install or uninstall to recover')
         _preflight_destination(root, skill)
         _preflight_write_access(root, skill)
         print('Would install explicit Devin output skill at ' + str(skill))
@@ -637,7 +637,7 @@ def uninstall(*, dry_run=False, purge=False) -> None:
     pending = root / 'pending-install.json'
     if dry_run and not purge and (pending.exists() or pending.is_symlink()):
         state.private_path(pending)
-        raise OSError('dry-run refuses while recovery is pending')
+        raise OSError('dry-run refuses while recovery is pending: ' + str(pending) + '; run a real install or uninstall to recover')
     # Purge is independent of an install manifest: plain uninstall may precede it.
     # Under purge a stale or foreign-version pending record is deleted, not
     # reconciled, so it must never block the purge path.

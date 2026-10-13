@@ -65,7 +65,7 @@ def data_dir() -> Path:
 def no_symlinks(path: Path) -> None:
     for component in [*reversed(path.absolute().parents), path.absolute()]:
         if component.is_symlink():
-            raise OSError('symlink path refused')
+            raise OSError('symlink path refused: ' + str(component))
 
 
 def private_dir(path: Path) -> Path:

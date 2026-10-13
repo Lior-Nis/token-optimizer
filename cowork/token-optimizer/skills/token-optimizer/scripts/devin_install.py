@@ -91,7 +91,7 @@ def _private_bytes(path: Path) -> bytes:
 def _hash(path: Path) -> str:
     try:return hashlib.sha256(_private_bytes(path)).hexdigest()
     except FileNotFoundError:
-        raise OSError('owned file is missing; uninstall then install to repair while preserving original captures')
+        raise OSError('owned file is missing: ' + str(path) + '; uninstall then install to repair while preserving original captures')
 
 
 def _clear_pending(path: Path) -> None:
@@ -290,7 +290,7 @@ def _recover_pending() -> None:
     """Resume only a fingerprinted fresh-install transaction, never foreign files."""
     pending=state.private_path(state.data_dir()/'pending-install.json')
     if not pending.exists():return
-    if pending.stat().st_nlink!=1:raise OSError('pending ownership hardlink refused')
+    if pending.stat().st_nlink!=1:raise OSError('pending ownership hardlink refused: ' + str(pending))
     try:
         value=json.loads(_private_bytes(pending))
     except (ValueError,RecursionError):
@@ -304,7 +304,7 @@ def _recover_pending() -> None:
         keys=None
     if (not isinstance(value,dict) or value.get('owner')!=MARKER
             or keys not in (sorted(expected),sorted(legacy))):
-        raise OSError('invalid pending install record; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
+        raise OSError('invalid pending install record: ' + str(pending) + '; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
     # Reconcile published new bytes first: stale pending must not undo a completed update.
     if manifest_path().exists():
         try:
@@ -321,7 +321,7 @@ def _recover_pending() -> None:
     # A previous-version record cannot match this tree's rendered digests; it
     # reconciles against the digests it committed, per file, in the loop below.
     if keys==sorted(expected) and _resolved_files(value['files'])!=current:
-        raise OSError('pending version/content ambiguous; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state, or follow the documented manual repair')
+        raise OSError('pending version/content ambiguous: ' + str(pending) + '; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state, or follow the documented manual repair')
     old=value.get('previous')
     if old is not None:
         if not isinstance(old,dict) or _resolved_keys(old) not in (sorted(expected),sorted(legacy)):raise OSError('invalid refresh recovery record')
@@ -391,9 +391,20 @@ def _recover_pending() -> None:
 
 
 def _preflight_state_files(root):
-    for leaf in ('install.lock', 'consent.json', 'pending-install.json',
-                 'metrics.db', 'session-salt', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm'):
+    for leaf in ('install.lock', 'consent.json', 'pending-install.json'):
         state.private_path(root / leaf)
+
+
+def _numeric_state_warnings(root) -> list:
+    """Numeric estimates are optional: the filter works without them, so an
+    unsafe metrics leaf is reported, never a reason to refuse the skill."""
+    found = []
+    for leaf in state.NUMERIC_STATE_LEAVES:
+        try:
+            state.private_path(root / leaf)
+        except OSError as exc:
+            found.append('Warning: numeric estimates will not be recorded: ' + str(exc))
+    return found
 
 
 def _preflight_ancestors(root, skill):
@@ -429,17 +440,22 @@ def _preflight_write_access(root, skill):
 
 
 def _preflight_removal_access(root, skill, owned, *, purge=False):
+    # Without an ownership record nothing in plugin/ or the skill folder is
+    # removed by name: the purge sweep skips what it cannot change and reports
+    # it as preserved, so foreign folders are never a reason to refuse.
     destinations = [root]
     if owned:
         destinations.extend(Path(name).parent for name in owned['files'])
-    else:
-        destinations.extend(folder for folder in (root / 'plugin', skill) if not (purge and folder.is_symlink()))
+        # The emptied skill folder is removed from its parent.
+        if skill.exists():
+            destinations.append(skill.parent)
     for folder in set(destinations):
         if folder.exists() and not os.access(folder, os.W_OK | os.X_OK, effective_ids=True):
-            raise OSError('removal directory is not writable/searchable: ' + str(folder) + '; inspect it and move it aside before retrying removal')
+            raise OSError('removal directory is not writable/searchable: ' + str(folder) + '; make it writable (chmod u+wx) and retry removal')
     cache = root / 'plugin' / '__pycache__'
-    if purge and not owned and (root / 'plugin').is_symlink():
-        cache = None  # Foreign symlink targets are never inspected or removed.
+    if not owned and (purge and (root / 'plugin').is_symlink()
+                      or not os.access(root / 'plugin', os.W_OK | os.X_OK, effective_ids=True)):
+        cache = None  # Foreign symlink targets and folders are never inspected or removed.
     if cache is not None:
         state.no_symlinks(cache)
     if cache is not None and cache.exists():
@@ -452,14 +468,23 @@ def _preflight_removal_access(root, skill, owned, *, purge=False):
         raise OSError('install lock is not readable/writable: ' + str(lock))
 
 
+def _has_content(folder) -> bool:
+    """An empty directory left by an earlier removal is not foreign content."""
+    if not folder.exists() and not folder.is_symlink():
+        return False
+    if folder.is_symlink() or not folder.is_dir():
+        return True
+    return any(folder.iterdir())
+
+
 def _preflight_destination(root, skill):
     _preflight_ancestors(root, skill)
     _preflight_state_files(root)
     state.private_path(root, directory=True)
     state.private_path(root / 'plugin', directory=True)
     owned = _ownership()
-    if not owned and (skill.exists() or (root / 'plugin').exists()):
-        existing = [str(folder) for folder in (skill, root / 'plugin') if folder.exists()]
+    existing = [] if owned else [str(folder) for folder in (skill, root / 'plugin') if _has_content(folder)]
+    if existing:
         raise OSError('foreign install destination already exists: ' + ', '.join(existing) + '; move aside or remove and retry')
     state.private_path(skill, directory=True)
     if owned:
@@ -467,8 +492,10 @@ def _preflight_destination(root, skill):
                   if p.is_file() and '__pycache__' not in p.parts}
         recorded = set(_resolved_files(owned['files']))
         if actual != recorded:
-            strays = sorted(actual - recorded)
-            raise OSError('unowned files in install destination: ' + ', '.join(strays) + '; move aside or remove and retry')
+            strays, missing = sorted(actual - recorded), sorted(recorded - actual)
+            if strays:
+                raise OSError('unowned files in install destination: ' + ', '.join(strays) + '; move aside or remove and retry')
+            raise OSError('owned files are missing from the install destination: ' + ', '.join(missing) + '; run uninstall, then install')
     return owned
 
 
@@ -490,9 +517,11 @@ def install(*, dry_run=False) -> None:
         print('Warning: nondefault Devin home; Desktop discovery is unverified. Check the loaded skill in Desktop Customizations; this installer does not configure its loader.')
     _preflight_ancestors(root, skill)
     _preflight_state_files(root)
+    for warning in _numeric_state_warnings(root):
+        print(warning)
     if dry_run:
         if (root / 'pending-install.json').exists():
-            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending')
+            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending: ' + str(root / 'pending-install.json') + '; run a real install or uninstall to recover')
         _preflight_destination(root, skill)
         _preflight_write_access(root, skill)
         print('Would install explicit Devin output skill at ' + str(skill))
@@ -608,17 +637,17 @@ def uninstall(*, dry_run=False, purge=False) -> None:
     pending = root / 'pending-install.json'
     if dry_run and not purge and (pending.exists() or pending.is_symlink()):
         state.private_path(pending)
-        raise OSError('dry-run refuses while recovery is pending')
+        raise OSError('dry-run refuses while recovery is pending: ' + str(pending) + '; run a real install or uninstall to recover')
     # Purge is independent of an install manifest: plain uninstall may precede it.
     # Under purge a stale or foreign-version pending record is deleted, not
     # reconciled, so it must never block the purge path.
-    if not dry_run and not purge:
+    if not dry_run and not purge and root.exists():
         with _lock():_recover_pending()
     owned = _ownership_for_removal(purge=purge)
-    _preflight_removal_access(root, skill_dir(), owned, purge=purge)
     if not owned and not purge:
         print('No owned Devin install found.')
         return
+    _preflight_removal_access(root, skill_dir(), owned, purge=purge)
     if dry_run:
         if purge:
             print('Would remove unchanged owned files, numeric state and fixed stored-capture leaves; foreign capture content is preserved.')
@@ -635,8 +664,19 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             recorded = _purge_recorded()
             known = _known_payload_digests()
         if owned:
+            # Directory access was checked above; file flags and ACLs can still
+            # refuse one unlink. Finish the rest, keep the ownership record so a
+            # rerun completes, and stop before any other state is removed.
+            stuck = []
             for name in owned['files']:
-                Path(name).unlink(missing_ok=True)
+                try:
+                    Path(name).unlink(missing_ok=True)
+                except OSError as exc:
+                    stuck.append(name + ' (' + (exc.strerror or str(exc)) + ')')
+            if stuck:
+                raise OSError('could not remove owned files: ' + ', '.join(stuck) +
+                              '; other owned files were removed and the ownership record was kept.'
+                              ' Clear the file flags or permissions, then rerun the same uninstall')
             manifest_path().unlink(missing_ok=True)
         cache = state.data_dir() / 'plugin' / '__pycache__'
         if cache.exists() and not (purge and not owned and (state.data_dir() / 'plugin').is_symlink()):
@@ -703,7 +743,7 @@ def uninstall(*, dry_run=False, purge=False) -> None:
                   (' Some capture content was preserved; inspect the reported captures directory.' if captures.exists() else ' Stored captures removed.'))
     if not purge:
         print('Original captures unchanged.')
-    print('Removed owned Devin skill/payload.')
+    print('Removed owned Devin skill/payload.' if owned else 'No owned Devin skill/payload was installed.')
 
 
 def main(argv=None) -> int:
