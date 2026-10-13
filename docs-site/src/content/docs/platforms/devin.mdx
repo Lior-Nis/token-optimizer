@@ -6,7 +6,7 @@ description: "Contract-only beta: explicit captured-output filtering through a u
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="Live CLI proof only">
-A live Devin CLI session exercised the documented workflow end to end. The Devin desktop app was not tested, and no automated live-session validation exists. Local filter tests and one CLI session do not prove model adherence or delivered savings.
+A live Devin CLI session exercised the documented workflow end to end. Desktop's bundled agent was exercised on macOS (skill listed and run over its ACP interface); the Desktop window itself was not. No automated live-session validation exists. Local filter tests and these sessions do not prove model adherence or delivered savings.
 </Aside>
 
 ## Explicit filter, not hook parity
@@ -29,6 +29,6 @@ Hosted Devin has an optional manual playbook template in the repository. It is n
 
 ## Desktop: Devin Local contract
 
-[Devin Local](https://docs.devin.ai/desktop/devin-local) shares the CLI harness, skills format and discovery. This adapter targets that documented contract, not Cascade or other ACP agents. Desktop loading and execution remain unverified.
+[Devin Local](https://docs.devin.ai/desktop/devin-local) shares the CLI harness, skills format and discovery. This adapter targets that documented contract, not Cascade or other ACP agents. On macOS with Devin Desktop 1.126.0, the app's bundled agent listed the skill from `~/.config/devin/skills/` and ran prepare, capture, seal and filter when it was invoked over the agent's ACP interface. The Desktop window itself, Linux and Windows were not exercised.
 
 Select Devin Local, leave Restricted Mode, and open Customizations to check that `token-optimizer-output` loaded from the intended user skill. Invoke it explicitly. Install in the agent's actual POSIX HOME; native Windows is unsupported, and WSL does not prove Windows Desktop uses the Linux install. Doctor reports bounded metadata heuristics and local probes, not authenticated Desktop availability or execution. See [install steps](/install/devin/).

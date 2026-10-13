@@ -30,14 +30,16 @@ Invoke `/token-optimizer-output` explicitly in Devin CLI. The installed skill pi
 
 ## Devin Desktop: Devin Local only
 
-Devin's [Desktop documentation](https://docs.devin.ai/desktop/devin-local) says Devin Local shares the CLI agent harness, skills format and discovery mechanism. This adapter targets that shared contract, not Cascade or arbitrary ACP agents. Desktop skill loading and execution have not been live-tested; shared discovery is not proof of Desktop parity.
+Devin's [Desktop documentation](https://docs.devin.ai/desktop/devin-local) says Devin Local shares the CLI agent harness, skills format and discovery mechanism. This adapter targets that shared contract, not Cascade or arbitrary ACP agents. Checked on macOS with Devin Desktop 1.126.0: the agent binary bundled in the app (devin 3000.10.48) lists `token-optimizer-output` from `~/.config/devin/skills/`, offers `/token-optimizer-output` in a session started over its ACP interface, and ran prepare, capture, seal and filter when the skill was invoked there. The Desktop window itself (the Customizations screen and typing the command in the app), Linux and Windows were not exercised; check Customizations on your own setup.
 
 1. Run the POSIX install above in the same HOME and environment used by Desktop's local agent. Install in the executing environment, not a different host home. Native Windows is unsupported; a WSL install does not establish that a Windows Desktop agent uses that Linux home.
-2. Enable Devin Local in Devin User Settings > Agents if needed, restart Desktop and select Devin Local. It may require team/admin enablement. Agents are unavailable in Restricted Mode.
+2. Enable Devin Local in Devin User Settings > Agents if needed, restart Desktop and select Devin Local. Enterprise plans may need an admin to enable it. Agents are unavailable in Restricted Mode.
 3. Open **Customizations** from the new-tab menu or the right-click menu on a Devin Local session in the agent sidebar. Check that `token-optimizer-output` is loaded from the intended user skill, without a project skill shadowing it. Invoke `/token-optimizer-output` explicitly; this adapter is user-triggered, not model-triggered.
 4. Run the installed doctor with `-I --probe`. The probe exercises local prepare/seal/filter without recording metrics; it does not open a Desktop conversation or prove agent execution. Doctor's Desktop metadata and bundled-agent checks are bounded filesystem heuristics using unverified candidate paths and product metadata (the official docs do not list these), not authenticated app identity, availability, loading or execution.
 
-Nondefault XDG/namespaced homes can diverge from the documented `~/.config/devin/skills/` discovery path. Doctor and install warn about this: verify the selected loader rather than assuming Desktop follows an override. A pending lifecycle transaction blocks dry-run install and dry-run ordinary uninstall; real install/uninstall attempts recovery. `bash install.sh --devin --uninstall --purge` keeps the current purge contract, including stored captures and unchanged owned payloads, and refuses directory-shaped state leaves before removing payloads.
+Nondefault XDG/namespaced homes can diverge from the documented `~/.config/devin/skills/` discovery path. Doctor and install warn about this: verify the selected loader rather than assuming Desktop follows an override. A pending lifecycle transaction blocks dry-run install and dry-run ordinary uninstall; real install/uninstall attempts recovery. `bash install.sh --devin --uninstall --purge` removes stored captures and unchanged owned payloads, including files a refresh was interrupted while writing, and refuses directory-shaped state leaves before removing payloads. It still refuses when you edited an installed file, and names that file.
+
+Unsafe numeric state (`metrics.db`, its SQLite sidecars or `session-salt` with a loose mode, wrong type, symlink or extra hard link) does not block install or readiness: install and doctor warn, name the file, and numeric estimates are not recorded until it is fixed.
 
 A legacy 0755 captures root is purgeable, but unusable for new captures: the local probe refuses it.
 
@@ -137,4 +139,6 @@ Installer atomic publication requires the skill directory and adapter data direc
 
 Dry-run checks effective access for the existing tree without writing. Default ACL inheritance for newly created directories and concurrent permission changes cannot be predicted by this check.
 
-If an interrupted refresh record no longer matches the current checkout, ordinary install/uninstall may refuse recovery. Use the documented private move-aside repair to preserve captures, or `bash install.sh --devin --uninstall --purge` to discard adapter state and stored captures. Recovery is not guaranteed across changed checkout content.
+If an interrupted refresh record no longer matches the current checkout, ordinary install/uninstall may refuse recovery. Use the documented private move-aside repair to preserve captures, or `bash install.sh --devin --uninstall --purge` to discard adapter state and stored captures; purge completes in this state unless you also edited an installed file. Recovery is not guaranteed across changed checkout content.
+
+Removal preflights check directory permissions, not per-file flags or ACLs. If one owned file cannot be removed, uninstall removes the rest, keeps the ownership record, names the file and exits nonzero; clear the flag and rerun the same command.
