@@ -36,6 +36,8 @@ concurrency:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # A hung test must fail the job, not hold a runner for the 6 hour default.
+    timeout-minutes: 30
     strategy:
       # One red interpreter should not hide the result on the others.
       fail-fast: false
@@ -175,6 +177,8 @@ jobs:
   # that macOS/Linux cannot see.
   pytest-windows:
     runs-on: windows-latest
+    # A hung test must fail the job, not hold a runner for the 6 hour default.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.13.43] - 2026-10-14
+
+- Devin Desktop: the `/token-optimizer-output` skill now has install guidance for Desktop's Devin Local agent. Checked on macOS with Devin Desktop 1.126.0: the app's bundled agent listed the skill from the user skills folder and, when it was invoked over the agent's ACP interface, ran prepare, capture, seal and filter, compressed a repetitive output and recovered the original. The Desktop window itself, Linux and Windows were not exercised; native Windows remains unsupported.
+- Devin dry-runs now tell the truth: `--dry-run` for install, uninstall and purge refuses, with exit 1 and no writes, in the same unsafe states where the real command refuses.
+- Devin purge is all-or-nothing on the states it cannot finish: a directory-shaped state file, a symlinked or loose-mode captures folder, or unchanged adapter files in a read-only folder now refuse before anything is removed, instead of stopping halfway.
+- Devin purge now completes after an interrupted update. Files a half-finished refresh wrote are recognised as the adapter's own and removed; a file you edited still stops the purge and is named.
+- Devin refusals name the file or folder at fault and how to fix it (the symlink, the pending record, the missing payload file, the loose-mode path with its `chmod`).
+- Unsafe optional metrics state (`metrics.db`, its sidecars, `session-salt`) no longer blocks install or readiness on Devin: install and doctor warn and name the file, and doctor reports it as `numeric_state_ok: false`.
+- On macOS, an immutable installed file now refuses Devin install, uninstall and purge before anything changes. Elsewhere, uninstall keeps its ownership record when one file cannot be removed, names that file, and finishes on a rerun. Uninstall with nothing installed writes nothing. A foreign folder it would never touch is no longer a reason to refuse.
+- Devin doctor reports pending recovery (exit 1, no local probe), warns when the install lock would make install or uninstall refuse, names an unsafe data folder instead of reporting consent as missing, and adds a best-effort Desktop app check from files on disk.
+
 ## [5.13.42] - 2026-10-13
 
 - On Devin, `git status --short` output keeps its file names: the `git-status` hint now applies to the long form only, and short or porcelain listings get generic compression.

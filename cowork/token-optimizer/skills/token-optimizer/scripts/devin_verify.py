@@ -26,10 +26,10 @@ def verify_install():
                 info=cached.lstat()
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
                         or info.st_nlink!=1 or info.st_mode&0o022 or not cached.name.endswith('.pyc')):
-                    raise OSError('unmanifested artifact in incidental cache: ' + cached.name +
+                    raise OSError('unmanifested artifact in incidental cache: ' + str(cached) +
                                   '; remove it and retry')
             continue
-        raise OSError('unmanifested artifact in installed payload: ' + entry.name +
+        raise OSError('unmanifested artifact in installed payload: ' + str(entry) +
                       '; remove it and retry')
     manifest=state.private_path(root/'install.json')
     if manifest.stat().st_nlink!=1:raise OSError('manifest hardlink refused')
@@ -52,5 +52,9 @@ def verify_install():
         content=path.read_bytes()
         if hashlib.sha256(content).hexdigest()!=digest:raise OSError('installed payload missing or changed')
         if path.suffix=='.py':compile(content,str(path),'exec')
+    # Name an unsafe data directory or consent file before reporting consent
+    # as missing: the record may be present and merely unreadable by policy.
+    state.private_path(state.data_dir(),directory=True)
+    state.private_path(state.data_dir()/'consent.json')
     if not state.consent_ok():raise OSError('missing local data consent')
     return True

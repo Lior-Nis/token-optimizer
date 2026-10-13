@@ -43,6 +43,20 @@ def home() -> Path:
     return candidate.resolve()
 
 
+def loader_path_info() -> dict:
+    """Documented loader location, not evidence that an agent loaded the skill."""
+    documented = Path.home().resolve() / '.config' / 'devin'
+    installed = home()
+    return {
+        'documented_home': str(documented),
+        'installed_home': str(installed),
+        'status': 'documented_default' if installed == documented else 'nondefault_discovery_unknown',
+        'desktop_loading_verified': False,
+    }
+
+
+NUMERIC_STATE_LEAVES = ('metrics.db', 'session-salt', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm')
+
 
 def data_dir() -> Path:
     return home() / 'token-optimizer'
@@ -51,7 +65,7 @@ def data_dir() -> Path:
 def no_symlinks(path: Path) -> None:
     for component in [*reversed(path.absolute().parents), path.absolute()]:
         if component.is_symlink():
-            raise OSError('symlink path refused')
+            raise OSError('symlink path refused: ' + str(component))
 
 
 def private_dir(path: Path) -> Path:
@@ -68,7 +82,7 @@ def private_dir(path: Path) -> Path:
     for ancestor in (cursor, *cursor.parents):
         info = ancestor.lstat()
         if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
-            raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor))
+            raise OSError('group/other-writable ancestor directory refused: ' + str(ancestor) + ' (chmod go-w it, or set its sticky bit)')
     for folder in reversed(missing):
         folder.mkdir(mode=0o700)
     return path
@@ -90,10 +104,13 @@ def private_path(path: Path, *, directory=False, create=False) -> Path:
     except FileNotFoundError:
         return path
     else:
-        if info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1 and not directory:
-            raise OSError('adapter state must be owner-only')
+        if not directory and not stat.S_ISREG(info.st_mode):
+            raise OSError('regular state file required: ' + str(path))
         if directory != stat.S_ISDIR(info.st_mode):
-            raise OSError('unexpected state type')
+            raise OSError('unexpected state type: ' + str(path))
+        if info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1 and not directory:
+            raise OSError('adapter state must be owner-only: ' + str(path) +
+                          ' (owned by you, ' + ('chmod 700' if directory else 'chmod 600, no extra hard links') + ')')
     return path
 
 
