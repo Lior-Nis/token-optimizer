@@ -215,12 +215,6 @@ def read_capture(path: Path) -> bytes:
     return out if path.name == 'stdout' else err
 
 
-_STATUS_ENTRY = re.compile(
-    r'^(?:modified|new file|deleted|renamed|copied|typechange|unmerged|'
-    r'both (?:modified|added|deleted)|(?:added|deleted) by (?:us|them)):\s'
-    r'|^[MADRCU?!]{1,2}\s')
-
-
 def _looks_like_format(fmt: str, text: str) -> bool:
     """Cheap strict gate: does this capture really look like <fmt> output?
 
@@ -242,11 +236,10 @@ def _looks_like_format(fmt: str, text: str) -> bool:
     # <hash>' appearing mid-document is prose, not a signature.
     first = lines[0]
     if fmt == 'git-status':
-        if re.match(r'(?:On branch |HEAD detached|## )', first):
-            return True
-        return majority(sum(
-            1 for line in lines
-            if _STATUS_ENTRY.match(line.lstrip()) or line.lstrip().startswith('?? ')))
+        # Long form only. The handler reads the sectioned human format; a
+        # short or porcelain listing (`## branch` plus XY entries) has no
+        # sections, so it would keep the header and drop every file name.
+        return bool(re.match(r'(?:On branch |HEAD detached )', first))
     if fmt == 'git-log':
         if re.match(r'commit [0-9a-f]{7,40}\b', first):
             return True

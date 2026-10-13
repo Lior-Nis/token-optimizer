@@ -389,7 +389,7 @@ _DOMAIN_SAMPLES = {
 }
 
 _DOMAIN_FORMATS = {
-    'git-status': ('git_status_long', 'git_status_short'),
+    'git-status': ('git_status_long',),
     'git-log': ('git_stat', 'git_oneline'),
     'listing': ('ls_la',),
     'search': ('grep',),
@@ -403,7 +403,6 @@ _DOMAIN_FORMATS = {
 # handler must keep compressing its own domain exactly as well as before.
 _OWN_DOMAIN_PIN = {
     ('git-status', 'git_status_long'): 1234,
-    ('git-status', 'git_status_short'): 42,
     ('git-log', 'git_stat'): 1635,
     ('git-log', 'git_oneline'): 1616,
     ('listing', 'ls_la'): 2506,
@@ -480,4 +479,16 @@ def test_live_repro_git_stat_hinted_git_status(tmp_path, monkeypatch):
     named = _filtered(tmp_path, monkeypatch, 'git-status', raw)
     generic = _filtered(tmp_path, monkeypatch, 'generic', raw)
     assert _strip_id(named.stdout) == _strip_id(generic.stdout)
+    assert b'branch: ?' not in named.stdout
+
+
+def test_short_status_keeps_its_file_names(tmp_path, monkeypatch):
+    """`git status --short` has no sections for the git-status handler to
+    read: hinted git-status it used to deliver the header alone and drop every
+    file name. It must take the generic route instead."""
+    raw = _DOMAIN_SAMPLES['git_status_short']
+    named = _filtered(tmp_path, monkeypatch, 'git-status', raw)
+    generic = _filtered(tmp_path, monkeypatch, 'generic', raw)
+    assert _strip_id(named.stdout) == _strip_id(generic.stdout)
+    assert len(_payload(named)) > 42
     assert b'branch: ?' not in named.stdout
