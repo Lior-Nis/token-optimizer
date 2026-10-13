@@ -1,6 +1,7 @@
 """Private local output estimates for Devin. Never stores captured text."""
 from __future__ import annotations
 import contextlib
+
 import hashlib
 import hmac
 import secrets
@@ -39,7 +40,8 @@ def home() -> Path:
         raise OSError('Devin home must be a dedicated directory, not HOME or another tool home')
     if any(not ch.isprintable() or ch == '`' for ch in str(candidate)):
         raise OSError('unsupported control/markdown characters in home path')
-    return candidate
+    return candidate.resolve()
+
 
 
 def data_dir() -> Path:
@@ -109,7 +111,7 @@ def consent_ok() -> bool:
         private_path(data_dir(), directory=True)
         p = private_path(data_dir() / 'consent.json')
         return json.loads(p.read_text()) == {'devin_consent': True, 'schema': 1}
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RecursionError):
         return False
 
 

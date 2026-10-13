@@ -323,6 +323,14 @@ def _compress_git_status(output):
             elif section == "unmerged":
                 unmerged_files.append(fname)
 
+    if (branch == "?" and not ahead_behind and not staged_files
+            and not unstaged_files and not untracked_files and not unmerged_files):
+        # Nothing recognised: the input is not git status output (for example
+        # a "git status"-hinted capture of a grep or git log). Hand the raw
+        # output back rather than emit "branch: ?" and silently drop the
+        # whole capture; the caller's generic fallback then applies.
+        return output
+
     parts = [f"branch: {branch}"]
     if ahead_behind:
         parts.append(ahead_behind)
@@ -1734,7 +1742,6 @@ def _enforce_baseline_invariant(text, raw_output, archive_key):
         return text  # CC stubs raw output itself; that IS the baseline
     if archive_key:
         try:
-            sys.path.insert(0, str(Path(__file__).resolve().parent))
             from archive_result import build_archive_pointer
             pointer = build_archive_pointer("", len(raw_output), archive_key)
             if pointer and len(pointer) <= cap:
@@ -1941,7 +1948,6 @@ def main():
         _archive_key = None
         if compressed != raw_output and len(raw_output) > 500:
             try:
-                sys.path.insert(0, str(Path(__file__).resolve().parent))
                 from archive_result import archive_entry_exists, archive_original, build_archive_pointer
                 _session_id = os.environ.get("CLAUDE_SESSION_ID", "")
                 _archive_key = hashlib.sha256(
@@ -1977,7 +1983,6 @@ def main():
                 if _feature is None and _pattern is None:
                     _feature = "bash_generic"  # U4: unmatched-output coverage
                 if _feature:
-                    sys.path.insert(0, str(Path(__file__).resolve().parent))
                     from measure import _log_compression_event
                     # C-2: command_pattern is persisted to trends.db's
                     # compression_events table. Redact BEFORE truncating so an

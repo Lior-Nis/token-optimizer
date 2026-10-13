@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Explicit captured-output filter. No hooks, shell or command execution."""
 from __future__ import annotations
+# CLI startup imports only builtins until isolated re-execution.
+import sys
+if __name__ == '__main__' and not sys.flags.isolated:
+    import posix
+    try:
+        posix.execv(sys.executable, [sys.executable, '-I', *sys.argv])
+    except OSError as _isolation_error:
+        print('Token Optimizer: isolated startup refused: ' + str(_isolation_error), file=sys.stderr)
+        raise SystemExit(2)
+
 import argparse
 from dataclasses import dataclass
 import os
@@ -14,14 +24,73 @@ import stat
 import re
 import sys
 
-# Load the source-only importer itself from source, never through __pycache__.
+# Bootstrap uses only stdlib already imported by the entrypoint.
 _source_root = Path(__file__).resolve().parent
-if _source_root.name == 'plugin':
-    _source_namespace = {}
-    exec(compile((_source_root / 'devin_source.py').read_bytes(), str(_source_root / 'devin_source.py'), 'exec'), _source_namespace)
-    _source_namespace['activate'](_source_root)
+# Source development is the canonical checkout layout, not a directory-name bypass.
+_source_checkout = _source_root.parent.parent.parent
+_source_development = (
+    _source_root == _source_checkout / 'skills/token-optimizer/scripts'
+    and (_source_root / 'devin_install.py').is_file()
+    and (_source_checkout / 'devin/SKILL.md').is_file()
+    and (_source_checkout / 'README.md').is_file()
+    and not any((directory / leaf).exists() or (directory / leaf).is_symlink()
+                for directory in (_source_root, *_source_root.parents)
+                for leaf in ('install.json', 'consent.json'))
+)
+if _source_development and __name__ == '__main__':
+    # -I removed ambient paths; restore only the checked development scripts root.
+    sys.path.insert(0, str(_source_root))
+if not _source_development:
+    try:
+        if __name__ != '__main__' and not any(
+                getattr(finder, '_devin_source_root', None) == _source_root for finder in sys.meta_path):
+            raise ImportError('installed entrypoint requires command-line use or prior activation')
+        def _bootstrap_read(path, limit):
+            for component in [*reversed(path.parents), path]:
+                if component.is_symlink():
+                    raise ImportError('symlink bootstrap path refused')
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or info.st_nlink != 1 or info.st_mode & 0o077 or info.st_size > limit):
+                    raise ImportError('private bounded bootstrap file required')
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    content = stream.read(limit + 1)
+                if len(content) > limit:
+                    raise ImportError('bootstrap file exceeds bound')
+                return content
+            finally:
+                os.close(fd)
+        _source_path = _source_root / 'devin_source.py'
+        _source_record = json.loads(_bootstrap_read(_source_root.parent / 'install.json', 65536))
+        if (not isinstance(_source_record, dict) or _source_record.get('owner') != 'devin-output-filter-v1'
+                or not isinstance(_source_record.get('files'), dict)):
+            raise ImportError('invalid bootstrap manifest')
+        _source_bytes = _bootstrap_read(_source_path, 8 * 1024 * 1024)
+        if hashlib.sha256(_source_bytes).hexdigest() != _source_record['files'].get(str(_source_path)):
+            raise ImportError('bootstrap source differs from install manifest')
+        _source_namespace = {}
+        exec(compile(_source_bytes, str(_source_path), 'exec'), _source_namespace)
+        _source_namespace['activate'](_source_root)
+    except (OSError, ValueError, TypeError, ImportError, SyntaxError, RecursionError) as _bootstrap_error:
+        _bootstrap_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_bootstrap_error) + '. Originals remain unchanged.'
+        if __name__ == '__main__':
+            print(_bootstrap_message, file=sys.stderr)
+            raise SystemExit(2)
+        raise ImportError(_bootstrap_message) from None
 
-from devin_state import consent_ok, record
+
+
+try:
+    from devin_state import consent_ok, record
+except (ImportError, SyntaxError) as _initial_error:
+    _initial_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_initial_error) + '. Originals remain unchanged.'
+    if __name__ == '__main__':
+        print(_initial_message, file=sys.stderr)
+        raise SystemExit(2)
+    raise ImportError(_initial_message) from None
+
 
 MAX_CAPTURE = 8 * 1024 * 1024
 FORMATS = {'generic': 'captured-output', 'git-status': 'git status',
@@ -46,22 +115,29 @@ def _directory_fd(path: Path) -> int:
 
 def _read_leaf(directory_fd: int, name: str, cap: int) -> tuple[bytes, object]:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
-    with os.fdopen(fd, 'rb') as stream:
-        before = os.fstat(stream.fileno())
+    try:
+        # fstat before fdopen: a directory wraps into a stream that reports the
+        # bare descriptor number in its error, not the leaf being refused.
+        before = os.fstat(fd)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
                 or before.st_mode & 0o077 or before.st_nlink != 1):
-            raise OSError('capture must be bounded, private and unlinked')
-        if before.st_size > cap:
-            raise OSError('capture exceeds the ' + str(cap) + ' byte limit; read the original files directly')
-        content = stream.read(cap + 1)
-        after = os.fstat(stream.fileno())
-        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if len(content) > cap:
-            raise OSError('capture exceeded the ' + str(cap) + ' byte limit while reading')
-        if identity(before) != identity(after) or identity(after) != identity(current):
-            raise OSError('capture changed during reading')
-        return content, after
+            raise OSError('capture leaf must be a private single-link file: ' + name)
+        with os.fdopen(fd, 'rb') as stream:
+            fd = -1
+            if before.st_size > cap:
+                raise OSError('capture exceeds the ' + str(cap) + ' byte limit; read the original files directly')
+            content = stream.read(cap + 1)
+            after = os.fstat(stream.fileno())
+            identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if len(content) > cap:
+                raise OSError('capture exceeded the ' + str(cap) + ' byte limit while reading')
+            if identity(before) != identity(after) or identity(after) != identity(current):
+                raise OSError('capture changed during reading')
+            return content, after
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _repair_orphaned_seal(directory_fd: int) -> None:
@@ -103,6 +179,11 @@ def read_pair(directory: Path, *, sealed: bool, exit_code=None) -> tuple[bytes, 
             raise OSError('capture directory must be private')
         marker, _ = _read_leaf(fd, '.prepared', 4096)
         provenance = json.loads(marker)
+        if (not isinstance(provenance, dict) or set(provenance) != {'stdout', 'stderr'}
+                or any(not isinstance(provenance[name], list) or len(provenance[name]) != 2
+                       or any(type(value) is not int or value < 0 for value in provenance[name])
+                       for name in ('stdout', 'stderr'))):
+            raise OSError('invalid prepared capture identity shape')
         out, out_info = _read_leaf(fd, 'stdout', MAX_CAPTURE)
         err, err_info = _read_leaf(fd, 'stderr', MAX_CAPTURE)
         # Valid JSON of the wrong type must be the normal refusal, never a crash.
@@ -157,21 +238,34 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
     if any((unicodedata.category(ch) in ('Cc', 'Cf', 'Zl', 'Zp')) and ch not in '\n\r\t' for ch in cleaned):
         return FilterResult(raw, b'', 0, 'binary_passthrough')
     delivered, outcome = text, 'passthrough'
-    if Path(__file__).resolve().parent.name == 'plugin':
+    if not _source_development:
         from devin_verify import verify_install
         verify_install()
     try:
         from credential_patterns import PATTERNS_ONLY
-        if any(pattern.search(text) for pattern in PATTERNS_ONLY):
+        # grep --color=always splits a token with SGR escapes, so the joined
+        # secret only appears once escapes are stripped; scan both spellings.
+        if (any(pattern.search(text) for pattern in PATTERNS_ONLY)
+                or any(pattern.search(cleaned) for pattern in PATTERNS_ONLY)):
             return FilterResult(raw, b'', 0, 'credential_passthrough')
         from bash_compress import compress
         from token_estimate import estimate_tokens
         shortened = compress(FORMATS[format_hint], text)
         if 'expand key' in shortened:
             shortened = text
+        # A named format must never do worse than generic for the same bytes;
+        # when its handler preserves more than generic would, generic wins.
+        # The delivered unit is encoded bytes, not characters: a CJK-heavy
+        # result is ~3x costlier per character, so compare UTF-8 length.
+        if format_hint != 'generic':
+            fallback = compress(FORMATS['generic'], text)
+            if 'expand key' in fallback:
+                fallback = text
+            if len(fallback.encode('utf-8')) < len(shortened.encode('utf-8')):
+                shortened = fallback
         # File stays exactly as supplied. Pointer includes its entire overhead.
         # The recover hint must be a command an installed user can actually run.
-        recover = ' '.join((shlex.quote(os.path.realpath(sys.executable)),
+        recover = ' '.join((shlex.quote(os.path.realpath(sys.executable)), '-I',
                             shlex.quote(str(Path(__file__).resolve())),
                             'recover', '--capture-id', stdout.parent.name,
                             '--exit-code', str(exit_code)))
@@ -276,7 +370,7 @@ def main(argv=None) -> int:
         from devin_state import prepare_capture
         try:
             print(prepare_capture()); return 0
-        except OSError as exc:
+        except (OSError, RecursionError) as exc:
             print('Capture preparation refused: ' + str(exc), file=sys.stderr); return 2
     if args[:1] == ['recover']:
         recovery = argparse.ArgumentParser(description='Recover a sealed capture by opaque ID')
@@ -298,7 +392,7 @@ def main(argv=None) -> int:
             if err:
                 sys.stderr.buffer.write(identity+b'[Begin untrusted recovered stderr]\n'+err+b'\n[End untrusted recovered stderr]\n')
             return values.exit_code
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, RecursionError) as exc:
             print('Recovery refused: ' + str(exc), file=sys.stderr); return 2
     if args[:1] == ['seal']:
         seal_parser = argparse.ArgumentParser(description='Seal a finished foreground capture; never seal a running producer')
@@ -307,7 +401,7 @@ def main(argv=None) -> int:
         values = seal_parser.parse_args(args[1:])
         try:
             seal_capture(values.capture, values.exit_code); return 0
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, RecursionError) as exc:
             print('Capture completion refused: ' + str(exc), file=sys.stderr); return 2
     parser.add_argument('--stdout', type=Path, required=True)
     parser.add_argument('--stderr', type=Path, required=True)
@@ -317,7 +411,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(args)
     try:
         result = filter_capture(args.stdout, args.stderr, args.exit_code, args.format, args.session)
-    except (OSError, ValueError, ImportError, SyntaxError) as exc:
+    except (OSError, ValueError, ImportError, SyntaxError, RecursionError) as exc:
         print(f'Token Optimizer: capture not filtered: {exc}. Originals remain unchanged; inspect them directly.', file=sys.stderr)
         return 2
     try:

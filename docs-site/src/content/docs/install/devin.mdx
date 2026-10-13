@@ -10,12 +10,12 @@ git clone --depth 1 https://github.com/alexgreensh/token-optimizer.git
 cd token-optimizer
 bash install.sh --devin --dry-run
 bash install.sh --devin
-TOKEN_OPTIMIZER_RUNTIME=devin python3 skills/token-optimizer/scripts/measure.py devin-doctor --probe
+python3 -I "$HOME/.config/devin/token-optimizer/plugin/devin_doctor.py" --probe
 ```
 
 POSIX and Python are required; native Windows is refused. WSL uses the Linux home. The installer owns only `~/.config/devin/skills/token-optimizer-output/` and the private `~/.config/devin/token-optimizer/plugin/` payload. Host config, foreign skills and hooks remain unchanged. Absolute XDG/namespaced home overrides must remain inside HOME.
 
-Installation records consent: filtering/passthrough/recovery may show confidential capture contents to Devin/model context; numeric metrics remain local, and captures persist until you explicitly clean them up. Other imported hooks may create their own copies. No auto-approval fields are installed.
+Installation records consent: filtering/passthrough/recovery may show confidential capture contents to Devin/model context; numeric metrics remain local. A raw passthrough removes its capture after delivery; a compressed result keeps its capture for recovery until you delete it or uninstall with `--purge`. Other imported hooks may create their own copies. No auto-approval fields are installed.
 
 Run `devin skills show token-optimizer-output` to check the selected source and `Triggers: user`. A same-named project skill can shadow the global skill. Doctor's probe is local, not a live Devin model test.
 
@@ -30,4 +30,4 @@ bash install.sh --devin --uninstall
 bash install.sh --devin --uninstall --purge
 ```
 
-Uninstall removes only unchanged owned files. Purge additionally removes metrics/SQLite sidecars, private salt and consent, never original captures. Changed installed files are preserved and removal is refused. To stop activation manually, move only your edited `token-optimizer-output` skill directory out of Devin's search paths. See [Devin limits](/platforms/devin/).
+Uninstall removes only unchanged owned files. Purge additionally removes metrics/SQLite sidecars, private salt, consent and stored captures. Changed installed files are preserved and removal is refused. To stop activation manually, move only your edited `token-optimizer-output` skill directory out of Devin's search paths. See [Devin limits](/platforms/devin/).

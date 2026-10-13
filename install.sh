@@ -1086,7 +1086,7 @@ install_devin() {
             *) printf 'Unknown Devin installer option: %s\n' "$option" >&2; exit 2 ;;
         esac
     done
-    TOKEN_OPTIMIZER_RUNTIME=devin python3 "$script_dir/skills/token-optimizer/scripts/devin_install.py" "$action" ${extra[@]+"${extra[@]}"}
+    TOKEN_OPTIMIZER_RUNTIME=devin python3 -I "$script_dir/skills/token-optimizer/scripts/devin_install.py" "$action" ${extra[@]+"${extra[@]}"}
 }
 
 # Allow tests to source this script for function unit-testing (e.g.

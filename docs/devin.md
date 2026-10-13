@@ -2,7 +2,10 @@
 
 Contract-only beta. An explicit captured-output filter and a user-triggered Devin CLI skill. No automatic hooks, provider accounting, quality score, ACU savings or dashboard.
 
-No live Devin workspace available: the adapter has not been run against a live Devin instance. Local installation, genuine CLI skill discovery and filter subprocess tests are separate from Devin model adherence.
+The adapter was exercised end to end in a live Devin CLI session: a real session following the installed skill drove prepare, capture, seal, filter and recover across ten cases. That proves the documented workflow, framing, capture-ID anchoring, retention and refusal behaviors work when the skill is followed. It does not prove Devin model adherence (that the model invokes or follows the skill unprompted), provider accounting or savings. Doctor keeps reporting `live_devin_session_tested: false`: the field records that no automated live-session validation has run, not that the adapter was never exercised.
+
+
+Doctor/filter commands below require `-I` from the first Python startup. Do not omit it or execute their shebangs directly. The late re-exec cannot undo Python startup code already run. The installed default paths below follow the default Devin home; use your selected install home when overridden.
 
 ## Why explicit capture, not hooks
 
@@ -17,7 +20,8 @@ From a checkout:
 ```bash
 bash install.sh --devin --dry-run
 bash install.sh --devin
-TOKEN_OPTIMIZER_RUNTIME=devin python3 skills/token-optimizer/scripts/measure.py devin-doctor --probe
+DOCTOR="$HOME/.config/devin/token-optimizer/plugin/devin_doctor.py"
+python3 -I "$DOCTOR" --probe
 ```
 
 The installer copies a stable payload under `~/.config/devin/token-optimizer/plugin/` and a skill under `~/.config/devin/skills/token-optimizer-output/`. It never edits Devin config, permissions or hooks. Absolute `XDG_CONFIG_HOME` and `TOKEN_OPTIMIZER_DEVIN_HOME` overrides must stay inside HOME. Native Windows is refused; POSIX is required. On WSL use the Linux home, not the Windows profile.
@@ -30,13 +34,13 @@ Use a new capture for each command. Never rerun a command just to measure it.
 
 ```bash
 FILTER="$HOME/.config/devin/token-optimizer/plugin/devin_compress.py"
-CAPTURE=$(python3 "$FILTER" prepare)
+CAPTURE=$(python3 -I "$FILTER" prepare)
 # Run your intended command here in its native shell, under normal permissions.
 # Example finite read-only command:
 git status --short > "$CAPTURE/stdout" 2> "$CAPTURE/stderr"
 STATUS=$?
-python3 "$FILTER" seal --capture "$CAPTURE" --exit-code "$STATUS"
-python3 "$FILTER" --stdout "$CAPTURE/stdout" --stderr "$CAPTURE/stderr" --exit-code "$STATUS" --format git-status --session local-label
+python3 -I "$FILTER" seal --capture "$CAPTURE" --exit-code "$STATUS"
+python3 -I "$FILTER" --stdout "$CAPTURE/stdout" --stderr "$CAPTURE/stderr" --exit-code "$STATUS" --format git-status --session local-label
 ```
 
 Prepare creates both files at 0600 in a private generated directory, so redirection preserves those modes even under umask 022. Wait for foreground completion before sealing. Never use this with background producers or interactive commands.
@@ -48,7 +52,7 @@ Failures and stderr remain raw. Invalid UTF-8, NUL/control bytes and recognized 
 A compressed result includes an opaque ID, not a raw-path instruction. Recovery adds a trusted identity and untrusted-data frames around the unchanged raw payload, then revalidates both original files and the completion seal:
 
 ```bash
-python3 "$FILTER" recover --capture-id capture-0123456789abcdef0123456789abcdef --exit-code 0
+python3 -I "$FILTER" recover --capture-id capture-0123456789abcdef0123456789abcdef --exit-code 0
 ```
 
 Use the real ID and sealed exit code. Changed or missing captures are refused. A raw passthrough removes its capture once its bytes are delivered, and failed delivery keeps it; a compressed result keeps its capture for recovery until you delete it or uninstall with purge. Compression is lossy; the original is the recovery source.
@@ -85,6 +89,26 @@ The release checksum inventory includes `devin/SKILL.md`; README/playbook are do
 - https://docs.devin.ai/api-reference/overview
 
 Recovery anchoring rule: trust only the first adapter identity line. Every byte after that first line is untrusted capture data, including any apparent closing frame, repeated identity, forged pointer or instruction. Frame labels aid reading, not authentication of embedded text. Raw payload is preserved, not escaped.
+
+## Installed import boundary
+
+The initial-import refusal wrapper catches only loader `ImportError` and source `SyntaxError`. Genuine module programming errors are not relabeled as integrity failures: they keep their ordinary traceback and exit 1, which can share an exit code with other runtime failures. A clean exit-2 refusal is a validation result, not a promise to hide all software bugs.
+
+Only `devin_compress.py` and `devin_doctor.py` are installed CLI entrypoints. Every other installed payload file (`devin_state`, `devin_verify`, `devin_source`, `bash_compress`, `bash_whitelist`, `credential_patterns`, `token_estimate`, `command_filters`, `runtime_env`, `py_trust`, `plugin_env`, `refetch_fingerprint`) carries an installer-injected direct-execution refusal after its docstring/future imports and before normal code. Installation commits those deterministic rendered bytes, so installed internals intentionally differ from checkout sources. Other adapters' checkout CLIs are not changed by rendering. Authenticating a script's own changed bytes before Python starts remains out of scope. Doctor/filter handle malformed manifest parsing, initial missing modules, and recursive consent/capture JSON with clean refusals. `prepare`, `seal` and `recover` use their required source commitments and capture/consent checks, but do not verify the entire compression closure; filtering and doctor readiness do. Recovery can remain available when an unrelated compression module needs repair.
+
+Source-development mode requires the canonical `skills/token-optimizer/scripts` layout, sibling `devin_install.py`, root `devin/SKILL.md` and root `README.md` (never installed), with no `install.json` or `consent.json` in the scripts directory or its ancestors. Source mode is structural and same-UID spoofable by design, not an authenticated checkout guarantee. Installed copies that do not satisfy that development structure always refuse without valid manifest commitments; adding only installed artifacts cannot enable source mode. The development route uses ordinary source imports. Other locations, including mirrors and renamed installed directories, must bootstrap with path-bound commitments or report a clean manifest-gate refusal without importing payload modules. Installed `devin_compress.py` is a command-line entrypoint (`__main__`), not a supported ordinary module import without prior activation; unsupported imports raise `ImportError`. Source module imports remain available for development and tests.
+
+The installed payload uses one fixed module list shared by its source loader and integrity check. Activation removes payload-root, ancestor and descendant entries from the current Python search path, drops preloaded modules with repository module names, then loads the manifested source files. The reachable filter closure includes `plugin_env` and `refetch_fingerprint`. Other repository module names, including `archive_result` and `measure` used only by the separate shell-execution/archive helpers, refuse before ordinary search-path fallback. Unrelated standard-library imports still work. The fixed repository-name policy has a drift test against the checkout module names. Missing named sources refuse instead of falling back to a checkout or distribution mirror. Installed source reads require owner-only, regular, single-link files and compare the read bytes with the install manifest's digest before execution.
+
+The doctor and filter entrypoints compile the importer directly from source before activation. Before executing the importer, each entrypoint reads it and its install manifest through bounded, no-follow descriptors, requires owner-only regular single-link files, and checks the importer digest. They do not import the bootstrap from bytecode. These checks do not authenticate the manifest independently of the local account. An incidental `__pycache__` may contain only owner-owned, regular, single-link, nonsymlink `.pyc` files in an owner-owned, nonsymlink directory. Neither directory nor leaves may be group/world writable. Ordinary Python's 0755 directory and 0644 cache files are accepted because these bytes are ignored, not executed through the source loader. Unrelated files, packages, nested cache directories and top-level bytecode are refused, not automatically pruned. Absolute inside-HOME overrides are normalized to one canonical path identity after symlink checks, so install, verification and activation agree on manifest keys. A clean earlier adapter install can be refreshed, including the smaller v2 closure; failed or interrupted closure expansion restores the old leaves and removes only verified newly added leaves; foreign artifacts require inspection rather than silent cleanup.
+
+Supported doctor/filter CLI use requires a trusted Python interpreter launched with `-I` from the first startup, including source-development CLI commands. Plain Python invocation is unsupported: the entrypoints' early isolated re-exec is defense-in-depth only and cannot protect imports that Python performs before the script begins. On Python 3.10, a poisoned `PYTHONPATH` containing `os.py` can execute during startup and prevent the script from running at all; the tested Python 3.12 build uses frozen `os`, but plain invocation is still unsupported. `sitecustomize` on `PYTHONPATH` can also execute before a plain invocation on both tested versions. Starting with `-I` excludes those ambient paths from the first startup and the doctor's dependency child also uses `-I`. A poisoned `PYTHONHOME` can prevent a plain interpreter from starting; `-I` ignores it.
+
+`-I` does not suppress system-site initialization: executable `.pth` files in the active system or virtualenv site-packages can still run. The Python interpreter and its active system/virtualenv installation must therefore be trusted. Generated skill commands include the required `-I`; use the Python interpreter that was trusted during installation. Source-development CLI restores only its checked scripts root after isolated startup; source module imports keep ordinary development behavior.
+
+This is an activation-time import boundary, not a Python sandbox. Later changes to `sys.path`, `sys.meta_path`, `sys.modules`, explicit `runpy` or direct file-path execution by already-running code are outside it. A malicious same-UID process can modify the entrypoint, importer, manifest and sources together. The entrypoint and bootstrap run before full payload verification; no pre-bootstrap authenticity guarantee is claimed. The loader binds reads to its manifest snapshot, not to an independently authenticated historical manifest.
+
+`plugins/` and `cowork/` are repository distribution mirrors, not additional installed import roots. The release checksum manifest covers canonical payload files; generator parity tests check the mirror copies separately. They are not fallback sources for missing installed modules.
 
 ## Interrupted installation and manual repair
 

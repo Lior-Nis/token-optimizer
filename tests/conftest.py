@@ -288,8 +288,9 @@ def trusted_python(tmp_path_factory, monkeypatch):
 
 
 _DEVIN_TEST_FILES = {
-    'test_devin_compress.py', 'test_devin_install.py',
-    'test_devin_review_regressions.py', 'test_devin_state.py',
+    'test_devin_closedset.py', 'test_devin_compress.py', 'test_devin_install.py',
+    'test_devin_lifecycle_matrix.py', 'test_devin_review_regressions.py',
+    'test_devin_state.py',
 }
 
 
@@ -318,7 +319,10 @@ def devin_real_python(tmp_path_factory):
     assert not binary.is_symlink()
     binary.chmod(0o700)
     binary.parent.chmod(0o700)
-    scripts = REPO / 'skills/token-optimizer/scripts'
+    # TOKEN_OPTIMIZER_DEVIN_SCRIPTS_ROOT points the suite at a scratch copy of
+    # the product scripts; mutation runs use it, the default stays the tree.
+    override = os.environ.get('TOKEN_OPTIMIZER_DEVIN_SCRIPTS_ROOT')
+    scripts = Path(override).resolve() if override else REPO / 'skills/token-optimizer/scripts'
     sys.path.insert(0, str(scripts))
     from py_trust import py_trust_reason
     reason = py_trust_reason(str(binary))
