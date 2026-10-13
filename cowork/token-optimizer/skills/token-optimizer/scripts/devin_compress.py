@@ -243,6 +243,14 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
         shortened = compress(FORMATS[format_hint], text)
         if 'expand key' in shortened:
             shortened = text
+        # A named format must never do worse than generic for the same bytes;
+        # when its handler preserves more than generic would, generic wins.
+        if format_hint != 'generic':
+            fallback = compress(FORMATS['generic'], text)
+            if 'expand key' in fallback:
+                fallback = text
+            if len(fallback) < len(shortened):
+                shortened = fallback
         # File stays exactly as supplied. Pointer includes its entire overhead.
         # The recover hint must be a command an installed user can actually run.
         recover = ' '.join((shlex.quote(os.path.realpath(sys.executable)), '-I',

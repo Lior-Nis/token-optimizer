@@ -2,7 +2,7 @@
 
 Contract-only beta. An explicit captured-output filter and a user-triggered Devin CLI skill. No automatic hooks, provider accounting, quality score, ACU savings or dashboard.
 
-No live Devin workspace available: the adapter has not been run against a live Devin instance. Local installation, genuine CLI skill discovery and filter subprocess tests are separate from Devin model adherence.
+The adapter was exercised end to end in a live Devin CLI session: a real session following the installed skill drove prepare, capture, seal, filter and recover across ten cases. That proves the documented workflow, framing, capture-ID anchoring, retention and refusal behaviors work when the skill is followed. It does not prove Devin model adherence (that the model invokes or follows the skill unprompted), provider accounting or savings. Doctor keeps reporting `live_devin_session_tested: false`: the field records that no automated live-session validation has run, not that the adapter was never exercised.
 
 
 Doctor/filter commands below require `-I` from the first Python startup. Do not omit it or execute their shebangs directly. The late re-exec cannot undo Python startup code already run. The installed default paths below follow the default Devin home; use your selected install home when overridden.

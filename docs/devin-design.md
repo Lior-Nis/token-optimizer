@@ -28,7 +28,7 @@ Automatic exec rewriting cannot be proven safe against Devin's persistent-shell 
 - R6. Install only an owned skill directory and private adapter payload; preserve every host config and foreign skill.
 - R7. Label estimates as local output estimates, not provider usage, delivery confirmation, quality or ACU savings.
 - R8. Verify malformed inputs, symlinks, special files, large files, failure paths, install cycles and dozens of isolated synthetic sessions.
-- R9. State no live Devin instance/session was tested. Installed CLI skill discovery is separate from model adherence.
+- R9. State plainly what was and was not exercised live. Installed CLI skill discovery is separate from model adherence.
 ### Scope Boundaries
 No lifecycle hooks, command execution, provider accounting, dashboard parity, smart compaction, native Windows, automatic hosted integration, MCP server or deployed knowledge. Existing imported Claude hooks remain unchanged and are diagnosed as a coexistence warning.
 ### Assumptions
@@ -98,7 +98,7 @@ Decision flow: unsafe input -> error and recovery guidance; bounded failed/stder
 Focused tests; at least 48 synthetic sessions; real install/refresh/remove; downloaded CLI version/help and skill discovery; full Python suite, safety regressions, docs integrity/build and mirror checks. Record exact manifests and counts. At least ten adversarial perspectives; a final independent batch is clean only with no retained actionable findings and all selected reviewers returned.
 
 ## Definition of Done
-One draft PR with receipts, head SHA and CI state. No live Devin workspace available: the adapter has not been run against a live Devin instance. CLI installation/discovery, local subprocess filters and estimates are the provable boundary. Publishing credential revoked and secret files removed after push.
+One draft PR with receipts, head SHA and CI state. A live Devin CLI session later exercised the full workflow end to end; that proves the documented contract when the skill is followed, not model adherence. CLI installation/discovery, local subprocess filters and estimates remain the provable boundary. Publishing credential revoked and secret files removed after push.
 
 ## Sources / Research
 - https://docs.devin.ai/cli/extensibility/hooks and https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks - rewrite contract, no result replacement, exec persistent shell input.
