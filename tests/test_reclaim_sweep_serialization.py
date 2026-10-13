@@ -349,3 +349,66 @@ def test_young_reclaim_claim_newer_than_threshold_survives(monkeypatch, tmp_path
     assert claim.exists(), (
         "young in-flight .reclaim-{digest} was reaped (false positive)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Windows sharing-violation regression
+# ---------------------------------------------------------------------------
+
+
+def test_sharing_violation_on_lease_rename_still_yields_one_winner(
+    tmp_path, monkeypatch
+):
+    """Windows refuses rename/unlink on a file held open without delete
+    share: the claim winner's ``os.rename(self.path, victim)`` races every
+    other contender's ``read_text`` handle and transiently raises
+    PermissionError.  Simulate that errno on POSIX for the first attempts on
+    the lease rename; exactly one reclaimer must still win."""
+    root = tmp_path / "tool-archive"
+    locks = root / ".locks"
+    locks.mkdir(parents=True)
+
+    lease = _lease_path(root, "sid-share")
+    _write_expired_owner_lease(lease, "shareshareshare1")
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def sharing_violation_rename(src, dst, *args, **kwargs):
+        if Path(src).name == lease.name:
+            calls["n"] += 1
+            if calls["n"] <= 20:
+                raise PermissionError(
+                    13, "The process cannot access the file because it is "
+                    "being used by another process", str(src), 32, str(dst)
+                )
+        return real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", sharing_violation_rename)
+
+    n = 6
+    barrier = threading.Barrier(n)
+    results: list[bool] = [False] * n
+    errors: list[BaseException] = []
+
+    def contender(idx: int) -> None:
+        try:
+            lock = hook_runtime.LeaseLock(lease, acquire_timeout=0)
+            barrier.wait()
+            results[idx] = bool(lock._reclaim_if_expired())
+        except BaseException as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=contender, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, "threads raised: %r" % (errors,)
+    assert calls["n"] > 0, "the lease rename was never reached"
+    assert sum(1 for r in results if r) == 1, (
+        "exactly one reclaimer should win despite transient sharing "
+        "violations; results=%r" % (results,)
+    )
+    assert not lease.exists(), "the expired lease should be unlinked by the winner"

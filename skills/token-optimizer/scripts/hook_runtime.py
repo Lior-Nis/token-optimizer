@@ -396,19 +396,23 @@ class LeaseLock:
             victim = self.path.with_name(
                 f".{self.path.name}.stale-{secrets.token_hex(8)}"
             )
-            os.rename(str(self.path), str(victim))
+            self._retry_sharing_violation(
+                lambda: os.rename(str(self.path), str(victim))
+            )
             try:
                 ours = os.path.samestat(os.stat(victim), claimed)
             except OSError:
                 ours = False
             try:
                 if not ours:
-                    os.link(str(victim), str(self.path))
+                    self._retry_sharing_violation(
+                        lambda: os.link(str(victim), str(self.path))
+                    )
             except OSError:
                 pass
             finally:
                 try:
-                    victim.unlink()
+                    self._retry_sharing_violation(victim.unlink)
                 except OSError:
                     pass
             return ours
@@ -416,9 +420,27 @@ class LeaseLock:
             return False
         finally:
             try:
-                claim.unlink()
+                self._retry_sharing_violation(claim.unlink)
             except OSError:
                 pass
+
+    @staticmethod
+    def _retry_sharing_violation(operation, *, attempts=50, interval=0.005):
+        """Retry a pathname operation through Windows sharing violations.
+
+        On Windows a rename/unlink fails with PermissionError while another
+        handle has the same file open without FILE_SHARE_DELETE -- contending
+        reclaimer threads hold exactly such read handles for a few
+        milliseconds.  Only the claim winner reaches these calls, so retrying
+        never widens who may win.  On POSIX the first call simply succeeds.
+        """
+        for attempt in range(attempts):
+            try:
+                return operation()
+            except PermissionError:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(interval)
 
     def _reclaim_if_expired(self):
         parsed = self._read_owner()
