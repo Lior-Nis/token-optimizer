@@ -604,7 +604,7 @@ def install(*, dry_run=False) -> None:
         print(warning)
     if dry_run:
         if (root / 'pending-install.json').exists():
-            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending: ' + str(root / 'pending-install.json') + '; run a real install or uninstall to recover')
+            raise OSError('dry-run cannot predict recovery and refuses while recovery is pending: ' + str(root / 'pending-install.json') + '; run a real install or uninstall to attempt recovery. If that refuses, uninstall --purge discards adapter state and stored captures')
         _preflight_destination(root, skill)
         _preflight_write_access(root, skill)
         print('Would install explicit Devin output skill at ' + str(skill))
@@ -723,7 +723,7 @@ def uninstall(*, dry_run=False, purge=False) -> None:
     pending = root / 'pending-install.json'
     if dry_run and not purge and (pending.exists() or pending.is_symlink()):
         state.private_path(pending)
-        raise OSError('dry-run refuses while recovery is pending: ' + str(pending) + '; run a real install or uninstall to recover')
+        raise OSError('dry-run refuses while recovery is pending: ' + str(pending) + '; run a real install or uninstall to attempt recovery. If that refuses, uninstall --purge discards adapter state and stored captures')
     # Purge is independent of an install manifest: plain uninstall may precede it.
     # Under purge a stale or foreign-version pending record is deleted, not
     # reconciled, so it must never block the purge path.
