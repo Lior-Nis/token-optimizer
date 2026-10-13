@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.40] - 2026-10-13
+
+- The Devin output filter now verifies every installed payload file against the install manifest before it can run, and the doctor checks that the whole payload still imports.
+- Devin install, refresh and uninstall keep working across home overrides and adapter versions, and purge clears stale install records.
+- The Devin installer runs isolated like the rest of the adapter, and the install docs match the doctor and capture cleanup contract.
+
 ## [5.13.39] - 2026-10-13
 
 - Memory health no longer reports every topic file as orphaned when MEMORY.md is a flat list of links.
