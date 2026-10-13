@@ -905,3 +905,30 @@ def test_closed_stderr_keeps_the_captured_exit_code(tmp_path, monkeypatch):
     assert delivered == raw
     assert child.returncode == 7, child.returncode
     assert not capture.exists()
+
+
+def test_doctor_flags_payload_that_fails_at_import(tmp_path, monkeypatch, capsys):
+    """A payload module that raises at import while still matching its
+    recorded manifest digest must surface as installed:false with a
+    readiness error on the plain doctor run, not only under --probe."""
+    import hashlib
+    import json
+    import subprocess
+    import devin_install as inst
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    inst.install()
+    root = s.data_dir()
+    broken = root / 'plugin' / 'token_estimate.py'
+    broken.write_text('raise RuntimeError("unimportable payload")\n')
+    record = json.loads((root / 'install.json').read_text())
+    record['files'][str(broken)] = hashlib.sha256(broken.read_bytes()).hexdigest()
+    (root / 'install.json').write_text(json.dumps(record))
+    (root / 'install.json').chmod(0o600)
+    capsys.readouterr()
+    run = subprocess.run([sys.executable, str(root / 'plugin' / 'devin_doctor.py')],
+                         capture_output=True, timeout=30)
+    result = json.loads(run.stdout)
+    assert run.returncode == 1, (run.returncode, run.stderr)
+    assert result['installed'] is False
+    assert 'cannot import' in (result['readiness_error'] or '')

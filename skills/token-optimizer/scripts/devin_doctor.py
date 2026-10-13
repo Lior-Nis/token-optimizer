@@ -97,8 +97,21 @@ def diagnose(probe=False):
     error=None
     try:
         ready=verify_install()
-        check=subprocess.run([sys.executable,'-I',str(root/'plugin/devin_compress.py'),'--help'],
-                             capture_output=True,timeout=15)
+        from devin_verify import PAYLOAD
+        # Import the whole manifested payload through the digest-checked
+        # loader, not just the entrypoint bootstrap: a lazily imported module
+        # that cannot import must still fail readiness.
+        check=subprocess.run(
+            [sys.executable,'-I','-c',
+             'import sys\n'
+             'from pathlib import Path\n'
+             'root = Path(sys.argv[1]); namespace = {}\n'
+             "exec(compile((root / 'devin_source.py').read_bytes(), 'devin_source.py', 'exec'), namespace)\n"
+             "namespace['activate'](root)\n"
+             'for name in sys.argv[2:]:\n'
+             '    __import__(name)\n',
+             str(root/'plugin'), *(Path(name).stem for name in PAYLOAD)],
+            capture_output=True,timeout=15)
         if check.returncode:raise OSError('installed dependencies cannot import')
     except (OSError,ValueError,SyntaxError,TypeError,subprocess.SubprocessError) as exc:
         ready=False;error=str(exc)
