@@ -28,6 +28,14 @@ def test_deadline_runs_on_timeout_callbacks_before_exiting(tmp_path):
         import sys, time
         sys.path.insert(0, {str(SCRIPTS)!r})
         from hook_runtime import HookDeadline
+        # The callbacks share a 1.0s budget in production so a hung one can
+        # never delay the exit. On a loaded runner a thread start plus two
+        # file writes can outlast that, and the watchdog then abandons a
+        # callback mid-write by design. This test is about ordering and
+        # "runs before exit", not that budget, so give the callbacks room:
+        # the join returns the moment each one finishes, so nothing slows.
+        _bounded = HookDeadline._run_on_timeout
+        HookDeadline._run_on_timeout = lambda self, budget=1.0: _bounded(self, 20.0)
         d = HookDeadline(0.3, on_timeout=lambda: open({str(marker)!r}, "w").write("a"))
         d.add_on_timeout(lambda: open({str(marker)!r}, "a").write("b"))
         d.start()
