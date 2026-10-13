@@ -7,6 +7,7 @@
 - Doctor and the Hooks tab now recognise the hooks that plugin installs ship, so Smart Compaction and Session Tracking show as on.
 - The desktop status bar finds Python on Windows machines where the Store alias reports a shortened exit code.
 - On Codex, the optional command rewrite no longer approves `tree -o`, which writes a file. It now uses the same inspection-only check as every other host.
+- On Windows, cleaning up a stale lock no longer fails when several sessions reach for it at once.
 - New for Devin CLI: an optional skill you trigger yourself that shrinks large command output, with the original kept privately on your machine and recoverable. No automatic hooks, no permission changes.
 - On Codex, quality and state now report the session that asked, and say "unresolved" instead of guessing when Codex provides no thread ID.
 
