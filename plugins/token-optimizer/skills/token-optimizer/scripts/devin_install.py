@@ -16,11 +16,15 @@ import shutil
 import sys
 import tempfile
 
-import devin_state as state
-from py_trust import py_path_is_trusted
-
 SCRIPTS = Path(__file__).resolve().parent
+# Isolated startup (-I) removes the script directory; the installer always
+# runs from a checkout, so restore only this checked scripts root.
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import devin_state as state
 from devin_verify import PAYLOAD
+from py_trust import py_path_is_trusted
 SKILL_NAME = 'token-optimizer-output'
 MARKER = 'devin-output-filter-v1'
 

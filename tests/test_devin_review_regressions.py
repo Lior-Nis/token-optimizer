@@ -1030,3 +1030,29 @@ def test_stale_pending_record_names_escape_and_purge_survives(tmp_path, monkeypa
     assert 'uninstall' in message and 'purge' in message, message
     inst.uninstall(purge=True)
     assert not pending.exists()
+
+
+def test_installer_imports_under_isolated_python(tmp_path):
+    """install.sh launches the installer with -I, which removes the script
+    directory from sys.path; sibling imports must still resolve."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+    env['HOME'] = str(tmp_path)
+    result = subprocess.run(
+        [sys.executable, '-I', str(SCRIPTS / 'devin_install.py'), '--help'],
+        capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_install_sh_launches_devin_installer_isolated():
+    text = (SCRIPTS.parents[2] / 'install.sh').read_text()
+    assert 'python3 -I "$script_dir/skills/token-optimizer/scripts/devin_install.py"' in text
+
+
+def test_docs_site_devin_page_matches_installed_isolated_contract():
+    mdx = (SCRIPTS.parents[2] / 'docs-site/src/content/docs/install/devin.mdx').read_text()
+    assert 'measure.py devin-doctor' not in mdx
+    assert 'devin_doctor.py" --probe' in mdx
+    assert 'python3 -I' in mdx
+    assert 'captures persist until you explicitly clean them up' not in mdx
+    assert 'never original captures' not in mdx
