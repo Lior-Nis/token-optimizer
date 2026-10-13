@@ -333,6 +333,47 @@ def _git_status_short_sample():
     return '\n'.join(lines).encode()
 
 
+def _markdown_doc_sample():
+    """A markdown document that quotes git-status-looking lines mid-text: an
+    'On branch' sentence and '## ' headings away from the first line. Loose
+    single-line checks would call this git status output."""
+    parts = ['# Design notes for the release process', '']
+    for i in range(300):
+        parts += ['Section %d discusses rollout step %d in detail.' % (i, i),
+                  'The paragraph expands on the reasoning for step %d.' % i, '']
+        if i == 40:
+            parts += ['On branch naming, we keep the existing convention.', '']
+        if i == 80:
+            parts += ['## Rollback plan', 'Text under the heading.', '']
+        if i == 160:
+            parts += ['## Checklist', 'More prose follows here.', '']
+    return '\n'.join(parts).encode()
+
+
+def _doc_with_total_sample():
+    """A log-style document with a mid-file 'total 12' line. The ls -l header
+    is only authoritative as the first line of a listing."""
+    parts = ['processing report for batch run', '']
+    for i in range(400):
+        parts.append('worker node %d handled request %d cleanly' % (i % 17, i))
+        if i == 200:
+            parts += ['', 'total 12', '']
+    return '\n'.join(parts).encode()
+
+
+def _prose_with_commit_sample():
+    """Prose that mentions 'commit <hex>' mid-text. A commit header is only a
+    git-log signature on the first line of the capture."""
+    parts = ['Migration notes for the storage layer', '']
+    for i in range(400):
+        parts.append('entry %d records the state after step %d' % (i, i))
+        if i == 150:
+            parts += ['',
+                      'commit a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 changed the layout',
+                      '']
+    return '\n'.join(parts).encode()
+
+
 _DOMAIN_SAMPLES = {
     'git_stat': _git_stat_sample(),
     'git_oneline': _git_oneline_sample(),
@@ -342,6 +383,9 @@ _DOMAIN_SAMPLES = {
     'grep': _search_sample(),
     'pytest_run': _tests_sample(),
     'build_log': _build_sample(),
+    'md_doc': _markdown_doc_sample(),
+    'doc_with_total': _doc_with_total_sample(),
+    'prose_with_commit': _prose_with_commit_sample(),
 }
 
 _DOMAIN_FORMATS = {
@@ -413,6 +457,19 @@ def test_own_domain_pinned(tmp_path, monkeypatch, fmt, domain):
         fmt, domain, len(named.stdout), len(generic.stdout))
     assert len(_payload(named)) == _OWN_DOMAIN_PIN[(fmt, domain)], (
         fmt, domain, len(_payload(named)), _OWN_DOMAIN_PIN[(fmt, domain)])
+
+
+@pytest.mark.parametrize('fmt,domain', [
+    ('git-status', 'md_doc'),
+    ('listing', 'doc_with_total'),
+    ('git-log', 'prose_with_commit'),
+])
+def test_detector_rejects_quoted_signature_lines(fmt, domain):
+    """A format signature quoted mid-text is not evidence: headers like
+    'On branch', 'total N' and 'commit <hash>' only count on the first
+    non-empty line, where the real command actually prints them."""
+    import devin_compress as d
+    assert not d._looks_like_format(fmt, _DOMAIN_SAMPLES[domain].decode())
 
 
 def test_live_repro_git_stat_hinted_git_status(tmp_path, monkeypatch):

@@ -237,19 +237,23 @@ def _looks_like_format(fmt: str, text: str) -> bool:
     def majority(hit: int) -> bool:
         return hit * 2 > len(lines)
 
+    # Header shortcuts are only evidence where the real command prints them:
+    # the first non-empty line. A quoted 'On branch', 'total N' or 'commit
+    # <hash>' appearing mid-document is prose, not a signature.
+    first = lines[0]
     if fmt == 'git-status':
-        if re.search(r'^(?:On branch |HEAD detached|## )', text, re.M):
+        if re.match(r'(?:On branch |HEAD detached|## )', first):
             return True
         return majority(sum(
             1 for line in lines
             if _STATUS_ENTRY.match(line.lstrip()) or line.lstrip().startswith('?? ')))
     if fmt == 'git-log':
-        if re.search(r'^commit [0-9a-f]{7,40}\b', text, re.M):
+        if re.match(r'commit [0-9a-f]{7,40}\b', first):
             return True
         return majority(sum(
             1 for line in lines if re.match(r'^[0-9a-f]{7,40}\s+\S', line)))
     if fmt == 'listing':
-        if re.search(r'^total \d+', text, re.M):
+        if re.match(r'total \d+', first):
             return True
         return majority(sum(
             1 for line in lines if re.match(r'^[-bcdlpsw][-rwxsStT]{9}[+@]?\s', line)))
