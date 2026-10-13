@@ -33,9 +33,14 @@ def verify_install():
                       '; remove it and retry')
     manifest=state.private_path(root/'install.json')
     if manifest.stat().st_nlink!=1:raise OSError('manifest hardlink refused')
-    record=json.loads(manifest.read_text())
+    try:
+        record=json.loads(manifest.read_text())
+    except (ValueError,RecursionError):
+        raise OSError('invalid installed payload manifest')
     if not isinstance(record,dict) or not isinstance(record.get('files'),dict):
         raise OSError('invalid installed payload manifest types')
+    if any(not isinstance(k,str) for k in record['files']):
+        raise OSError('invalid installed payload manifest')
     if any(not isinstance(v,str) or len(v)!=64 or any(ch not in '0123456789abcdef' for ch in v) for v in record['files'].values()):
         raise OSError('invalid manifest digest')
     expected={str(root/'plugin'/name) for name in PAYLOAD}|{str(state.home()/'skills/token-optimizer-output/SKILL.md')}

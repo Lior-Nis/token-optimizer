@@ -118,20 +118,28 @@ def _ownership(*, allow_missing=False) -> dict | None:
     if not p.exists():
         return None
     if p.exists() and p.stat().st_nlink != 1:raise OSError('ownership record hardlink refused')
-    record = json.loads(_private_bytes(p))
+    try:
+        record = json.loads(_private_bytes(p))
+    except (ValueError, RecursionError):
+        raise OSError('invalid ownership record; run uninstall --purge (which also removes stored captures) to discard adapter state')
     if not isinstance(record, dict) or record.get('owner') != MARKER or not isinstance(record.get('files'), dict):
         raise OSError('invalid ownership record; run uninstall --purge (which also removes stored captures) to discard adapter state')
     expected = {str(state.data_dir() / 'plugin' / name) for name in PAYLOAD} | {str(skill_dir() / 'SKILL.md')}
     legacy = expected - {str(state.data_dir() / 'plugin' / name) for name in ('plugin_env.py', 'refetch_fingerprint.py')}
-    if _resolved_keys(record['files']) not in (sorted(expected), sorted(legacy)):
+    try:
+        record_keys = _resolved_keys(record['files'])
+    except (OSError, ValueError, TypeError, RuntimeError):
+        raise OSError('recorded paths cannot be resolved; run uninstall --purge (which also removes stored captures) to discard adapter state')
+    if record_keys not in (sorted(expected), sorted(legacy)):
         raise _ForeignLayout('ownership paths do not match this install; the manifest was recorded by a different adapter version or home spelling -- run uninstall --purge (which also removes stored captures) to discard adapter state')
     for name, digest in record['files'].items():
         raw = Path(name)
         resolved = raw.resolve()
         # A key like plugin/ghost/../x.py resolves onto an owned path yet
         # cannot be traversed; refusing here beats a "successful" removal that
-        # silently leaves the file behind.
-        if not raw.parent.is_dir() or raw.parent.resolve() != resolved.parent:
+        # silently leaves the file behind. An ordinary missing file or moved
+        # folder resolves to nothing and stays tolerable under allow_missing.
+        if resolved.exists() and not raw.exists():
             raise OSError('recorded path cannot be reached inside the install directories: ' + name +
                           '; move ' + str(state.data_dir()) + ' and ' + str(skill_dir()) + ' aside to repair')
         if allow_missing and not raw.exists():
@@ -158,23 +166,49 @@ def _ownership_for_removal(*, purge: bool):
 
 
 def _purge_recorded() -> dict:
-    """Best-effort recorded digests for the purge sweep: only a well-formed
-    owner/files manifest contributes; anything unreadable yields an empty map."""
-    try:
-        record = json.loads(manifest_path().read_bytes())
-    except (OSError, ValueError, RecursionError):
-        return {}
-    if not isinstance(record, dict) or record.get('owner') != MARKER or not isinstance(record.get('files'), dict):
-        return {}
+    """Best-effort recorded digests for the purge sweep: a well-formed
+    manifest or pending transaction record contributes the digests it
+    committed; anything unreadable yields nothing."""
     out = {}
-    for name, digest in record['files'].items():
-        if (not isinstance(name, str) or not isinstance(digest, str) or len(digest) != 64
-                or any(c not in '0123456789abcdef' for c in digest)):
-            continue
+
+    def _add(files):
+        if not isinstance(files, dict):
+            return
+        for name, digest in files.items():
+            if (not isinstance(name, str) or not isinstance(digest, str) or len(digest) != 64
+                    or any(c not in '0123456789abcdef' for c in digest)):
+                continue
+            try:
+                out[str(Path(name).resolve())] = digest
+            except (OSError, ValueError, RuntimeError):
+                continue
+
+    for leaf in ('install.json', 'pending-install.json'):
         try:
-            out[str(Path(name).resolve())] = digest
-        except (OSError, ValueError):
+            record = json.loads((state.data_dir() / leaf).read_bytes())
+        except (OSError, ValueError, RecursionError):
             continue
+        if not isinstance(record, dict) or record.get('owner') != MARKER:
+            continue
+        _add(record.get('files'))
+        previous = record.get('previous')
+        if isinstance(previous, dict):
+            for name, content in previous.items():
+                if not isinstance(name, str) or not isinstance(content, str):
+                    continue
+                try:
+                    out[str(Path(name).resolve())] = hashlib.sha256(
+                        base64.b64decode(content, validate=True)).hexdigest()
+                except (OSError, ValueError, RuntimeError):
+                    continue
+        old_manifest = record.get('previous_manifest')
+        if isinstance(old_manifest, str):
+            try:
+                old = json.loads(base64.b64decode(old_manifest, validate=True))
+            except (ValueError, RecursionError):
+                old = None
+            if isinstance(old, dict):
+                _add(old.get('files'))
     return out
 
 
@@ -226,10 +260,19 @@ def _recover_pending() -> None:
     pending=state.private_path(state.data_dir()/'pending-install.json')
     if not pending.exists():return
     if pending.stat().st_nlink!=1:raise OSError('pending ownership hardlink refused')
-    value=json.loads(_private_bytes(pending))
+    try:
+        value=json.loads(_private_bytes(pending))
+    except (ValueError,RecursionError):
+        value=None
     expected={str(state.data_dir()/'plugin'/name) for name in PAYLOAD}|{str(skill_dir()/'SKILL.md')}
+    legacy=expected - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
+    files=value.get('files') if isinstance(value,dict) else None
+    try:
+        keys=_resolved_keys(files) if isinstance(files,dict) else None
+    except (OSError,ValueError,TypeError,RuntimeError):
+        keys=None
     if (not isinstance(value,dict) or value.get('owner')!=MARKER
-            or not isinstance(value.get('files'),dict) or _resolved_keys(value['files'])!=sorted(expected)):
+            or keys not in (sorted(expected),sorted(legacy))):
         raise OSError('invalid pending install record; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
     # Reconcile published new bytes first: stale pending must not undo a completed update.
     if manifest_path().exists():
@@ -244,11 +287,12 @@ def _recover_pending() -> None:
     rendered=source.read_text().replace('@PYTHON@',shlex.quote(os.path.realpath(sys.executable))).replace('@FILTER@',shlex.quote(str(state.data_dir()/'plugin/devin_compress.py')))
     current={str(state.data_dir()/'plugin'/name):hashlib.sha256(_render_payload(name)).hexdigest() for name in PAYLOAD}
     current[str(skill_dir()/'SKILL.md')]=hashlib.sha256(rendered.encode()).hexdigest()
-    if _resolved_files(value['files'])!=current:
+    # A previous-version record cannot match this tree's rendered digests; it
+    # reconciles against the digests it committed, per file, in the loop below.
+    if keys==sorted(expected) and _resolved_files(value['files'])!=current:
         raise OSError('pending version/content ambiguous; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state, or follow the documented manual repair')
     old=value.get('previous')
     if old is not None:
-        legacy=expected - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
         if not isinstance(old,dict) or _resolved_keys(old) not in (sorted(expected),sorted(legacy)):raise OSError('invalid refresh recovery record')
         if any(not isinstance(content,str) for content in old.values()) or not isinstance(value.get('previous_manifest'),str):
             raise OSError('invalid refresh recovery encoding')
@@ -305,7 +349,7 @@ def _recover_pending() -> None:
             info=item.stat()
             if info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1:
                 raise OSError('unsafe interrupted install content; preserved')
-            if _hash(item)!=recorded[original]:
+            if _hash(item)!=recorded.get(original,''):
                 raise OSError('edited interrupted install content; preserved')
             removable.append(item)
     for item in removable:item.unlink()
