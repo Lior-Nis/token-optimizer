@@ -26,7 +26,7 @@ import { CoachData } from "./coach";
  * manifest is absent (skill-only install, test sandbox), falls back to the
  * compiled-in constant so the label is never blank.
  */
-const CORE_VERSION_FALLBACK = "5.13.40";
+const CORE_VERSION_FALLBACK = "5.13.41";
 
 /**
  * OpenClaw adapter version. Source of truth is `openclaw/package.json`; the

@@ -291,3 +291,136 @@ def test_capture_leaf_as_directory_names_leaf(tmp_path, monkeypatch):
     with pytest.raises(OSError) as info:
         d.read_pair(root, sealed=False)
     assert 'stdout' in str(info.value) and 'Is a directory' not in str(info.value)
+
+
+# --- Wrong-hint class: a named format on foreign-domain output ---
+
+
+def _git_stat_sample():
+    """git log --stat with prose bodies carrying the shapes that fool the
+    status parser: numbered lists, leading 'M '/'A '/'??', '1.' lines,
+    indented text and mid-sentence section names."""
+    parts = []
+    for i in range(40):
+        parts += ['commit %040x' % i,
+                  'Author: A U Thor <author@example.com>',
+                  'Date:   Tue Oct 13 10:%02d:00 2026 +0300' % (i % 60), '']
+        parts += ['    fix(pkg-%d): rework the %dth stage (change-%04d)' % (i % 13, i, i), '',
+                  '    The body explains what changed in rev-%04d:' % i, '',
+                  '    1. The opening quote is atomic (lookahead plus backreference), so a skipped quoted',
+                  '    M paths behave differently once the second stage runs (see ticket-%04d)' % i,
+                  '    A reference section follows where Untracked files: appear in prose',
+                  '    ?? marks and phrases like Changes not staged can sit mid-sentence',
+                  '']
+        if i % 19 == 0:
+            parts += ['        nested indented detail line %d' % i, '']
+        parts += [' src/pkg/mod_%02d/file_%03d.py | %d +++---'
+                  % (i % 13, (i * 7 + f) % 100, 10 + (i + f) % 8) for f in range(6)]
+        parts += [' 6 files changed, 60 insertions(+), 18 deletions(-) in range-%04d' % i, '']
+    return '\n'.join(parts).encode()
+
+
+def _git_oneline_sample():
+    return '\n'.join('%07x change number %d in the module' % (i * 2654435761 % (1 << 28), i)
+                     for i in range(1500)).encode()
+
+
+def _git_status_short_sample():
+    lines = ['## main...origin/main [ahead 2]']
+    lines += [' M src/pkg/file_%04d.py' % i for i in range(400)]
+    lines += ['M  src/staged/file_%04d.py' % i for i in range(200)]
+    lines += ['?? scratch_%04d.txt' % i for i in range(150)]
+    return '\n'.join(lines).encode()
+
+
+_DOMAIN_SAMPLES = {
+    'git_stat': _git_stat_sample(),
+    'git_oneline': _git_oneline_sample(),
+    'git_status_long': _git_status_sample(),
+    'git_status_short': _git_status_short_sample(),
+    'ls_la': _listing_sample(),
+    'grep': _search_sample(),
+    'pytest_run': _tests_sample(),
+    'build_log': _build_sample(),
+}
+
+_DOMAIN_FORMATS = {
+    'git-status': ('git_status_long', 'git_status_short'),
+    'git-log': ('git_stat', 'git_oneline'),
+    'listing': ('ls_la',),
+    'search': ('grep',),
+    'tests': ('pytest_run',),
+    'build': ('build_log',),
+}
+
+# Delivered payload byte counts for own-domain cells on the pre-change adapter
+# (the compressed body between the untrusted-output markers; the pointer line
+# embeds sys.executable so the frame is not interpreter-stable). A named
+# handler must keep compressing its own domain exactly as well as before.
+_OWN_DOMAIN_PIN = {
+    ('git-status', 'git_status_long'): 1234,
+    ('git-status', 'git_status_short'): 42,
+    ('git-log', 'git_stat'): 1635,
+    ('git-log', 'git_oneline'): 1616,
+    ('listing', 'ls_la'): 2506,
+    ('search', 'grep'): 2666,
+    ('tests', 'pytest_run'): 1752,
+    ('build', 'build_log'): 3393,
+}
+
+
+def _strip_id(body):
+    return re.sub(rb'capture-[0-9a-f]{32}', b'capture-X', body)
+
+
+def _payload(result):
+    """The compressed body inside the capture frame; raw bytes when the
+    capture was passed through untouched."""
+    m = re.match(rb'[^\n]*\n\[Begin untrusted captured output\]\n'
+                 rb'(.*)\n\[End untrusted captured output\]\n?$',
+                 result.stdout, re.S)
+    return m.group(1) if m else result.stdout
+
+
+_CROSS = [(fmt, domain) for fmt, domains in _DOMAIN_FORMATS.items()
+          for domain in _DOMAIN_SAMPLES if domain not in domains]
+
+
+@pytest.mark.parametrize('fmt,domain', _CROSS, ids=['%s-on-%s' % c for c in _CROSS])
+def test_wrong_hint_delivers_generic_everywhere(tmp_path, monkeypatch, fmt, domain):
+    """A named format hinted on output from another domain must deliver what
+    generic delivers for the same bytes -- a named handler that sees foreign
+    text can emit a near-empty body from coincidental line matches."""
+    raw = _DOMAIN_SAMPLES[domain]
+    named = _filtered(tmp_path, monkeypatch, fmt, raw)
+    generic = _filtered(tmp_path, monkeypatch, 'generic', raw)
+    assert _strip_id(named.stdout) == _strip_id(generic.stdout), (
+        fmt, domain, len(named.stdout), len(generic.stdout))
+
+
+_OWN = [(fmt, domain) for fmt, domains in _DOMAIN_FORMATS.items() for domain in domains]
+
+
+@pytest.mark.parametrize('fmt,domain', _OWN, ids=['%s-on-%s' % c for c in _OWN])
+def test_own_domain_pinned(tmp_path, monkeypatch, fmt, domain):
+    """On its own domain a named format is no larger than generic and keeps
+    delivering what it did in 5.13.40 -- the detector must not shrink the
+    formats it is guarding."""
+    raw = _DOMAIN_SAMPLES[domain]
+    named = _filtered(tmp_path, monkeypatch, fmt, raw)
+    generic = _filtered(tmp_path, monkeypatch, 'generic', raw)
+    assert len(named.stdout) <= len(generic.stdout), (
+        fmt, domain, len(named.stdout), len(generic.stdout))
+    assert len(_payload(named)) == _OWN_DOMAIN_PIN[(fmt, domain)], (
+        fmt, domain, len(_payload(named)), _OWN_DOMAIN_PIN[(fmt, domain)])
+
+
+def test_live_repro_git_stat_hinted_git_status(tmp_path, monkeypatch):
+    """The live 5.13.40 reproduction: git log --stat filtered with
+    --format git-status delivered 523 bytes ('branch: ?, 1. The opening
+    quote is atomic ...'). The result must be exactly the generic result."""
+    raw = _git_stat_sample()
+    named = _filtered(tmp_path, monkeypatch, 'git-status', raw)
+    generic = _filtered(tmp_path, monkeypatch, 'generic', raw)
+    assert _strip_id(named.stdout) == _strip_id(generic.stdout)
+    assert b'branch: ?' not in named.stdout
