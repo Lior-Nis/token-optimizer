@@ -48,6 +48,42 @@ def test_dry_run_no_writes(tmp_path,monkeypatch):
     monkeypatch.setenv('HOME',str(tmp_path));d.install(dry_run=True)
     assert list(tmp_path.iterdir())==[]
 
+
+def test_symlinked_skill_dir_refusal_says_symlink(tmp_path, monkeypatch):
+    """A skill dir swapped for a symlink after install must be refused as a
+    symlink, the way the previous release reported it -- not with the
+    different-version/home-spelling advice, which does not fit this cause."""
+    import devin_install as d
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    skill = s.home() / 'skills/token-optimizer-output'
+    parked = tmp_path / 'parked-real'
+    skill.rename(parked)
+    skill.symlink_to(parked)
+    for action in (d.install, d.uninstall):
+        with pytest.raises(OSError) as info:
+            action()
+        assert 'symlink' in str(info.value), str(info.value)
+    d.uninstall(purge=True)
+    assert skill.is_symlink()
+
+
+def test_owned_leaf_as_directory_names_the_path(tmp_path, monkeypatch):
+    """An owned file replaced by a directory must refuse with its path; a bare
+    file descriptor number in the message is cryptic and unactionable."""
+    import devin_install as d
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path))
+    d.install()
+    target = s.data_dir() / 'plugin' / 'devin_state.py'
+    target.unlink()
+    target.mkdir()
+    for action in (d.install, d.uninstall):
+        with pytest.raises(OSError) as info:
+            action()
+        assert str(target) in str(info.value), str(info.value)
+
 @pytest.mark.parametrize('name',['../outside','relative','/tmp/outside'])
 def test_invalid_home_override(tmp_path,monkeypatch,name):
     import devin_state as s

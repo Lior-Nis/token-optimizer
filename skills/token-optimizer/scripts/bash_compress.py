@@ -323,6 +323,14 @@ def _compress_git_status(output):
             elif section == "unmerged":
                 unmerged_files.append(fname)
 
+    if (branch == "?" and not ahead_behind and not staged_files
+            and not unstaged_files and not untracked_files and not unmerged_files):
+        # Nothing recognised: the input is not git status output (for example
+        # a "git status"-hinted capture of a grep or git log). Hand the raw
+        # output back rather than emit "branch: ?" and silently drop the
+        # whole capture; the caller's generic fallback then applies.
+        return output
+
     parts = [f"branch: {branch}"]
     if ahead_behind:
         parts.append(ahead_behind)

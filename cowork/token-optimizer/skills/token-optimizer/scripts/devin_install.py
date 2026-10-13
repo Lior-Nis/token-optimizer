@@ -69,16 +69,23 @@ def manifest_path() -> Path:
 def _private_bytes(path: Path) -> bytes:
     state.no_symlinks(path)
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-    with os.fdopen(fd,'rb') as handle:
-        before=os.fstat(handle.fileno())
+    try:
+        # fstat before fdopen: a directory wraps into a stream that reports the
+        # bare descriptor number in its error, not the path being refused.
+        before=os.fstat(fd)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid()
                 or before.st_mode&0o077 or before.st_nlink!=1):
-            raise OSError('private single-link ownership file required')
-        content=handle.read()
-        after=os.fstat(handle.fileno())
-        if (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):
-            raise OSError('ownership file changed while reading')
-        return content
+            raise OSError('private single-link ownership file required: ' + str(path))
+        with os.fdopen(fd,'rb') as handle:
+            fd=-1
+            content=handle.read()
+            after=os.fstat(handle.fileno())
+    finally:
+        if fd>=0:
+            os.close(fd)
+    if (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):
+        raise OSError('ownership file changed while reading')
+    return content
 
 
 def _hash(path: Path) -> str:
@@ -131,6 +138,10 @@ def _ownership(*, allow_missing=False) -> dict | None:
     except (OSError, ValueError, TypeError, RuntimeError):
         raise OSError('recorded paths cannot be resolved; run uninstall --purge (which also removes stored captures) to discard adapter state')
     if record_keys not in (sorted(expected), sorted(legacy)):
+        # A recorded path routed through a symlink resolves elsewhere; name the
+        # real cause before falling through to the version/spelling advice.
+        for name in record['files']:
+            state.no_symlinks(Path(name))
         raise _ForeignLayout('ownership paths do not match this install; the manifest was recorded by a different adapter version or home spelling -- run uninstall --purge (which also removes stored captures) to discard adapter state')
     for name, digest in record['files'].items():
         raw = Path(name)

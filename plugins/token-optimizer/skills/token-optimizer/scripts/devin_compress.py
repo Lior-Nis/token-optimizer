@@ -115,22 +115,29 @@ def _directory_fd(path: Path) -> int:
 
 def _read_leaf(directory_fd: int, name: str, cap: int) -> tuple[bytes, object]:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
-    with os.fdopen(fd, 'rb') as stream:
-        before = os.fstat(stream.fileno())
+    try:
+        # fstat before fdopen: a directory wraps into a stream that reports the
+        # bare descriptor number in its error, not the leaf being refused.
+        before = os.fstat(fd)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
                 or before.st_mode & 0o077 or before.st_nlink != 1):
-            raise OSError('capture must be bounded, private and unlinked')
-        if before.st_size > cap:
-            raise OSError('capture exceeds the ' + str(cap) + ' byte limit; read the original files directly')
-        content = stream.read(cap + 1)
-        after = os.fstat(stream.fileno())
-        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if len(content) > cap:
-            raise OSError('capture exceeded the ' + str(cap) + ' byte limit while reading')
-        if identity(before) != identity(after) or identity(after) != identity(current):
-            raise OSError('capture changed during reading')
-        return content, after
+            raise OSError('capture leaf must be a private single-link file: ' + name)
+        with os.fdopen(fd, 'rb') as stream:
+            fd = -1
+            if before.st_size > cap:
+                raise OSError('capture exceeds the ' + str(cap) + ' byte limit; read the original files directly')
+            content = stream.read(cap + 1)
+            after = os.fstat(stream.fileno())
+            identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if len(content) > cap:
+                raise OSError('capture exceeded the ' + str(cap) + ' byte limit while reading')
+            if identity(before) != identity(after) or identity(after) != identity(current):
+                raise OSError('capture changed during reading')
+            return content, after
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _repair_orphaned_seal(directory_fd: int) -> None:
@@ -236,7 +243,10 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
         verify_install()
     try:
         from credential_patterns import PATTERNS_ONLY
-        if any(pattern.search(text) for pattern in PATTERNS_ONLY):
+        # grep --color=always splits a token with SGR escapes, so the joined
+        # secret only appears once escapes are stripped; scan both spellings.
+        if (any(pattern.search(text) for pattern in PATTERNS_ONLY)
+                or any(pattern.search(cleaned) for pattern in PATTERNS_ONLY)):
             return FilterResult(raw, b'', 0, 'credential_passthrough')
         from bash_compress import compress
         from token_estimate import estimate_tokens
@@ -245,11 +255,13 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
             shortened = text
         # A named format must never do worse than generic for the same bytes;
         # when its handler preserves more than generic would, generic wins.
+        # The delivered unit is encoded bytes, not characters: a CJK-heavy
+        # result is ~3x costlier per character, so compare UTF-8 length.
         if format_hint != 'generic':
             fallback = compress(FORMATS['generic'], text)
             if 'expand key' in fallback:
                 fallback = text
-            if len(fallback) < len(shortened):
+            if len(fallback.encode('utf-8')) < len(shortened.encode('utf-8')):
                 shortened = fallback
         # File stays exactly as supplied. Pointer includes its entire overhead.
         # The recover hint must be a command an installed user can actually run.

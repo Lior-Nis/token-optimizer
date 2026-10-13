@@ -74,9 +74,13 @@ def _install_current(home: Path, monkeypatch, extra_env=None):
 
 
 def _run_current(fn):
+    import contextlib
+    import io
+    buf = io.StringIO()
     try:
-        fn()
-        return 0, ''
+        with contextlib.redirect_stdout(buf):
+            fn()
+        return 0, buf.getvalue().strip()
     except OSError as exc:
         return 1, str(exc)
     except SystemExit as exc:
@@ -138,6 +142,13 @@ def _build(home: Path, name: str, installer) -> dict:
         (_data(home) / 'install.json').unlink()
     elif name == 'manifest_unreadable':
         (_data(home) / 'install.json').write_bytes(b'not json at all')
+    elif name == 'stored_capture':
+        capture = _data(home) / 'captures' / ('capture-' + '0' * 32)
+        capture.mkdir(parents=True)
+        capture.chmod(0o700)
+        for leaf in ('stdout', 'stderr'):
+            (capture / leaf).write_bytes(b'sealed bytes')
+            (capture / leaf).chmod(0o600)
     elif name == 'half_install':
         _craft_half(home)
     elif name == 'old_half':
@@ -153,6 +164,7 @@ STATES = [
     'clean', 'edited_skill', 'edited_payload', 'stray_plugin', 'stray_skill',
     'skill_moved', 'skill_deleted', 'data_deleted', 'manifest_missing',
     'manifest_unreadable', 'half_install', 'old_install', 'old_dotdot', 'old_half',
+    'stored_capture',
 ]
 
 COMMANDS = ['install', 'uninstall', 'purge', 'doctor', 'install_again']
@@ -208,15 +220,31 @@ def _baseline_command(baseline_dir: Path, home: Path, command: str, extra_env=No
     return _baseline_run(baseline_dir, home, argv, extra_env)
 
 
-def _outside_snapshot(home: Path, extra_env=None) -> set:
+def _outside_snapshot(home: Path, extra_env=None) -> dict:
+    """Map each path outside the Devin home to a content fingerprint, so a
+    command that writes outside the Devin home -- a new file, changed bytes,
+    or a removed file -- fails the cell rather than passing silently."""
+    import hashlib
     override = (extra_env or {}).get('TOKEN_OPTIMIZER_DEVIN_HOME')
     root = Path(override).resolve() if override else _devin(home)
-    out = set()
+    # The adapter legitimately owns a second root: the ancestor-scan cache
+    # under XDG_CACHE_HOME (runtime_env.py). It is adapter state, not user
+    # content, so it is inside for the purposes of this snapshot.
+    cache_base = (extra_env or {}).get('XDG_CACHE_HOME')
+    cache_root = (Path(cache_base) if cache_base else home / '.cache') / 'token-optimizer'
+    inside = (root.resolve(), cache_root.resolve())
+    out = {}
     for path in home.rglob('*'):
-        try:
-            path.relative_to(root)
-        except ValueError:
-            out.add(str(path))
+        if any(path == o or o in path.parents for o in inside):
+            continue
+        if path.is_symlink():
+            out[str(path)] = 'symlink:' + os.readlink(path)
+        elif path.is_dir():
+            out[str(path)] = 'dir'
+        elif path.is_file():
+            out[str(path)] = 'file:' + hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            out[str(path)] = 'other'
     return out
 
 
@@ -282,6 +310,10 @@ def test_lifecycle_cell(tmp_path, monkeypatch, state_name, command):
     cur_ctx = _build(cur_home, state_name, cur_installer)
     canary = cur_home / 'outside-canary.txt'
     canary.write_text('KEEP\n')
+    # Pre-create the shared cache parent so the doctor's adapter-owned subtree
+    # underneath it does not present as a brand-new outside path; a foreign
+    # child next to it would still trip the snapshot.
+    (cur_home / '.cache').mkdir(exist_ok=True)
     before_outside = _outside_snapshot(cur_home, cur_ctx['env'])
 
     # Previous-release twin: same state built by its own installer.
@@ -299,9 +331,39 @@ def test_lifecycle_cell(tmp_path, monkeypatch, state_name, command):
         assert keep.exists(), f'{command} on {state_name} removed user file {keep}'
     assert canary.read_text() == 'KEEP\n'
     after_outside = _outside_snapshot(cur_home, cur_ctx['env'])
-    assert before_outside <= after_outside, (
-        f'{command} on {state_name} touched files outside the Devin home: '
-        + str(sorted(before_outside - after_outside)))
+    assert before_outside == after_outside, (
+        f'{command} on {state_name} wrote outside the Devin home: '
+        + str(sorted(set(before_outside.items()) ^ set(after_outside.items()))))
+    # Effect assertions: a "successful" command must have done the thing. A
+    # rc=0 'No owned Devin install found' run removed nothing by design, and
+    # stray unowned files may legally survive; the adapter's own payload and
+    # manifest may not.
+    data = _root(cur_home, cur_ctx['env']) / 'token-optimizer'
+    if rc_cur == 0 and command == 'uninstall' and 'Removed owned' in cur_detail:
+        import devin_verify as verify
+        assert not (data / 'install.json').exists(), (
+            f'uninstall on {state_name} succeeded but the manifest survived')
+        leftover = [n for n in verify.PAYLOAD if (data / 'plugin' / n).exists()]
+        assert not leftover, (
+            f'uninstall on {state_name} succeeded but payload files survived: {leftover}')
+    if rc_cur == 0 and command == 'purge':
+        state_leaves = ('install.json', 'pending-install.json', 'consent.json',
+                        'metrics.db', 'metrics.db-journal', 'metrics.db-wal',
+                        'metrics.db-shm', 'session-salt')
+        leftover_state = [n for n in state_leaves if (data / n).exists()]
+        assert not leftover_state, (
+            f'purge on {state_name} succeeded but state survived: {leftover_state}')
+        caps = data / 'captures'
+        leftover_caps = [p.name for p in caps.iterdir()] if caps.is_dir() else []
+        assert not leftover_caps, (
+            f'purge on {state_name} succeeded but captures survived: {leftover_caps}')
+        # Purge may legally preserve edited or unowned folders, but only when
+        # it told the user it did.
+        skill = _root(cur_home, cur_ctx['env']) / 'skills' / 'token-optimizer-output'
+        surviving = [f for f in (data / 'plugin', skill) if f.exists()]
+        if surviving:
+            assert 'preserved' in cur_detail, (
+                f'purge on {state_name} left {surviving} without saying so')
     # Where the previous release handled the cell safely, this one must too.
     if rc_base == 0 and (state_name, command) not in PIN_EXEMPT:
         assert rc_cur == 0, (
