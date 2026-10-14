@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the explicit Devin output skill, never edit host config or hooks."""
+"""Install the Devin output skill; with --auto, also own two hook entries in the Devin user config."""
 from __future__ import annotations
 import argparse
 import ast
@@ -25,6 +25,7 @@ if str(SCRIPTS) not in sys.path:
 import devin_state as state
 from devin_verify import PAYLOAD
 from py_trust import py_path_is_trusted
+import devin_hooks as hooks
 SKILL_NAME = 'token-optimizer-output'
 MARKER = 'devin-output-filter-v1'
 
@@ -132,12 +133,15 @@ def _ownership(*, allow_missing=False) -> dict | None:
     if not isinstance(record, dict) or record.get('owner') != MARKER or not isinstance(record.get('files'), dict):
         raise OSError('invalid ownership record; run uninstall --purge (which also removes stored captures) to discard adapter state')
     expected = {str(state.data_dir() / 'plugin' / name) for name in PAYLOAD} | {str(skill_dir() / 'SKILL.md')}
-    legacy = expected - {str(state.data_dir() / 'plugin' / name) for name in ('plugin_env.py', 'refetch_fingerprint.py')}
+    # Earlier releases shipped fewer payload files: 5.13.43 had no hook module,
+    # and releases before it also lacked the two plugin-env modules.
+    previous = expected - {str(state.data_dir() / 'plugin' / 'devin_hooks.py')}
+    legacy = previous - {str(state.data_dir() / 'plugin' / name) for name in ('plugin_env.py', 'refetch_fingerprint.py')}
     try:
         record_keys = _resolved_keys(record['files'])
     except (OSError, ValueError, TypeError, RuntimeError):
         raise OSError('recorded paths cannot be resolved; run uninstall --purge (which also removes stored captures) to discard adapter state')
-    if record_keys not in (sorted(expected), sorted(legacy)):
+    if record_keys not in (sorted(expected), sorted(previous), sorted(legacy)):
         # A recorded path routed through a symlink resolves elsewhere; name the
         # real cause before falling through to the version/spelling advice.
         for name in record['files']:
@@ -369,6 +373,157 @@ def _atomic(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+# ── Automatic mode: hook entries in the Devin user config ───────────────────
+# Devin reads global hooks from the "hooks" key of its user config. The adapter
+# owns exactly the entries it recorded; every other key and hook is the
+# user's and survives install, refresh, uninstall and purge byte for byte.
+
+HOOK_STATE_LEAVES = (hooks.RECORD, hooks.BINDINGS, hooks.BINDINGS + '.lock', 'auto-captures.json',
+                     'auto-captures.json.lock', 'devin-config-backup.json')
+MAX_CONFIG = 4 * 1024 * 1024
+ATTESTATION_NOTICE = ('Automatic mode records your statement that no Devin team or enterprise permission policy '
+                      'applies here: those policies are never stored on this machine, so they cannot be checked.')
+
+
+def devin_config() -> Path:
+    return state.home() / 'config.json'
+
+
+def _hook_entries() -> dict:
+    return hooks.owned_entries(os.path.realpath(sys.executable), str(state.data_dir() / 'plugin' / 'devin_compress.py'))
+
+
+def _hook_record(*, tolerant=False):
+    """The recorded hook entries, or None. tolerant: unreadable = None (purge)."""
+    path = state.data_dir() / hooks.RECORD
+    try:
+        state.private_path(path)
+        if not path.exists():
+            return None
+        record = json.loads(_private_bytes(path))
+        if (not isinstance(record, dict) or record.get('owner') != MARKER
+                or not isinstance(record.get('entries'), dict) or not isinstance(record.get('stale', []), list)):
+            raise OSError('invalid hook record: ' + str(path))
+        return record
+    except (OSError, ValueError, RecursionError) as exc:
+        if tolerant:
+            return None
+        raise OSError('invalid hook record: ' + str(path) + ' (' + str(exc) + ')') from None
+
+
+def _read_devin_config(path: Path):
+    """(config, exact bytes or None when absent, mode). Refuses what it cannot edit safely."""
+    state.no_symlinks(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {}, None, 0o600
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+        raise OSError('Devin config must be a regular, single-link file you own: ' + str(path))
+    if info.st_size > MAX_CONFIG:
+        raise OSError('Devin config is too large to edit safely: ' + str(path))
+    raw = path.read_bytes()
+    try:
+        config = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise OSError('Devin config is not plain JSON (comments or trailing commas?): ' + str(path)) from None
+    if not isinstance(config, dict):
+        raise OSError('Devin config must be a JSON object: ' + str(path))
+    return config, raw, stat.S_IMODE(info.st_mode)
+
+
+def _write_devin_config(path: Path, config: dict, raw, mode: int) -> None:
+    """Atomic, mode-preserving replace; refuses when the file changed meanwhile."""
+    if raw is not None:
+        # The exact bytes before this edit, private, for manual recovery.
+        backup = state.data_dir() / 'devin-config-backup.json'
+        state.private_path(backup)
+        _atomic(backup, raw)
+    indent = 2
+    if raw:
+        match = re.search(rb'\n( +)"', raw)
+        if match:
+            indent = len(match.group(1))
+    content = (json.dumps(config, indent=indent, ensure_ascii=False) + '\n').encode('utf-8')
+    fd, temporary_name = tempfile.mkstemp(prefix='.config-token-optimizer-', dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        try:
+            current = path.read_bytes()
+        except FileNotFoundError:
+            current = None
+        if current != raw:
+            raise OSError('Devin config changed while it was being edited; nothing was written. Retry: ' + str(path))
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _recorded_pairs(record) -> list:
+    """Every (event, entry) a record may have written: current plus stale."""
+    pairs = [(event, entry) for event, entry in record['entries'].items()]
+    for item in record.get('stale', []):
+        if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str):
+            pairs.append((item[0], item[1]))
+    return pairs
+
+
+def _wire_hooks() -> None:
+    """Add (or refresh) the two owned entries. The record is written first and
+    names the previous entries as stale, so an interrupted run never leaves an
+    entry that a later uninstall cannot identify."""
+    path = devin_config()
+    previous = _hook_record()
+    config, raw, mode = _read_devin_config(path)
+    entries = _hook_entries()
+    stale = [[event, entry] for event, entry in (_recorded_pairs(previous) if previous else [])
+             if entries.get(event) != entry]
+    merged = config
+    for event, entry in stale:
+        merged, _ = hooks.remove_hooks(merged, {event: entry})
+    merged = hooks.merge_hooks(merged, entries)
+    record = {'owner': MARKER, 'config': str(path), 'entries': entries, 'stale': stale,
+              'org_policy': hooks.ATTESTATION}
+    target = state.private_path(state.data_dir() / hooks.RECORD)
+    _atomic(target, json.dumps(record, sort_keys=True).encode())
+    if merged != config or raw is None:
+        _write_devin_config(path, merged, raw, mode)
+    if stale:
+        record['stale'] = []
+        _atomic(target, json.dumps(record, sort_keys=True).encode())
+
+
+def _unwire_hooks(*, tolerant=False) -> bool:
+    """Remove only the recorded, byte-equal entries, then the record. True when
+    a record existed. Edited entries stay, and are named."""
+    record = _hook_record(tolerant=tolerant)
+    if record is None:
+        return False
+    path = devin_config()
+    config, raw, mode = _read_devin_config(path)
+    if raw is not None:
+        result = config
+        for event, entry in _recorded_pairs(record):
+            result, _ = hooks.remove_hooks(result, {event: entry})
+        preserved = [event for event, found in hooks.installed_state(result, record['entries']).items()
+                     if found == 'edited']
+        if result != config:
+            _write_devin_config(path, result, raw, mode)
+        if preserved:
+            print('Kept edited Token Optimizer hook entries in ' + str(path) + ' (' + ', '.join(preserved) +
+                  '); they no longer match what was installed. Remove them by hand if unwanted.')
+    (state.data_dir() / hooks.RECORD).unlink(missing_ok=True)
+    # The backup is a full copy of the user's config: never outlive the wiring.
+    (state.data_dir() / 'devin-config-backup.json').unlink(missing_ok=True)
+    return True
+
+
 def _recover_pending() -> None:
     """Resume only a fingerprinted fresh-install transaction, never foreign files."""
     pending=state.private_path(state.data_dir()/'pending-install.json')
@@ -379,14 +534,15 @@ def _recover_pending() -> None:
     except (ValueError,RecursionError):
         value=None
     expected={str(state.data_dir()/'plugin'/name) for name in PAYLOAD}|{str(skill_dir()/'SKILL.md')}
-    legacy=expected - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
+    previous=expected - {str(state.data_dir()/'plugin'/'devin_hooks.py')}
+    legacy=previous - {str(state.data_dir()/'plugin'/name) for name in ('plugin_env.py','refetch_fingerprint.py')}
     files=value.get('files') if isinstance(value,dict) else None
     try:
         keys=_resolved_keys(files) if isinstance(files,dict) else None
     except (OSError,ValueError,TypeError,RuntimeError):
         keys=None
     if (not isinstance(value,dict) or value.get('owner')!=MARKER
-            or keys not in (sorted(expected),sorted(legacy))):
+            or keys not in (sorted(expected),sorted(previous),sorted(legacy))):
         raise OSError('invalid pending install record: ' + str(pending) + '; preserved; run uninstall --purge (which also removes stored captures) to discard adapter state')
     # Reconcile published new bytes first: stale pending must not undo a completed update.
     if manifest_path().exists():
@@ -600,7 +756,8 @@ def _preflight_destination(root, skill):
     return owned
 
 
-def install(*, dry_run=False) -> None:
+def install(*, dry_run=False, mode=None) -> None:
+    """mode: 'auto' wires the hooks, 'manual' unwires them, None keeps the current mode."""
     if os.name != 'posix':
         raise OSError('native Windows unsupported; use a POSIX environment')
     root, skill = state.data_dir(), skill_dir()
@@ -626,6 +783,13 @@ def install(*, dry_run=False) -> None:
         _preflight_destination(root, skill)
         _preflight_write_access(root, skill)
         print('Would install explicit Devin output skill at ' + str(skill))
+        recorded = _hook_record()
+        if mode == 'auto' or (mode is None and recorded):
+            _read_devin_config(devin_config())
+            print('Would wire automatic compression hooks into ' + str(devin_config()))
+        elif mode == 'manual' and recorded:
+            _read_devin_config(devin_config())
+            print('Would remove automatic compression hooks from ' + str(devin_config()))
         return
     with _lock():
         _recover_pending()
@@ -678,18 +842,42 @@ def install(*, dry_run=False) -> None:
                     except OSError:pass
             _clear_pending(pending)
             raise
-    print('Installed Devin explicit output skill (contract-only beta; no live session proof).')
+        hook_error = None
+        try:
+            recorded = _hook_record()
+            if mode == 'auto' or (mode is None and recorded):
+                if mode == 'auto':
+                    print(ATTESTATION_NOTICE)
+                _wire_hooks()
+                wired = True
+            else:
+                if mode == 'manual':
+                    _unwire_hooks()
+                wired = False
+        except (OSError, ValueError) as exc:
+            hook_error, wired = str(exc), False
+    print('Installed Devin output skill: /token-optimizer-output works in every session.')
+    if wired:
+        print('Automatic mode ON: hooks wired into ' + str(devin_config()) + '. Large output from commands your Devin '
+              'rules already allow (test runs, grep, git status, long logs...) is compressed with no extra prompts; commands Devin '
+              'asks about still ask. Restart running Devin sessions to load the hooks.')
+    elif mode == 'manual':
+        print('Manual mode: no hooks in the Devin config.')
+    else:
+        print('Manual mode. For automatic compression run: install.sh --devin --auto')
     print('Consent: private captures may contain confidential/personal data; the adapter makes no extra copies beyond the captures you create.')
     print('A raw passthrough removes its capture after delivery; a compressed result keeps its capture for recovery until you delete it or uninstall --purge. A failed delivery keeps the capture.')
     print('Failures, stderr, binary and credential-matching output pass through RAW to Devin/model context.')
     print('Numeric local estimates retain 30 days, at most 10000 rows.')
+    if hook_error:
+        raise OSError('the skill is installed, but automatic hooks were NOT wired: ' + hook_error)
 
 
 def _preflight_purge(root):
     # Purge removes state leaves by name, even unsafe modes/links. It cannot
     # unlink directories: detect those before removing any owned payload.
     for name in ('metrics.db', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm',
-                 'consent.json', 'session-salt', 'install.json', 'pending-install.json'):
+                 'consent.json', 'session-salt', 'install.json', 'pending-install.json', *HOOK_STATE_LEAVES):
         leaf = root / name
         if leaf.is_dir() and not leaf.is_symlink():
             raise OSError('purge state leaf is a directory; preserved: ' + str(leaf))
@@ -755,6 +943,9 @@ def uninstall(*, dry_run=False, purge=False) -> None:
     if dry_run:
         if purge and not owned:
             _preflight_sweep_access(_purge_recorded(), _known_payload_digests())
+        if _hook_record(tolerant=purge):
+            _read_devin_config(devin_config())
+            print('Would remove automatic compression hooks from ' + str(devin_config()) + '; other hooks stay.')
         if purge:
             print('Would remove unchanged owned files, numeric state and fixed stored-capture leaves; foreign capture content is preserved.')
         else:
@@ -766,6 +957,17 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             _preflight_purge(root)
         owned = _ownership_for_removal(purge=purge)
         _preflight_removal_access(root, skill_dir(), owned, purge=purge)
+        # Unwire before any payload is removed. A plain uninstall stops when the
+        # config cannot be edited; purge carries on (a stale entry is inert:
+        # its command ends in '|| true' and never blocks a tool call).
+        try:
+            if _unwire_hooks(tolerant=purge):
+                print('Removed automatic compression hooks from ' + str(devin_config()) + '; other hooks unchanged.')
+        except (OSError, ValueError) as exc:
+            if not purge:
+                raise OSError('automatic hooks could not be removed, nothing was uninstalled: ' + str(exc)) from None
+            print('Warning: automatic hooks could not be removed from ' + str(devin_config()) + ': ' + str(exc) +
+                  '. Delete the Token Optimizer entries under "hooks" by hand; until then they do nothing.')
         removed_payload = bool(owned)
         if purge:
             recorded = _purge_recorded()
@@ -808,7 +1010,7 @@ def uninstall(*, dry_run=False, purge=False) -> None:
             # Identify unchanged adapter files while the records still exist.
             swept = _sweep_candidates(recorded, known)
             for name in ('metrics.db', 'metrics.db-journal', 'metrics.db-wal', 'metrics.db-shm',
-                         'consent.json', 'session-salt', 'install.json', 'pending-install.json'):
+                         'consent.json', 'session-salt', 'install.json', 'pending-install.json', *HOOK_STATE_LEAVES):
                 # Purge removes the state leaf by name even when its mode,
                 # link count or spelling would fail the privacy gate.
                 (state.data_dir() / name).unlink(missing_ok=True)
@@ -857,12 +1059,18 @@ def main(argv=None) -> int:
     parser.add_argument('action', choices=('install', 'uninstall'))
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--purge', action='store_true')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--auto', action='store_true',
+                       help='also wire automatic compression hooks; ' + ATTESTATION_NOTICE)
+    modes.add_argument('--manual', action='store_true', help='remove automatic hooks, keep the skill')
     args = parser.parse_args(argv)
     if args.action == 'install' and args.purge:
         parser.error('--purge is uninstall-only')
+    if args.action == 'uninstall' and (args.auto or args.manual):
+        parser.error('--auto and --manual are install-only')
     try:
         if args.action == 'install':
-            install(dry_run=args.dry_run)
+            install(dry_run=args.dry_run, mode='auto' if args.auto else 'manual' if args.manual else None)
         else:
             uninstall(dry_run=args.dry_run, purge=args.purge)
         return 0

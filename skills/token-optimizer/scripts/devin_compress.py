@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Explicit captured-output filter. No hooks, shell or command execution."""
+"""Captured-output filter for Devin: the explicit skill workflow, plus the
+automatic hook entrypoint and runner. Never a shell: commands run as argv."""
 from __future__ import annotations
 # CLI startup imports only builtins until isolated re-execution.
 import sys
+# Devin reads hook exit code 2 as "block this tool call". The hook entrypoint
+# must never block a command, so every refusal on that path exits 0 silently.
+_HOOK_MODE = __name__ == '__main__' and sys.argv[1:2] == ['hook']
+_REFUSED = 0 if _HOOK_MODE else 2
 if __name__ == '__main__' and not sys.flags.isolated:
     import posix
     try:
         posix.execv(sys.executable, [sys.executable, '-I', *sys.argv])
     except OSError as _isolation_error:
         print('Token Optimizer: isolated startup refused: ' + str(_isolation_error), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(_REFUSED)
 
 import argparse
 from dataclasses import dataclass
@@ -77,7 +82,7 @@ if not _source_development:
         _bootstrap_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_bootstrap_error) + '. Originals remain unchanged.'
         if __name__ == '__main__':
             print(_bootstrap_message, file=sys.stderr)
-            raise SystemExit(2)
+            raise SystemExit(_REFUSED)
         raise ImportError(_bootstrap_message) from None
 
 
@@ -88,7 +93,7 @@ except (ImportError, SyntaxError) as _initial_error:
     _initial_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_initial_error) + '. Originals remain unchanged.'
     if __name__ == '__main__':
         print(_initial_message, file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(_REFUSED)
     raise ImportError(_initial_message) from None
 
 
@@ -270,8 +275,13 @@ def _looks_like_format(fmt: str, text: str) -> bool:
     return False
 
 
+_ARCHIVE_NOTE = 'archived in full original (retrieve via expand key)'
+_CAPTURE_NOTE = 'kept in the capture (recover command above)'
+
+
 def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
-                   session: str, *, record_metrics: bool = True) -> FilterResult:
+                   session: str, *, record_metrics: bool = True,
+                   command: str | None = None) -> FilterResult:
     if os.name != 'posix' or not consent_ok():
         raise OSError('Devin output filter requires a POSIX install with local data consent')
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or not 0 <= exit_code <= 255:
@@ -311,15 +321,23 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
         # output into a mislabeled near-empty summary.
         if format_hint != 'generic' and not _looks_like_format(format_hint, cleaned):
             format_hint = 'generic'
-        shortened = compress(FORMATS[format_hint], text)
+        # The automatic runner knows the real command, so the Claude Code
+        # routing applies unchanged, including raw passthrough for formats a
+        # handler must not touch (--short, --porcelain, -z and friends). No
+        # generic fallback there: it would compress exactly those formats.
+        shortened = compress(command if command else FORMATS[format_hint], text)
+        # Claude Code recovers through its archive; here the capture pointer
+        # above already recovers the whole original, so name that instead of
+        # discarding a good result. Any other mention still means raw.
+        shortened = shortened.replace(_ARCHIVE_NOTE, _CAPTURE_NOTE)
         if 'expand key' in shortened:
             shortened = text
         # A named format must never do worse than generic for the same bytes;
         # when its handler preserves more than generic would, generic wins.
         # The delivered unit is encoded bytes, not characters: a CJK-heavy
         # result is ~3x costlier per character, so compare UTF-8 length.
-        if format_hint != 'generic':
-            fallback = compress(FORMATS['generic'], text)
+        if format_hint != 'generic' and not command:
+            fallback = compress(FORMATS['generic'], text).replace(_ARCHIVE_NOTE, _CAPTURE_NOTE)
             if 'expand key' in fallback:
                 fallback = text
             if len(fallback.encode('utf-8')) < len(shortened.encode('utf-8')):
@@ -332,7 +350,10 @@ def filter_capture(stdout: Path, stderr: Path, exit_code: int, format_hint: str,
                             '--exit-code', str(exit_code)))
         pointer = f'[Token Optimizer capture ID: {stdout.parent.name}; recover with {recover}; integrity checked again]\n'
         candidate = pointer + '[Begin untrusted captured output]\n' + shortened + '\n[End untrusted captured output]\n'
-        if shortened not in (text, cleaned) and estimate_tokens(candidate) < estimate_tokens(text):
+        # Automatic runs need a real saving: a pointer and a retained capture
+        # for a few percent is clutter, the same 10% bar Claude Code applies.
+        limit = estimate_tokens(text) * (0.9 if command else 1)
+        if shortened not in (text, cleaned) and estimate_tokens(candidate) < limit:
             delivered, outcome = candidate, 'compressed'
     except Exception as exc:
         return FilterResult(raw, ('Compression unavailable: ' + type(exc).__name__ + '; emitting original bytes.\n').encode(), 0, 'unavailable')
@@ -420,6 +441,238 @@ def seal_capture(directory: Path, exit_code: int) -> None:
         os.close(lock_fd)
 
 
+AUTO_INDEX = 'auto-captures.json'
+AUTO_KEEP_SECONDS = 7 * 24 * 3600
+AUTO_KEEP_COUNT = 200
+_MAX_HOOK_INPUT = 1024 * 1024
+
+
+def _hook(event: str) -> int:
+    """Devin hook entrypoint: at most one JSON decision on stdout, exit 0 always.
+
+    Any doubt means no output, so the command runs exactly as typed under
+    Devin's normal permission flow. Never blocks, never denies."""
+    try:
+        if event not in ('pre-tool-use', 'permission-request'):
+            return 0
+        raw = sys.stdin.buffer.read(_MAX_HOOK_INPUT + 1)
+        if len(raw) > _MAX_HOOK_INPUT:
+            return 0
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get('tool_name') != 'exec':
+            return 0
+        tool_input = payload.get('tool_input')
+        command = tool_input.get('command') if isinstance(tool_input, dict) else None
+        if not isinstance(command, str) or not command or not consent_ok():
+            return 0
+        if not _source_development:
+            from devin_verify import verify_install
+            verify_install()
+        import devin_hooks as hooks
+        from devin_state import data_dir, home, private_path
+        if not hooks.attested(private_path(data_dir() / hooks.RECORD)):
+            return 0
+        bindings = private_path(data_dir() / hooks.BINDINGS)
+        interpreter = os.path.realpath(sys.executable)
+        entry = str(Path(__file__).resolve())
+        cwd = payload.get('cwd')
+        cwd = Path(cwd) if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd) else Path.cwd()
+        rules = hooks.load_effective_rules(home() / 'config.json', cwd, os.environ.get('DEVIN_PROJECT_DIR'))
+        tool_use_id = payload.get('tool_use_id')
+        decision = None
+        if event == 'pre-tool-use':
+            if hooks.eligible(command, rules, interpreter):
+                wrapper = hooks.build_wrapper(interpreter, entry, payload.get('session_id'), shlex.split(command))
+                # Bind first: without a recorded binding the PermissionRequest
+                # hook would leave the wrapper to a prompt, so never rewrite.
+                if hooks.bind(bindings, tool_use_id, wrapper):
+                    # Keep every other input field: updatedInput replaces the whole object.
+                    decision = {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                                                       'updatedInput': dict(tool_input, command=wrapper)}}
+        else:
+            argv = hooks.parse_wrapper(command, interpreter, entry)
+            if (argv is not None and hooks.consume(bindings, tool_use_id, command)
+                    and hooks.eligible(shlex.join(argv), rules, interpreter)):
+                decision = {'decision': 'approve',
+                            'reason': 'Token Optimizer output filter around a command your Devin rules already allow'}
+        if decision is not None:
+            _deliver(sys.stdout.buffer.fileno(), json.dumps(decision).encode())
+    except BaseException:
+        return 0
+    return 0
+
+
+def _exec_original(argv) -> int:
+    """Fail open: become the original command, unfiltered."""
+    try:
+        # main() ignores SIGPIPE; an ignored disposition survives exec.
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        _note(argv[0] + ': ' + (exc.strerror or 'cannot run'))
+        return 127 if isinstance(exc, FileNotFoundError) else 126
+
+
+def _deliver_raw(capture: Path, code: int) -> int:
+    """Stream both captured files unchanged, then remove the capture."""
+    try:
+        for name, fd in (('stdout', 1), ('stderr', 2)):
+            leaf = os.open(capture / name, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                while True:
+                    chunk = os.read(leaf, 1024 * 1024)
+                    if not chunk:
+                        break
+                    _deliver(fd, chunk)
+            finally:
+                os.close(leaf)
+    except OSError:
+        _note('Token Optimizer: output delivery incomplete; the stored capture was retained at ' + str(capture))
+        return code or 1
+    try:
+        _remove_capture(capture)
+    except OSError:
+        pass
+    return code
+
+
+def _prune_auto_captures(keep: str | None) -> None:
+    """Retention for automatic captures only; manual captures are never listed."""
+    from devin_state import data_dir, private_path
+    import fcntl
+    import time
+    index = private_path(data_dir() / AUTO_INDEX)
+    lock = os.open(data_dir() / (AUTO_INDEX + '.lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _prune_locked(index, keep, now=time.time())
+    finally:
+        os.close(lock)
+
+
+def _prune_locked(index, keep, now) -> None:
+    from devin_state import data_dir
+    try:
+        entries = json.loads(index.read_text()) if index.exists() else []
+        if not isinstance(entries, list):
+            entries = []
+    except (OSError, ValueError):
+        entries = []
+    entries = [e for e in entries if isinstance(e, list) and len(e) == 2 and isinstance(e[0], str)
+               and re.fullmatch(r'capture-[0-9a-f]{32}', e[0]) and isinstance(e[1], (int, float))]
+    if keep:
+        entries.append([keep, now])
+    expired = [e for e in entries if now - e[1] > AUTO_KEEP_SECONDS]
+    live = [e for e in entries if now - e[1] <= AUTO_KEEP_SECONDS]
+    if len(live) > AUTO_KEEP_COUNT:
+        expired += live[:-AUTO_KEEP_COUNT]
+        live = live[-AUTO_KEEP_COUNT:]
+    for name, _ in expired:
+        try:
+            _remove_capture(data_dir() / 'captures' / name)
+        except OSError:
+            live.append([name, _])
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', dir=data_dir(), delete=False) as out:
+        json.dump(live, out)
+        temporary = out.name
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, index)
+
+
+def _run(args) -> int:
+    """Run an eligible argv into a private capture and print the filtered result.
+
+    Reached through the PreToolUse rewrite. The argv is re-checked here, so a
+    cached approval of this wrapper can never turn it into a general runner:
+    an ineligible command is refused and nothing runs. Infrastructure trouble
+    (no consent, unverifiable payload, capture failure) runs the original
+    command unfiltered instead."""
+    if len(args) < 4 or args[0] != '--session' or args[2] != '--':
+        _note('usage: devin_compress.py run --session LABEL -- COMMAND...')
+        return 2
+    argv = args[3:]
+    try:
+        import devin_hooks as hooks
+        from devin_state import data_dir, home, private_path
+        # The hook's full gate, again: an approval or "always allow" of this
+        # entrypoint must never turn it into a runner for anything the user's
+        # own Devin rules would not already run without a prompt.
+        interpreter = os.path.realpath(sys.executable)
+        rules = hooks.load_effective_rules(home() / 'config.json', Path.cwd(), os.environ.get('DEVIN_PROJECT_DIR'))
+        if (not hooks.runner_eligible(argv) or not hooks.attested(private_path(data_dir() / hooks.RECORD))
+                or not hooks.eligible(shlex.join(argv), rules, interpreter)):
+            _note('Token Optimizer: command is not eligible for the output filter; it was not run.')
+            return 126
+        session = hooks.session_label(args[1])
+    except Exception:
+        _note('Token Optimizer: eligibility check unavailable; the command was not run.')
+        return 126
+    try:
+        if not consent_ok():
+            raise OSError('consent missing')
+        if not _source_development:
+            from devin_verify import verify_install
+            verify_install()
+        from devin_state import prepare_capture
+        capture = prepare_capture()
+    except Exception:
+        return _exec_original(argv)
+    import subprocess
+    out_fd = err_fd = -1
+    try:
+        out_fd = os.open(capture / 'stdout', os.O_WRONLY | os.O_NOFOLLOW | os.O_TRUNC)
+        err_fd = os.open(capture / 'stderr', os.O_WRONLY | os.O_NOFOLLOW | os.O_TRUNC)
+        try:
+            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out_fd, stderr=err_fd, shell=False)
+        except OSError as exc:
+            os.write(err_fd, (argv[0] + ': ' + (exc.strerror or 'cannot run') + '\n').encode())
+            code = 127 if isinstance(exc, FileNotFoundError) else 126
+        else:
+            # Forward termination to the command instead of orphaning it; its
+            # exit status then flows through the normal seal and delivery.
+            def forward(signum, _frame):
+                try:
+                    child.send_signal(signum)
+                except OSError:
+                    pass
+            for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                signal.signal(signum, forward)
+            code = child.wait()
+    except OSError:
+        for fd in (out_fd, err_fd):
+            if fd >= 0:
+                os.close(fd)
+        try:
+            _remove_capture(capture)
+        except OSError:
+            pass
+        return _exec_original(argv)
+    os.close(out_fd)
+    os.close(err_fd)
+    code = 128 - code if code < 0 else min(code, 255)
+    try:
+        seal_capture(capture, code)
+        result = filter_capture(capture / 'stdout', capture / 'stderr', code, 'generic', session,
+                                command=shlex.join(argv))
+    except Exception:
+        return _deliver_raw(capture, code)
+    try:
+        _deliver(sys.stdout.buffer.fileno(), result.stdout)
+        _deliver(sys.stderr.buffer.fileno(), result.stderr)
+    except (OSError, AttributeError, ValueError):
+        _note('Token Optimizer: output delivery incomplete; the stored capture was retained.')
+        return code or 1
+    try:
+        if result.outcome == 'compressed':
+            _prune_auto_captures(capture.name)
+        else:
+            _remove_capture(capture)
+    except Exception:
+        pass
+    return result.code
+
+
 def main(argv=None) -> int:
     os.environ['TOKEN_OPTIMIZER_RUNTIME'] = 'devin'
     # A closed pipe reports EPIPE as an exception rather than signal death so
@@ -427,6 +680,10 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     parser = argparse.ArgumentParser(description=__doc__)
     args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ['hook']:
+        return _hook(args[1] if len(args) == 2 else '')
+    if args[:1] == ['run']:
+        return _run(args[1:])
     if args == ['prepare']:
         from devin_state import prepare_capture
         try:

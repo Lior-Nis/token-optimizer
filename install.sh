@@ -1082,7 +1082,7 @@ install_devin() {
         case "$option" in
             --devin) ;;
             --uninstall) action=uninstall ;;
-            --dry-run|--purge) extra+=("$option") ;;
+            --dry-run|--purge|--auto|--manual) extra+=("$option") ;;
             *) printf 'Unknown Devin installer option: %s\n' "$option" >&2; exit 2 ;;
         esac
     done

@@ -11,6 +11,7 @@ execution: code
 ## Goal Capsule
 - Objective: Devin users can reduce repetitive command output while keeping the original and seeing honest local estimates.
 - Means: explicit captured-output filtering through a user-invoked Devin CLI skill with triggers: [user], not hooks (KTD1).
+- Update (5.13.45): this plan covers the manual route, which stays the default and the fallback. An opt-in automatic mode (`install.sh --devin --auto`) now rewrites eligible commands through hooks, under the conditions in `devin/README.md`. KTD1 and R1 describe the manual route only.
 - Authority: one draft PR; no merge, paid sessions or hosted deployment. Separate user approval permitted free CLI installation and free agent signup, without quota-consuming calls before entitlement verification.
 
 ---

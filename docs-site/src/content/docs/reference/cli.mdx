@@ -337,9 +337,9 @@ Set `TOKEN_OPTIMIZER_RUNTIME=devin` for shared measure commands.
 
 | Command | Action |
 |---|---|
-| `devin-install` | Install explicit user skill and record local data consent |
-| `devin-uninstall [--purge]` | Remove unchanged owned files; optional --purge also deletes metrics, consent and stored captures, preserving edited or foreign files |
-| `devin-doctor [--probe]` | Readiness, coexistence warnings and local filter probe |
+| `devin-install [--auto \| --manual]` | Install explicit user skill and record local data consent; `--auto` also wires the automatic compression hooks, `--manual` removes them, neither keeps the active mode |
+| `devin-uninstall [--purge]` | Remove unchanged owned files and Token Optimizer's own hook entries; optional --purge also deletes metrics, consent and stored captures, preserving edited or foreign files |
+| `devin-doctor [--probe]` | Readiness, coexistence warnings and local filter probe; with automatic mode on, `--probe` proves the hook round trip |
 | `devin-summary` | Numeric output estimates, no provider totals or cost |
 | `devin-filter prepare` | Create new private stdout/stderr capture pair |
 | `devin-filter seal --capture PATH --exit-code N` | Snapshot a caller-asserted completed capture |

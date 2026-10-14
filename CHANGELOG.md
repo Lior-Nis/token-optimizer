@@ -1,5 +1,15 @@
 # Changelog
 
+## [5.13.45] - 2026-10-14
+
+- New for Devin CLI and Devin Desktop's agent: automatic mode. `bash install.sh --devin --auto` wires two hooks into the `hooks` key of `~/.config/devin/config.json`, so large command output is compressed in interactive sessions and `devin -p` with no new prompts. `bash install.sh --devin` alone stays manual-only (the `/token-optimizer-output` skill remains the fallback), `--manual` removes the hooks and keeps the skill, and a plain reinstall keeps the active mode. Restart running Devin sessions after installing.
+- Only commands your own Devin allow rules already run without a prompt are compressed; commands Devin asks about still ask. The allow rule must be in your user-level Devin config (`~/.config/devin/config.json` or `config.local.json`); a project's `.devin/` rules can only make it stricter. Commands with unquoted globs, `~` or `#` (`ls *.txt`) run natively, untouched. `git status --short`, `--porcelain` and `-z` run untouched, and failures, stderr and credential-looking output pass through raw.
+- Every automatic result carries a capture ID and a recover command that returns the exact original. Automatic captures are kept 7 days or 200 entries.
+- `--auto` records your statement that no Devin team or enterprise permission policy applies, because those policies are not stored locally and cannot be checked.
+- Uninstall and purge remove only Token Optimizer's own hook entries and keep every other hook and key. A JSONC config with comments is refused; the skill still installs. Mac and Linux only.
+- `devin_doctor.py --probe` now proves the round trip (rewrite, one-time approval, other calls still prompt, sizes) and reads Devin's log for loaded global hooks. If Python is upgraded to a new Homebrew versioned path, doctor flags it; rerun the install.
+- Measured live on Devin CLI 3000.11.3 (`-p` and interactive) and over ACP with the CLI agent and Desktop's bundled agent (3000.10.48): `grep -rn` on a real repo 5,054 to 1,846 tokens, a `pytest -v` run 4,932 to 1,323 tokens, no new prompts; `docker ps -a` (not in the allow rules) still prompted. As on Claude Code, `git log` and `find` mostly pass through uncompressed. Over ACP, Desktop's tool card shows the wrapper command.
+
 ## [5.13.44] - 2026-10-14
 
 - Up-to-date model prices: gemini-4-argon.
