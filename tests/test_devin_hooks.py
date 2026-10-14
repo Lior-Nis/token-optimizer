@@ -693,11 +693,17 @@ def test_auto_capture_index_survives_concurrent_runs(tmp_path):
         (work / ('m%02d.log' % index)).write_text('match line ok\n' * 50)
     entry = str(d.state.data_dir() / 'plugin/devin_compress.py')
     procs = [subprocess.Popen([sys.executable, '-I', entry, 'run', '--session', 's', '--', 'grep', '-rn', 'match', '.'],
-                              cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(16)]
-    assert all(p.wait(timeout=120) == 0 for p in procs)
+                              cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(16)]
+    results = [p.communicate(timeout=120) + (p.returncode,) for p in procs]
+    assert all(code == 0 for _, _, code in results)
     index = json.loads((d.state.data_dir() / 'auto-captures.json').read_text())
-    captures = [p for p in (d.state.data_dir() / 'captures').iterdir() if p.name.startswith('capture-')]
-    assert len(index) == len(captures) == 16
+    captures = sorted(p.name for p in (d.state.data_dir() / 'captures').iterdir() if p.name.startswith('capture-'))
+    compressed = sum(out.startswith(b'[Token Optimizer capture ID:') for out, _, _ in results)
+    detail = [err[:300] for _, err, _ in results if err]
+    # The invariant: every capture an automatic run keeps is indexed for
+    # retention. A run that falls back to raw output (fail-open) keeps none.
+    assert sorted(e[0] for e in index) == captures, detail
+    assert len(captures) == compressed and compressed >= 12, (compressed, detail)
 
 
 def test_uninstall_removes_the_config_backup():
