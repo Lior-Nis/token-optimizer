@@ -95,6 +95,7 @@ exports.GENERATED_PRICING = {
     "gemini-3.6-flash": { input: 0.75 / 1e6, output: 3.75 / 1e6, cacheRead: 0.075 / 1e6, cacheWrite: 0 / 1e6 },
     "gemini-3.7-flash": { input: 0.75 / 1e6, output: 3.75 / 1e6, cacheRead: 0.075 / 1e6, cacheWrite: 0 / 1e6 },
     "gemini-3.8-flash": { input: 0.75 / 1e6, output: 3.75 / 1e6, cacheRead: 0.075 / 1e6, cacheWrite: 0 / 1e6 },
+    "gemini-4-argon": { input: 2.0 / 1e6, output: 10.0 / 1e6, cacheRead: 0.1 / 1e6, cacheWrite: 0 / 1e6 },
     "gemini-flash-latest": { input: 0.75 / 1e6, output: 3.75 / 1e6, cacheRead: 0.075 / 1e6, cacheWrite: 0 / 1e6 },
     "gemini-flash-lite-latest": { input: 0.3 / 1e6, output: 2.5 / 1e6, cacheRead: 0.03 / 1e6, cacheWrite: 0 / 1e6 },
     "gemini-gemma-2-27b-it": { input: 0.35 / 1e6, output: 1.05 / 1e6, cacheRead: 0.035 / 1e6, cacheWrite: 0 / 1e6 },

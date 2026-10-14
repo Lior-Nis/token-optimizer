@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.44] - 2026-10-14
+
+- Up-to-date model prices: gemini-4-argon.
+
 ## [5.13.43] - 2026-10-14
 
 - Devin Desktop: the `/token-optimizer-output` skill now has install guidance for Desktop's Devin Local agent. Checked on macOS with Devin Desktop 1.126.0: the app's bundled agent listed the skill from the user skills folder and, when it was invoked over the agent's ACP interface, ran prepare, capture, seal and filter, compressed a repetitive output and recovered the original. The Desktop window itself, Linux and Windows were not exercised; native Windows remains unsupported.

@@ -613,6 +613,11 @@
    "output": 3.75,
    "cache_read": 0.075
   },
+  "gemini-4-argon": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.1
+  },
   "gemini-flash-latest": {
    "input": 0.75,
    "output": 3.75,
@@ -681,5 +686,5 @@
    "cache_read": 0.4
   }
  },
- "generated_at": "2026-10-10T11:53:33Z"
+ "generated_at": "2026-10-14T12:06:47Z"
 }
