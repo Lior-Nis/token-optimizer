@@ -109,7 +109,7 @@ def test_git_log_pipe_in_subject_non_ascii_and_wrapped_subject():
     assert out[3].endswith('| fix(module-3): change behavior 3 continuation of the subject')
 
 
-@pytest.mark.parametrize('cut', ['after_commit', 'after_author', 'after_date', 'after_blank'])
+@pytest.mark.parametrize('cut', ['after_commit', 'after_author', 'after_date'])
 def test_git_log_truncated_stream_marks_last_commit(cut):
     full = _git_log(8)
     lines = full.split('\n')
@@ -123,6 +123,21 @@ def test_git_log_truncated_stream_marks_last_commit(cut):
     assert out[-1].startswith(_sha(7)[:10] + ' [truncated')
     assert '(no message)' not in '\n'.join(out)
     assert [l[:10] for l in out[1:]] == [_sha(i)[:10] for i in range(8)]
+
+
+def test_git_log_empty_message_last_commit_is_not_truncated():
+    parts = []
+    for i in range(6):
+        parts += _commit(i, body=False)
+    empty = ['commit ' + _sha(99), 'Author: Ann Dev <ann@x.com>',
+             'Date:   Thu Oct 15 14:47:31 2026 +0300', '    ']
+    for tail in ('\n'.join(parts + empty) + '\n', '\n'.join(parts + empty[:3] + ['']) + '\n'):
+        out = bc._compress_git_log(tail).splitlines()
+        assert out[-1] == '%s 2026-10-15 14:47 +0300 Ann Dev | (no message)' % _sha(99)[:10]
+        assert 'truncated' not in '\n'.join(out)
+        assert len(out) == 1 + 7
+    cut = '\n'.join(parts + empty[:3]) + '\n'          # stream ends inside the headers
+    assert bc._compress_git_log(cut).splitlines()[-1].startswith(_sha(99)[:10] + ' [truncated')
 
 
 def test_git_log_small_and_foreign_untouched():
@@ -191,6 +206,26 @@ def test_git_log_credential_in_body_still_reinjected_no_commit_hash_junk():
 ])
 def test_pipeline_routing(cmd, expected):
     assert bc._detect_pattern(cmd) == expected
+
+
+@pytest.mark.parametrize('cmd,expected', [
+    ("find . -type f |& sed 's/$/ (x)/'", 'find_raw'),
+    ('find . -type f|sed s/a/b/', 'find_raw'),
+    ('find . -type f |& cut -d/ -f2', 'find_raw'),
+    ('find . -type f|head -5', 'find'),
+    ('find . -type f |& head -5', 'find'),
+    ('git log|cut -c1-5', 'git_log_basic'),
+    ('git log |& awk 1', 'git_log_basic'),
+    ("find . -name 'a|b'", 'find'),
+])
+def test_stderr_pipe_and_glued_pipe_are_pipes(cmd, expected):
+    assert bc._detect_pattern(cmd) == expected
+
+
+def test_sed_modified_paths_through_stderr_pipe_stay_raw():
+    raw = ''.join('./dir%d/f%d.py (x)\n' % (i % 5, i) for i in range(80))
+    for cmd in ("find . -type f |& sed 's/$/ (x)/'", "find . -type f|sed 's/$/ (x)/'"):
+        assert bc.compress(cmd, raw) == raw
 
 
 def test_uniq_c_pipeline_output_not_treated_as_path_list():
@@ -294,6 +329,18 @@ def test_find_search_hits_inside_noise_dirs_keep_their_names():
     assert 'paths collapsed' not in out
     listed, _ = _expand(out)
     assert sorted(listed) == sorted(paths)
+
+
+def test_find_empty_breakdown_and_noise_only_parent_keep_slash_and_header_explains_root_line():
+    paths = ['.', './d/a', './d/a/.git', './d/b', './d/b/.git/x', './d/b/.git/y'] + \
+            ['./f%d.txt' % i for i in range(45)]
+    out = bc._compress_find('\n'.join(paths) + '\n', 'find .')
+    assert '(1 path collapsed)' in out and ': )' not in out
+    assert './d/ a/ b/' in out.splitlines()
+    head = out.splitlines()[0]
+    assert 'A line starting with = lists top-level paths' in head
+    listed, collapsed = _expand(out)
+    assert len(listed) + collapsed == len(paths)
 
 
 def test_find_collapsed_group_always_shows_example_names_and_grammar():

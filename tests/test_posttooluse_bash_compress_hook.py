@@ -372,15 +372,12 @@ class TestArchivePointerAndUnitC:
     def test_compressed_output_has_archive_pointer(self):
         """B2: The compressed stdout must contain an expand pointer so the
         model can retrieve the full original."""
-        cmd = "git log --oneline | head -20"
-        proc = _run_hook(cmd, _LONG_GIT_LOG_OUTPUT)
+        cmd = "git log | head -20"
+        proc = _run_hook(cmd, _DEFAULT_GIT_LOG_OUTPUT)
         assert proc.returncode == 0
 
         compressed = _get_updated_stdout(proc)
-        if compressed is None:
-            # The hook may fail to compress or the output may already show
-            # an error. Test at least that compression happened.
-            pytest.skip("Compression not triggered — archive test not applicable")
+        assert compressed is not None, "default-format git log must be compressed"
 
         # The archive pointer has a recognizable format:
         # "[Full result archived (N chars) — saved to disk, not lost.\nexpand <key> <tool>]"
@@ -474,31 +471,18 @@ class TestErrorOnStdoutPassThrough:
 
 class TestCredentialPreservation:
     def test_credential_line_survives_compression(self):
-        """AWS-key-pattern line survives even when git_log handler strips it."""
-        cmd = "git log --oneline | head -20"
+        """AWS-key-pattern line survives the git log summarizer (bodies are dropped)."""
+        cmd = "git log | head -200"
         fake_aws_key = "AKIA1234567890ABCDEF"
-        output = "\n".join(
-            "commit " + ("a" * 40) + "\n"
-            "Author: User <user@example.com>\n"
-            "Date:   Thu Aug 27 10:00:00 2026 +0000\n\n"
-            f"    Commit {i}: changes\n"
-            f"gpg: Signature made Thu Aug 27 10:00:{i % 60:02d} 2026\n"
-            for i in range(1, 51)
-        )
-        output += f"\ngpg: using key {fake_aws_key} for signing\n"
-        output += "\n".join(
-            "commit " + ("b" * 40) + "\n"
-            "Author: User <user@example.com>\n"
-            "Date:   Thu Aug 27 11:00:00 2026 +0000\n\n"
-            f"    Commit {i}: more changes\n"
-            for i in range(51, 101)
-        )
+        output = _DEFAULT_GIT_LOG_OUTPUT.replace(
+            "A longer explanation of change 7 that spans a line.",
+            "signing key " + fake_aws_key + " leaked here")
+        assert fake_aws_key in output
 
         proc = _run_hook(cmd, output)
         assert proc.returncode == 0
         compressed = _get_updated_stdout(proc)
-        if compressed is None:
-            pytest.skip("Compression not triggered")
+        assert compressed is not None, "default-format git log must be compressed"
         assert fake_aws_key in compressed, "AWS key was DROPPED from compressed output!"
 
     def test_error_lines_preserved(self):
