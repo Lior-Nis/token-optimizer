@@ -668,8 +668,9 @@ def _run(args) -> int:
             _prune_auto_captures(capture.name)
         else:
             _remove_capture(capture)
-    except Exception:
-        pass
+    except Exception as exc:
+        _note('Token Optimizer: capture cleanup failed (' + type(exc).__name__ + ': ' + str(exc)[:200]
+              + '); the capture was kept at ' + str(capture))
     return result.code
 
 

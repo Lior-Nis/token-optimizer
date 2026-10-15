@@ -120,6 +120,17 @@ def test_clean_incidental_cache_and_clean_install_verify(tmp_path, monkeypatch):
     (cache/'token_estimate.cpython-312.pyc').write_bytes(b'ignored cache')
     assert verify_install()
 
+def test_in_flight_bytecode_write_is_not_an_artifact(tmp_path, monkeypatch):
+    """Parallel first runs see importlib's NAME.pyc.<id> before its rename."""
+    import devin_install as d
+    from devin_verify import verify_install
+    monkeypatch.setenv('HOME',str(tmp_path));d.install()
+    cache=d.state.data_dir()/'plugin/__pycache__';cache.mkdir()
+    (cache/'devin_hooks.cpython-311.pyc.140212345678').write_bytes(b'in flight')
+    assert verify_install()
+    (cache/'devin_hooks.cpython-311.pyc.tmp').write_bytes(b'foreign')
+    with pytest.raises(OSError):verify_install()
+
 @pytest.mark.parametrize('kind',['symlink','hardlink','mode','owner','oversize'])
 def test_allowed_source_open_checks(tmp_path, monkeypatch, kind):
     import devin_source,importlib.util,types,stat

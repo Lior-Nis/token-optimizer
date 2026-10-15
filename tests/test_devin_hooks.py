@@ -738,6 +738,10 @@ def test_auto_capture_index_survives_concurrent_runs(tmp_path):
     captures = sorted(p.name for p in (d.state.data_dir() / 'captures').iterdir() if p.name.startswith('capture-'))
     compressed = sum(out.startswith(b'[Token Optimizer capture ID:') for out, _, _ in results)
     detail = [err[:300] for _, err, _ in results if err]
+    indexed = {e[0] for e in index}
+    detail += [(name, sorted(os.listdir(d.state.data_dir() / 'captures' / name)))
+               for name in captures if name not in indexed]
+    detail.append(('compressed', compressed))
     # The invariant: every capture an automatic run keeps is indexed for
     # retention. A run that falls back to raw output (fail-open) keeps none.
     assert sorted(e[0] for e in index) == captures, detail
