@@ -111,4 +111,6 @@ def test_guard_flags_exists_and_stat_probes_under_real_home():
     finally:
         _home_guard.set_current("")
     events = {h[1] for h in _hits_for_synth()}
-    assert {"os.stat", "os.lstat", "os.access"} <= events
+    # On Windows os.path.lexists uses a C fast path and never calls os.lstat.
+    expected = {"os.stat", "os.access"} | ({"os.lstat"} if os.name != "nt" else set())
+    assert expected <= events

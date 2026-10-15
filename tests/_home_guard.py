@@ -120,6 +120,9 @@ def install_sandbox() -> Path | None:
     os.environ["XDG_CACHE_HOME"] = str(home / ".cache")
     os.environ["XDG_DATA_HOME"] = str(home / ".local" / "share")
     os.environ["XDG_STATE_HOME"] = str(home / ".local" / "state")
+    if os.name == "nt":
+        # Cursor, Copilot and Cowork read %APPDATA% before falling back to HOME.
+        os.environ["APPDATA"] = str(home / "AppData" / "Roaming")
     SANDBOX = root
     atexit.register(shutil.rmtree, str(root), True)
     return SANDBOX
@@ -205,6 +208,8 @@ def _under_real_home(path: str, kind: str | None = None) -> str | None:
 
 
 def _allowed(kind: str, rel: str) -> bool:
+    # Allowlist patterns use "/"; Windows paths arrive with "\\".
+    rel = rel.replace(os.sep, "/")
     return any(k == kind and re.search(rx, rel) for k, rx, _ in ALLOWLIST)
 
 
