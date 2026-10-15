@@ -754,3 +754,135 @@ def test_uninstall_removes_the_config_backup():
     _quiet(d.install, mode='auto')
     _quiet(d.uninstall)
     assert not (d.state.data_dir() / 'devin-config-backup.json').exists()
+
+
+# ── State checks race os.replace unless made under the writers' lock ────────
+# A stat racing os.replace can return the replaced inode with st_nlink 0
+# (Linux and macOS both do), which private_path() refuses as a hard-link
+# hazard. Each file below is only ever replaced under one lock, so every check
+# of it must sit inside that lock. These tests report st_nlink 0 for a file
+# whenever its lock is not held by this process, as a rival writer could be
+# replacing it at that moment.
+
+def _replaced_outside(monkeypatch, lock, files, held_by=None):
+    import fcntl
+    held = set()
+    real_flock, real_lstat = fcntl.flock, Path.lstat
+    held_by = held_by if held_by is not None else fcntl.LOCK_SH | fcntl.LOCK_EX
+
+    def flock(fd, operation):
+        real_flock(fd, operation)
+        fd = fd if isinstance(fd, int) else fd.fileno()
+        if operation & held_by:
+            held.add(fd)
+        elif operation & fcntl.LOCK_UN:
+            held.discard(fd)
+
+    def holding():
+        try:
+            inode = os.stat(lock).st_ino
+        except FileNotFoundError:
+            return False
+        for fd in list(held):
+            try:
+                if os.fstat(fd).st_ino == inode:
+                    return True
+            except OSError:
+                pass
+            held.discard(fd)
+        return False
+
+    def lstat(self):
+        info = real_lstat(self)
+        if self in files and not holding():
+            info = os.stat_result((info.st_mode, info.st_ino, info.st_dev, 0, info.st_uid,
+                                   info.st_gid, info.st_size, info.st_atime, info.st_mtime, info.st_ctime))
+        return info
+
+    monkeypatch.setattr(fcntl, 'flock', flock)
+    monkeypatch.setattr(Path, 'lstat', lstat)
+
+
+def _hook_in_process(monkeypatch, cwd, tool_use_id='toolu_race'):
+    import io
+    import types
+    import devin_compress as c
+    payload = json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'exec',
+                          'tool_input': {'command': 'grep -rn match .'}, 'cwd': str(cwd),
+                          'tool_use_id': tool_use_id, 'session_id': 'sess-1'}).encode()
+    monkeypatch.setattr(sys, 'stdin', types.SimpleNamespace(buffer=io.BytesIO(payload)))
+    assert c._hook('pre-tool-use') == 0
+    import devin_state as s
+    bindings = s.data_dir() / 'hook-bindings.json'
+    return tool_use_id in (json.loads(bindings.read_text()) if bindings.exists() else {})
+
+
+def test_hook_checks_bindings_only_under_their_lock(tmp_path, monkeypatch, capfd):
+    import fcntl
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    bindings = s.data_dir() / 'hook-bindings.json'
+    assert _hook_in_process(monkeypatch, tmp_path, 'toolu_first')  # the file now exists
+    _replaced_outside(monkeypatch, s.data_dir() / 'hook-bindings.json.lock', {bindings}, fcntl.LOCK_EX)
+    assert _hook_in_process(monkeypatch, tmp_path)
+
+
+def test_hook_checks_install_state_only_under_the_install_lock(tmp_path, monkeypatch, capfd):
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    data = s.data_dir()
+    _replaced_outside(monkeypatch, data / 'install.lock', {data / 'consent.json', data / 'hooks.json'})
+    assert _hook_in_process(monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize('leaf', ['hooks.json', 'consent.json'])
+def test_runner_checks_install_state_only_under_the_install_lock(tmp_path, monkeypatch, capfd, leaf):
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    work = tmp_path / 'w'
+    work.mkdir()
+    for index in range(30):
+        (work / ('m%02d.log' % index)).write_text('match line ok\n' * 50)
+    monkeypatch.chdir(work)
+    # Never let a fallback exec replace the test process.
+    monkeypatch.setattr(c, '_exec_original', lambda argv: 'exec_original')
+    saved = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    capfd.readouterr()
+    _replaced_outside(monkeypatch, s.data_dir() / 'install.lock', {s.data_dir() / leaf})
+    try:
+        code = c._run(['--session', 's', '--', 'grep', '-rn', 'match', '.'])
+    finally:
+        for signum, handler in saved.items():
+            signal.signal(signum, handler)
+    out = capfd.readouterr().out
+    assert code == 0 and out.startswith('[Token Optimizer capture ID:'), (code, out[:200])
+    index = json.loads((s.data_dir() / 'auto-captures.json').read_text())
+    assert [e[0] for e in index] == [p.name for p in (s.data_dir() / 'captures').iterdir()]
+
+
+@pytest.mark.parametrize('command', ['prepare', 'seal', 'recover', 'filter'])
+def test_manual_commands_check_consent_only_under_the_install_lock(tmp_path, monkeypatch, capfd, command):
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto()
+    capture = s.prepare_capture()
+    (capture / 'stdout').write_bytes(b'repeated log line\n' * 1000)
+    if command in ('recover', 'filter'):
+        c.seal_capture(capture, 0)
+    capfd.readouterr()
+    argv = {'prepare': ['prepare'],
+            'seal': ['seal', '--capture', str(capture), '--exit-code', '0'],
+            'recover': ['recover', '--capture-id', capture.name, '--exit-code', '0'],
+            'filter': ['--stdout', str(capture / 'stdout'), '--stderr', str(capture / 'stderr'),
+                       '--exit-code', '0', '--session', 's']}[command]
+    monkeypatch.setenv('TOKEN_OPTIMIZER_RUNTIME', 'devin')
+    pipe = signal.getsignal(signal.SIGPIPE)
+    _replaced_outside(monkeypatch, s.data_dir() / 'install.lock', {s.data_dir() / 'consent.json'})
+    try:
+        code = c.main(argv)
+    finally:
+        signal.signal(signal.SIGPIPE, pipe)
+    assert code == 0, capfd.readouterr().err

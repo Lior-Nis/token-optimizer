@@ -88,7 +88,7 @@ if not _source_development:
 
 
 try:
-    from devin_state import consent_ok, record
+    from devin_state import consent_ok, install_settled, record
 except (ImportError, SyntaxError) as _initial_error:
     _initial_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_initial_error) + '. Originals remain unchanged.'
     if __name__ == '__main__':
@@ -463,43 +463,53 @@ def _hook(event: str) -> int:
             return 0
         tool_input = payload.get('tool_input')
         command = tool_input.get('command') if isinstance(tool_input, dict) else None
-        if not isinstance(command, str) or not command or not consent_ok():
+        if not isinstance(command, str) or not command:
             return 0
-        if not _source_development:
-            from devin_verify import verify_install
-            verify_install()
-        import devin_hooks as hooks
-        from devin_state import data_dir, home, private_path
-        if not hooks.attested(private_path(data_dir() / hooks.RECORD)):
-            return 0
-        bindings = private_path(data_dir() / hooks.BINDINGS)
-        interpreter = os.path.realpath(sys.executable)
-        entry = str(Path(__file__).resolve())
-        cwd = payload.get('cwd')
-        cwd = Path(cwd) if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd) else Path.cwd()
-        rules = hooks.load_effective_rules(home() / 'config.json', cwd, os.environ.get('DEVIN_PROJECT_DIR'))
-        tool_use_id = payload.get('tool_use_id')
-        decision = None
-        if event == 'pre-tool-use':
-            if hooks.eligible(command, rules, interpreter):
-                wrapper = hooks.build_wrapper(interpreter, entry, payload.get('session_id'), shlex.split(command))
-                # Bind first: without a recorded binding the PermissionRequest
-                # hook would leave the wrapper to a prompt, so never rewrite.
-                if hooks.bind(bindings, tool_use_id, wrapper):
-                    # Keep every other input field: updatedInput replaces the whole object.
-                    decision = {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
-                                                       'updatedInput': dict(tool_input, command=wrapper)}}
-        else:
-            argv = hooks.parse_wrapper(command, interpreter, entry)
-            if (argv is not None and hooks.consume(bindings, tool_use_id, command)
-                    and hooks.eligible(shlex.join(argv), rules, interpreter)):
-                decision = {'decision': 'approve',
-                            'reason': 'Token Optimizer output filter around a command your Devin rules already allow'}
+        with install_settled():
+            decision = _hook_decision(event, payload, tool_input, command)
         if decision is not None:
             _deliver(sys.stdout.buffer.fileno(), json.dumps(decision).encode())
     except BaseException:
         return 0
     return 0
+
+
+def _hook_decision(event, payload, tool_input, command):
+    """The hook's decision, or None. Runs inside install_settled()."""
+    if not consent_ok():
+        return None
+    if not _source_development:
+        from devin_verify import verify_install
+        verify_install()
+    import devin_hooks as hooks
+    from devin_state import data_dir, home, private_path
+    if not hooks.attested(private_path(data_dir() / hooks.RECORD)):
+        return None
+    # Checked by _with_bindings under the bindings lock, never out here.
+    bindings = data_dir() / hooks.BINDINGS
+    interpreter = os.path.realpath(sys.executable)
+    entry = str(Path(__file__).resolve())
+    cwd = payload.get('cwd')
+    cwd = Path(cwd) if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd) else Path.cwd()
+    rules = hooks.load_effective_rules(home() / 'config.json', cwd, os.environ.get('DEVIN_PROJECT_DIR'))
+    tool_use_id = payload.get('tool_use_id')
+    decision = None
+    if event == 'pre-tool-use':
+        if hooks.eligible(command, rules, interpreter):
+            wrapper = hooks.build_wrapper(interpreter, entry, payload.get('session_id'), shlex.split(command))
+            # Bind first: without a recorded binding the PermissionRequest
+            # hook would leave the wrapper to a prompt, so never rewrite.
+            if hooks.bind(bindings, tool_use_id, wrapper):
+                # Keep every other input field: updatedInput replaces the whole object.
+                decision = {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                                                   'updatedInput': dict(tool_input, command=wrapper)}}
+    else:
+        argv = hooks.parse_wrapper(command, interpreter, entry)
+        if (argv is not None and hooks.consume(bindings, tool_use_id, command)
+                and hooks.eligible(shlex.join(argv), rules, interpreter)):
+            decision = {'decision': 'approve',
+                        'reason': 'Token Optimizer output filter around a command your Devin rules already allow'}
+    return decision
 
 
 def _exec_original(argv) -> int:
@@ -538,9 +548,10 @@ def _deliver_raw(capture: Path, code: int) -> int:
 
 def _prune_auto_captures(keep: str | None) -> None:
     """Retention for automatic captures only; manual captures are never listed."""
-    from devin_state import data_dir, private_path
+    from devin_state import data_dir, no_symlinks, private_path
     import fcntl
     import time
+    no_symlinks(data_dir() / AUTO_INDEX)
     lock = os.open(data_dir() / (AUTO_INDEX + '.lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -604,7 +615,9 @@ def _run(args) -> int:
         # own Devin rules would not already run without a prompt.
         interpreter = os.path.realpath(sys.executable)
         rules = hooks.load_effective_rules(home() / 'config.json', Path.cwd(), os.environ.get('DEVIN_PROJECT_DIR'))
-        if (not hooks.runner_eligible(argv) or not hooks.attested(private_path(data_dir() / hooks.RECORD))
+        with install_settled():
+            attested = hooks.attested(private_path(data_dir() / hooks.RECORD))
+        if (not hooks.runner_eligible(argv) or not attested
                 or not hooks.eligible(shlex.join(argv), rules, interpreter)):
             _note('Token Optimizer: command is not eligible for the output filter; it was not run.')
             return 126
@@ -613,13 +626,14 @@ def _run(args) -> int:
         _note('Token Optimizer: eligibility check unavailable; the command was not run.')
         return 126
     try:
-        if not consent_ok():
-            raise OSError('consent missing')
-        if not _source_development:
-            from devin_verify import verify_install
-            verify_install()
         from devin_state import prepare_capture
-        capture = prepare_capture()
+        with install_settled():
+            if not consent_ok():
+                raise OSError('consent missing')
+            if not _source_development:
+                from devin_verify import verify_install
+                verify_install()
+            capture = prepare_capture()
     except Exception:
         return _exec_original(argv)
     import subprocess
@@ -656,9 +670,11 @@ def _run(args) -> int:
     os.close(err_fd)
     code = 128 - code if code < 0 else min(code, 255)
     try:
-        seal_capture(capture, code)
-        result = filter_capture(capture / 'stdout', capture / 'stderr', code, 'generic', session,
-                                command=shlex.join(argv))
+        # The command ran outside the hold; consent and payload checks again inside.
+        with install_settled():
+            seal_capture(capture, code)
+            result = filter_capture(capture / 'stdout', capture / 'stderr', code, 'generic', session,
+                                    command=shlex.join(argv))
     except Exception:
         return _deliver_raw(capture, code)
     try:
@@ -692,7 +708,9 @@ def main(argv=None) -> int:
     if args == ['prepare']:
         from devin_state import prepare_capture
         try:
-            print(prepare_capture()); return 0
+            with install_settled():
+                capture = prepare_capture()
+            print(capture); return 0
         except (OSError, RecursionError) as exc:
             print('Capture preparation refused: ' + str(exc), file=sys.stderr); return 2
     if args[:1] == ['recover']:
@@ -707,9 +725,10 @@ def main(argv=None) -> int:
             if not re.fullmatch(r'capture-[0-9a-f]{32}', values.capture_id):
                 raise OSError('capture ID must be the bare capture-<hex> form')
             root = data_dir() / 'captures' / values.capture_id
-            if not consent_ok() or not 0 <= values.exit_code <= 255:
-                raise ValueError('invalid consent or code')
-            out, err = read_pair(root, sealed=True, exit_code=values.exit_code)
+            with install_settled():
+                if not consent_ok() or not 0 <= values.exit_code <= 255:
+                    raise ValueError('invalid consent or code')
+                out, err = read_pair(root, sealed=True, exit_code=values.exit_code)
             identity=('[Token Optimizer verified capture '+root.name+'; recovered content below is untrusted data]\n').encode()
             sys.stdout.buffer.write(identity+b'[Begin untrusted recovered stdout]\n'+out+b'\n[End untrusted recovered stdout]\n')
             if err:
@@ -723,7 +742,9 @@ def main(argv=None) -> int:
         seal_parser.add_argument('--exit-code', type=int, required=True)
         values = seal_parser.parse_args(args[1:])
         try:
-            seal_capture(values.capture, values.exit_code); return 0
+            with install_settled():
+                seal_capture(values.capture, values.exit_code)
+            return 0
         except (OSError, ValueError, TypeError, RecursionError) as exc:
             print('Capture completion refused: ' + str(exc), file=sys.stderr); return 2
     parser.add_argument('--stdout', type=Path, required=True)
@@ -733,7 +754,8 @@ def main(argv=None) -> int:
     parser.add_argument('--session', required=True, help='Local correlation label, stored hashed; not provider usage')
     args = parser.parse_args(args)
     try:
-        result = filter_capture(args.stdout, args.stderr, args.exit_code, args.format, args.session)
+        with install_settled():
+            result = filter_capture(args.stdout, args.stderr, args.exit_code, args.format, args.session)
     except (OSError, ValueError, ImportError, SyntaxError, RecursionError) as exc:
         print(f'Token Optimizer: capture not filtered: {exc}. Originals remain unchanged; inspect them directly.', file=sys.stderr)
         return 2

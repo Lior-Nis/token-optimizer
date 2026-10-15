@@ -527,3 +527,35 @@ def test_auto_index_is_checked_only_under_its_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'lstat', lstat)
     d._prune_auto_captures(second)
     assert [name for name, _ in json.loads(index.read_text())] == [first, second]
+
+
+@pytest.mark.parametrize('stage', ['leaf', 'marker', 'publish'])
+def test_failed_prepare_leaves_no_partial_capture(tmp_path, monkeypatch, stage):
+    """The runner falls back to the original command when prepare_capture
+    raises; a capture directory made before the failure must not stay behind,
+    unindexed and never cleaned up."""
+    import tempfile
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path)); s.enable_consent()
+    if stage == 'leaf':
+        real = s.private_path
+        def private_path(path, **kwargs):
+            if path.name == 'stderr':
+                raise OSError('injected')
+            return real(path, **kwargs)
+        monkeypatch.setattr(s, 'private_path', private_path)
+    elif stage == 'marker':
+        real = tempfile.NamedTemporaryFile
+        def named(*args, **kwargs):
+            handle = real(*args, **kwargs)
+            handle.write = lambda data: (_ for _ in ()).throw(OSError('injected'))
+            return handle
+        monkeypatch.setattr(tempfile, 'NamedTemporaryFile', named)
+    else:
+        real = os.replace
+        monkeypatch.setattr(os, 'replace', lambda a, b: (_ for _ in ()).throw(OSError('injected'))
+                            if Path(b).name == '.prepared' else real(a, b))
+    captures = s.data_dir() / 'captures'
+    with pytest.raises(OSError, match='injected'):
+        s.prepare_capture()
+    assert list(captures.iterdir()) == []
