@@ -389,9 +389,15 @@ def _with_bindings(path: Path, change):
     import fcntl
     import tempfile
     import time
+    from devin_state import no_symlinks, private_path
+    no_symlinks(path)
     fd = os.open(path.with_name(path.name + '.lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        # Check the file only under the lock every writer replaces it under: a
+        # stat racing a rival's os.replace can return the replaced inode with
+        # st_nlink 0, which would refuse a sound bindings file.
+        private_path(path)
         try:
             entries = json.loads(path.read_text()) if path.exists() else {}
         except (OSError, ValueError):

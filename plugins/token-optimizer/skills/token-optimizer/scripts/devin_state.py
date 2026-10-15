@@ -114,6 +114,51 @@ def private_path(path: Path, *, directory=False, create=False) -> Path:
     return path
 
 
+class InstallBusy(OSError):
+    """install.lock stayed exclusively held for the whole bounded wait. An
+    OSError, so every caller takes its existing fail-open or refuse path."""
+
+
+INSTALL_WAIT_SECONDS = 2.0
+
+
+@contextlib.contextmanager
+def install_settled():
+    """Hold install.lock shared. Install, refresh and uninstall replace
+    consent.json, install.json, the payload and hooks.json only while holding
+    it exclusively, and a stat racing os.replace can return the replaced inode
+    with st_nlink 0, so checks of those files belong inside this hold. Before
+    any install there is no lock and nothing to replace.
+
+    The wait is bounded: a hung or stopped installer must never freeze a hook
+    or a run, so after INSTALL_WAIT_SECONDS this raises InstallBusy."""
+    import errno
+    import fcntl
+    try:
+        lock = data_dir() / 'install.lock'
+        no_symlinks(lock)
+        fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        fd = -1  # the gated check reports any real problem itself
+    try:
+        if fd >= 0:
+            deadline = time.monotonic() + INSTALL_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                        raise
+                if time.monotonic() >= deadline:
+                    raise InstallBusy('a Token Optimizer install is still in progress')
+                time.sleep(0.02)
+        yield
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def enable_consent() -> None:
     private_path(data_dir(), directory=True, create=True)
     target = private_path(data_dir() / 'consent.json')
@@ -191,20 +236,31 @@ def prepare_capture() -> Path:
     root = private_path(data_dir() / 'captures', directory=True, create=True)
     result = root / ('capture-' + uuid.uuid4().hex)
     result.mkdir(mode=0o700)
-    for name in ('stdout', 'stderr'):
-        private_path(result / name, create=True)
-    provenance = {}
-    for name in ('stdout', 'stderr'):
-        info = (result / name).stat()
-        provenance[name] = [info.st_dev, info.st_ino]
-    p = private_path(result / '.prepared')
-    # Atomic publish: a kill mid-write must never leave a torn .prepared.
-    with tempfile.NamedTemporaryFile(mode='w', dir=result, delete=False) as out:
-        out.write(json.dumps(provenance))
-        out.flush()
-        os.fsync(out.fileno())
-        temporary = out.name
-    os.replace(temporary, p)
+    temporary = None
+    try:
+        for name in ('stdout', 'stderr'):
+            private_path(result / name, create=True)
+        provenance = {}
+        for name in ('stdout', 'stderr'):
+            info = (result / name).stat()
+            provenance[name] = [info.st_dev, info.st_ino]
+        p = private_path(result / '.prepared')
+        # Atomic publish: a kill mid-write must never leave a torn .prepared.
+        with tempfile.NamedTemporaryFile(mode='w', dir=result, delete=False) as out:
+            temporary = out.name
+            out.write(json.dumps(provenance))
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, p)
+    except BaseException:
+        # Callers fall back to the original command; a half-made capture
+        # would otherwise stay on disk, unindexed and never cleaned up.
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+        with contextlib.suppress(OSError):
+            delete_capture(result)
+        raise
     return result
 
 
