@@ -401,7 +401,10 @@ def _compress_git_log(output):
         return output
     commits = []
     cur = None
-    for line in output.split("\n"):
+    stream = output.split("\n")
+    if stream and stream[-1] == "":
+        stream.pop()  # the newline that ends the stream is not a blank line
+    for line in stream:
         m = _GIT_LOG_COMMIT_RE.match(line)
         if m:
             cur = {"hash": m.group(1), "deco": m.group(2), "hdr": {}, "msg": [], "in_msg": False}
@@ -428,8 +431,10 @@ def _compress_git_log(output):
         return output
 
     def _incomplete(c):
-        return ("Date" not in c["hdr"] and "AuthorDate" not in c["hdr"]) or not any(
-            m.strip() for m in c["msg"])
+        # Cut off only when the headers really are incomplete: no Date line, or
+        # the stream ends before the blank line that closes the headers. A
+        # commit with an empty message is complete: "(no message)".
+        return ("Date" not in c["hdr"] and "AuthorDate" not in c["hdr"]) or not c["in_msg"]
 
     truncated = None
     if _incomplete(commits[-1]):
@@ -511,7 +516,9 @@ def _find_name(name):
     return shlex.quote(name) if re.search(r"[\s'\"\\$`*?\[\](){}<>|&;#~!]", name) else name
 
 
-def _find_summary(label, names, with_examples=True, unit="entry", unit_many="entries"):
+def _find_summary(label, names, with_examples=True, unit="entry", unit_many="entries",
+                  count=None):
+    count = len(names) if count is None else count
     exts = {}
     for n in names:
         exts[_find_ext(n)] = exts.get(_find_ext(n), 0) + 1
@@ -519,7 +526,7 @@ def _find_summary(label, names, with_examples=True, unit="entry", unit_many="ent
     shown = ", ".join(f"{e} x{k}" for e, k in ranked[:4])
     if len(ranked) > 4:
         shown += f", {_plural(len(ranked) - 4, 'other type', 'other types')}"
-    text = f"* {_find_name(label)} ({_plural(len(names), unit, unit_many)}: {shown})"
+    text = f"* {_find_name(label)} ({_plural(count, unit, unit_many)}" + (f": {shown})" if shown else ")")
     if with_examples and names:
         text += " e.g. " + " ".join(_find_name(n) for n in names[:_FIND_EXAMPLES])
     return text
@@ -641,6 +648,12 @@ def _compress_find(output, command_str=None):
     special = []
     dir_set = set()
     for p in paths:
+        d = p
+        while "/" in d:  # every ancestor directory, even of a collapsed tree
+            d = d[:d.rfind("/")]
+            if not d:
+                break
+            dir_set.add(d)
         if p in (".", "/") or (not p.startswith("/") and "/" not in p):
             special.append(p)
             continue
@@ -660,12 +673,6 @@ def _compress_find(output, command_str=None):
             continue
         parent = p[:p.rfind("/")] or "/"
         groups.setdefault(parent, []).append(parts[-1])
-        d = p
-        while "/" in d:
-            d = d[:d.rfind("/")]
-            if not d:
-                break
-            dir_set.add(d)
 
     out = []
     collapsed = False
@@ -687,13 +694,12 @@ def _compress_find(output, command_str=None):
         collapsed = True
         members = noise_roots[root]
         named = [m for m in members if m]
-        text = _find_summary(root + "/", named, unit="path collapsed", unit_many="paths collapsed")
-        if len(named) != len(members):  # the directory entry itself is listed too
-            text = text.replace(f"({_plural(len(named), 'path collapsed', 'paths collapsed')}",
-                                f"({_plural(len(members), 'path collapsed', 'paths collapsed')}", 1)
-        out.append(text)
+        out.append(_find_summary(root + "/", named, unit="path collapsed",
+                                 unit_many="paths collapsed", count=len(members)))
     head = (f"[find: {_plural(len(paths), 'path', 'paths')} total, grouped by directory; "
             f"a name ending in / has its own children listed in that directory's group.")
+    if special:
+        head += " A line starting with = lists top-level paths such as the search root itself."
     if collapsed:
         head += (" Lines starting with * are collapsed groups: they show a count, a type "
                  "breakdown and a few example names only, not every entry.")
@@ -1366,6 +1372,18 @@ def _detect_pattern(command_str):
     # the first. shlex keeps a quoted pipe (`grep 'a|b'`) inside its token, so
     # only a real stage-separator `|` splits here. Only reached for read-only
     # pipelines (the PostToolUse hook gates on is_read_only_pipeline first).
+    if "|&" in tokens or ("|" not in tokens and any("|" in t for t in tokens)):
+        # `|&` is a pipe too, and `f|sed` is one when written without spaces.
+        # Re-tokenize with punctuation split off; quoted `|` stays inside its token.
+        try:
+            lexer = shlex.shlex(command_str, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            punct = list(lexer)
+            if "|" in punct or "|&" in punct:
+                tokens = ["|" if t == "|&" else t for t in punct]
+        except ValueError:
+            return None
+
     if "|" in tokens:
         pipes = [i for i, t in enumerate(tokens) if t == "|"]
         last_stage = tokens[pipes[-1] + 1:]
