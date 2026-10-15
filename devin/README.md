@@ -1,15 +1,15 @@
 # Token Optimizer for Devin
 
-Contract-only beta. An explicit captured-output filter and a user-triggered skill for Devin CLI and Desktop's Devin Local agent. No automatic hooks, provider accounting, quality score, ACU savings or dashboard.
+Contract-only beta. An explicit captured-output filter and a user-triggered skill for Devin CLI and Desktop's Devin Local agent, plus an opt-in automatic mode for Devin CLI (`install.sh --devin --auto`). No provider accounting, quality score, ACU savings or dashboard.
 
 The adapter was exercised end to end in a live Devin CLI session: a real session following the installed skill drove prepare, capture, seal, filter and recover across ten cases. That proves the documented workflow, framing, capture-ID anchoring, retention and refusal behaviors work when the skill is followed. It does not prove Devin model adherence (that the model invokes or follows the skill unprompted), provider accounting or savings. Doctor keeps reporting `live_devin_session_tested: false`: the field records that no automated live-session validation has run, not that the adapter was never exercised.
 
 
 Doctor/filter commands below require `-I` from the first Python startup. Do not omit it or execute their shebangs directly. The late re-exec cannot undo Python startup code already run. The installed default paths below follow the default Devin home; use your selected install home when overridden.
 
-## Why explicit capture, not hooks
+## Why explicit capture is the default
 
-Devin CLI documents PreToolUse command rewriting, but the permission-check timing and persistent-shell cwd/environment behavior are not established for a wrapper. PostToolUse can add context but does not replace tool output. This adapter therefore does not rewrite commands or add permissions.
+Devin CLI documents PreToolUse command rewriting, but the permission-check timing and persistent-shell cwd/environment behavior are not established for a wrapper. PostToolUse can add context but does not replace tool output. The manual route therefore does not rewrite commands or add permissions. Automatic mode (below) rewrites only commands your own allow rules already run without a prompt, and approves only its own wrapper, once.
 
 Capturing changes buffering and TTY-dependent behavior and loses cross-stream timing/order. Use finite non-interactive foreground commands only. Completion and exit status are caller assertions; sealing is an integrity snapshot, not proof that all writers have stopped. This is not a sandbox against malicious same-UID code.
 
@@ -24,9 +24,30 @@ DOCTOR="$HOME/.config/devin/token-optimizer/plugin/devin_doctor.py"
 python3 -I "$DOCTOR" --probe
 ```
 
-The installer copies a stable payload under `~/.config/devin/token-optimizer/plugin/` and a skill under `~/.config/devin/skills/token-optimizer-output/`. It never edits Devin config, permissions or hooks. Absolute `XDG_CONFIG_HOME` and `TOKEN_OPTIMIZER_DEVIN_HOME` overrides must stay inside HOME. Native Windows is refused; POSIX is required. On WSL use the Linux home, not the Windows profile.
+The installer copies a stable payload under `~/.config/devin/token-optimizer/plugin/` and a skill under `~/.config/devin/skills/token-optimizer-output/`. Without `--auto` it never edits Devin config, permissions or hooks. Absolute `XDG_CONFIG_HOME` and `TOKEN_OPTIMIZER_DEVIN_HOME` overrides must stay inside HOME. Native Windows is refused; POSIX is required. On WSL use the Linux home, not the Windows profile.
 
-Invoke `/token-optimizer-output` explicitly in Devin CLI. The installed skill pins `triggers: [user]` and has no `allowed-tools`, `permissions` or subagent override. A project skill with the same name can shadow it; doctor warns about known collisions, and `devin skills show token-optimizer-output` identifies the selected source.
+In the default manual mode, invoke `/token-optimizer-output` explicitly in Devin CLI. The installed skill pins `triggers: [user]` and has no `allowed-tools`, `permissions` or subagent override. A project skill with the same name can shadow it; doctor warns about known collisions, and `devin skills show token-optimizer-output` identifies the selected source.
+
+## Automatic mode
+
+```bash
+bash install.sh --devin --auto
+```
+
+`--auto` also wires two hooks (PreToolUse and PermissionRequest, matcher `^exec$`) into the `hooks` key of `~/.config/devin/config.json`, so large command output is compressed automatically in Devin CLI, interactive and `-p`, with no new prompts. `bash install.sh --devin` alone stays manual-only. `--manual` removes the hooks and keeps the skill, which stays the fallback. A plain reinstall keeps whichever mode is active. Restart running Devin sessions after installing so they load the hooks.
+
+- Only commands your own Devin allow rules already run without a prompt are compressed. Anything Devin asks about still asks. The allow rule must be in your user-level Devin config (`~/.config/devin/config.json` or `config.local.json`); a project's `.devin/` rules can only make it stricter. Commands with unquoted globs, `~` or `#` (`ls *.txt`) run natively, untouched.
+- Known limits: any `deny` or `ask` rule on a program (even `ask Exec(git push)`) turns automatic compression off for every command of that program, by design; Devin team or enterprise policies cannot be read locally, which is what the `--auto` statement covers; on Desktop over ACP the tool card shows the wrapper command.
+- `git status --short`, `--porcelain` and `-z` run untouched.
+- Failures, stderr and credential-looking output pass through raw.
+- Every compressed result carries a capture ID and a recover command that returns the exact original. Automatic captures are kept 7 days or 200 entries.
+- `--auto` records your statement that no Devin team or enterprise permission policy applies. Those policies are not stored locally, so they cannot be checked.
+- Uninstall and purge remove only Token Optimizer's own hook entries and keep every other hook and key. A JSONC config with comments is refused; the skill still installs.
+- Mac and Linux only. If Python is upgraded to a new Homebrew versioned path, doctor flags it; rerun the install.
+
+`devin_doctor.py --probe` proves the round trip: the command rewrite, the one-time approval, that other calls still prompt, and the sizes. It also reads Devin's log for loaded global hooks.
+
+Measured live on Devin CLI 3000.11.3 (`-p` and interactive) and over ACP with both the CLI agent and the agent bundled in Devin Desktop (3000.10.48): `grep -rn` on a real repo went from 5,054 to 1,846 tokens, and a `pytest -v` run from 4,932 to 1,323 tokens, with no new prompts. A command Devin normally asks about (`docker ps -a`) still asked, showing the original command. Like Claude Code, `git log` and `find` mostly pass through uncompressed. Over ACP, Desktop's tool card shows the Token Optimizer wrapper command rather than the original.
 
 ## Devin Desktop: Devin Local only
 
@@ -82,7 +103,7 @@ bash install.sh --devin --uninstall
 bash install.sh --devin --uninstall --purge
 ```
 
-Source: `devin_captured_output_estimate`. The output reduction includes the emitted recovery pointer but excludes skill instructions, extra tool calls, repeated filtering and recovery reads. It is not end-to-end token savings, provider tokens, confirmed delivery, dollars or ACUs. Numeric records retain 30 days and at most 10,000 rows. Purge removes adapter metrics/sidecars, salt, consent and stored captures.
+Automatic captures are counted in the same estimates. Source: `devin_captured_output_estimate`. The output reduction includes the emitted recovery pointer but excludes skill instructions, extra tool calls, repeated filtering and recovery reads. It is not end-to-end token savings, provider tokens, confirmed delivery, dollars or ACUs. Numeric records retain 30 days and at most 10,000 rows. Purge removes adapter metrics/sidecars, salt, consent and stored captures.
 
 If installed files have changed, refresh/uninstall refuses to overwrite them. Doctor reports ownership drift. To stop activation manually, move only the `token-optimizer-output` skill directory out of Devin's skill paths, preserving your edits. Existing imported Claude skills/hooks are not controlled by this adapter and may create their own raw copies; doctor warns about visible coexistence files.
 

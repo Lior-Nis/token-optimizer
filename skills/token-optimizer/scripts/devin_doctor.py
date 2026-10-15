@@ -143,6 +143,142 @@ def local_agent_surfaces() -> dict:
     }
 
 
+PROBE_LINES = 2000
+
+
+def _devin_log_hooks():
+    """The newest 'hooks discovery' line Devin wrote: proof Devin itself loaded
+    global hooks, not just that our command works when we run it."""
+    import re
+    logs = Path.home() / '.local/share/devin/cli/logs'
+    try:
+        candidates = sorted((entry for entry in os.scandir(logs) if entry.name.endswith('.log')),
+                            key=lambda entry: entry.stat().st_mtime, reverse=True)[:40]
+    except OSError:
+        return {'seen': False, 'reason': 'no Devin CLI logs at ' + str(logs)}
+    for entry in candidates:
+        try:
+            with open(entry.path, 'rb') as handle:
+                handle.seek(max(0, entry.stat().st_size - 4 * 1024 * 1024))
+                tail = handle.read().decode('utf-8', 'replace')
+        except OSError:
+            continue
+        found = re.findall(r'hooks discovery: .*?loaded=(\d+) \(global=(\d+)', tail)
+        if found:
+            loaded, global_count = found[-1]
+            return {'seen': True, 'log': entry.path, 'global_hooks_loaded': int(global_count),
+                    'log_time': entry.stat().st_mtime}
+    return {'seen': False, 'reason': 'no Devin session has started since logging began'}
+
+
+def _run_hook(command, payload, cwd):
+    """Run a configured hook command exactly as written, through the shell Devin uses."""
+    run = subprocess.run(['/bin/sh', '-c', command], input=json.dumps(payload).encode(), cwd=cwd,
+                         capture_output=True, timeout=30)
+    try:
+        decision = json.loads(run.stdout) if run.stdout.strip() else None
+    except ValueError:
+        decision = 'unparseable'
+    return run.returncode, decision
+
+
+def automatic_status(probe=False):
+    """Automatic mode: recorded entries, what the Devin config holds, and with
+    probe=True a real round trip through the configured hook commands."""
+    import devin_hooks as hooks
+    import shlex
+    import tempfile
+    import time
+    root = state.data_dir()
+    config_path = state.home() / 'config.json'
+    out = {'mode': 'manual', 'config': str(config_path)}
+    record_path = root / hooks.RECORD
+    try:
+        state.private_path(record_path)
+        record = json.loads(record_path.read_text()) if record_path.exists() else None
+    except (OSError, ValueError) as exc:
+        out.update(mode='broken', error='hook record unreadable: ' + str(exc))
+        return out
+    try:
+        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+    except (OSError, ValueError) as exc:
+        config = None
+        config_error = str(exc)
+    if not isinstance(record, dict) or not isinstance(record.get('entries'), dict):
+        if isinstance(config, dict) and any(found == 'edited' for found in hooks.installed_state(
+                config, hooks.owned_entries('python3', str(root / 'plugin/devin_compress.py'))).values()):
+            out['warning'] = 'Token Optimizer hook entries are in the Devin config but not recorded; remove them by hand'
+        return out
+    if config is None:
+        out.update(mode='broken', error='Devin config unreadable: ' + config_error)
+        return out
+    entries = record['entries']
+    wiring = hooks.installed_state(config, entries)
+    out['wiring'] = wiring
+    out['attested'] = record.get('org_policy') == hooks.ATTESTATION
+    out['mode'] = 'automatic' if all(v == 'wired' for v in wiring.values()) and out['attested'] else 'broken'
+    if out['mode'] == 'broken':
+        out['error'] = 'hook entries missing or edited; rerun install.sh --devin --auto'
+    try:
+        hook_python = shlex.split(entries['PreToolUse']['hooks'][0]['command'])[0]
+    except (KeyError, IndexError, TypeError, ValueError):
+        hook_python = ''
+    if out['mode'] == 'automatic' and not os.access(hook_python, os.X_OK):
+        # The hook fails open (nothing breaks) but compression silently stops,
+        # typically after a Python upgrade removed the versioned interpreter.
+        out.update(mode='broken', error='hook Python is gone (' + hook_python +
+                   '); rerun install.sh --devin --auto to repoint it')
+    out['devin_log'] = _devin_log_hooks()
+    if not probe or out['mode'] != 'automatic':
+        return out
+    pre = entries['PreToolUse']['hooks'][0]['command']
+    permission = entries['PermissionRequest']['hooks'][0]['command']
+    interpreter = shlex.split(pre)[0]
+    result = {'passed': False}
+    out['probe'] = result
+    with tempfile.TemporaryDirectory(prefix='doctor-probe-', dir=root) as work:
+        for index in range(20):
+            (Path(work) / ('module%02d.py' % index)).write_text(
+                ''.join('probe = repeated_value(%d)\n' % (i % 7) for i in range(PROBE_LINES // 20)))
+        rules = hooks.load_effective_rules(config_path, Path(work))
+        candidates = ['grep -rn probe .', 'ls -la']
+        command = next((c for c in candidates if hooks.eligible(c, rules, interpreter)), None)
+        if command is None:
+            result['reason'] = ('no Exec allow rule in your Devin config covers grep or ls, so nothing '
+                                'can be shown compressing here; commands your rules allow still compress')
+            return out
+        result['command'] = command
+        tool_use_id = 'doctor-probe-' + os.urandom(8).hex()
+        payload = {'hook_event_name': 'PreToolUse', 'tool_name': 'exec', 'tool_input': {'command': command},
+                   'tool_use_id': tool_use_id, 'session_id': 'doctor-probe', 'cwd': work}
+        code, decision = _run_hook(pre, payload, work)
+        wrapper = (decision or {}).get('hookSpecificOutput', {}).get('updatedInput', {}).get('command') \
+            if isinstance(decision, dict) else None
+        result['pre_tool_use_rewrote'] = bool(wrapper) and code == 0
+        if not wrapper:
+            result['reason'] = 'PreToolUse hook returned no rewrite (exit %d)' % code
+            return out
+        payload.update(hook_event_name='PermissionRequest', tool_input={'command': wrapper})
+        code, decision = _run_hook(permission, payload, work)
+        result['permission_approved_once'] = isinstance(decision, dict) and decision.get('decision') == 'approve'
+        _, again = _run_hook(permission, payload, work)
+        result['second_request_still_prompts'] = again is None
+        other = dict(payload, tool_use_id='doctor-probe-other')
+        _, foreign = _run_hook(permission, other, work)
+        result['other_tool_call_still_prompts'] = foreign is None
+        started = time.monotonic()
+        raw = subprocess.run(shlex.split(command), cwd=work, capture_output=True, timeout=60)
+        wrapped = subprocess.run(shlex.split(wrapper), cwd=work, capture_output=True, timeout=60)
+        result['raw_bytes'] = len(raw.stdout) + len(raw.stderr)
+        result['delivered_bytes'] = len(wrapped.stdout) + len(wrapped.stderr)
+        result['exit_code_preserved'] = raw.returncode == wrapped.returncode
+        result['seconds'] = round(time.monotonic() - started, 2)
+        result['passed'] = all(result[k] for k in ('pre_tool_use_rewrote', 'permission_approved_once',
+                                                    'second_request_still_prompts', 'other_tool_call_still_prompts',
+                                                    'exit_code_preserved'))
+    return out
+
+
 def diagnose(probe=False):
     root = state.data_dir()
     skill = state.home() / 'skills/token-optimizer-output/SKILL.md'
@@ -232,6 +368,20 @@ def diagnose(probe=False):
                 (tmp/leaf).unlink(missing_ok=True)
             tmp.rmdir()
         result['probe_scope'] = 'local filter only; not Devin adherence or provider usage'
+    if ready:
+        try:
+            result['automatic'] = automatic_status(probe)
+        except (OSError, ValueError, ImportError, subprocess.SubprocessError) as exc:
+            result['automatic'] = {'mode': 'broken', 'error': str(exc)}
+        automatic = result['automatic']
+        if automatic.get('mode') == 'broken':
+            warnings.append('Automatic mode is broken: ' + str(automatic.get('error')))
+        elif automatic.get('mode') == 'automatic':
+            seen = automatic.get('devin_log', {})
+            if seen.get('seen') and seen.get('global_hooks_loaded', 0) < 2:
+                warnings.append('Devin\'s newest session log shows ' + str(seen.get('global_hooks_loaded')) +
+                                ' global hooks loaded; restart Devin so it loads the Token Optimizer hooks')
+        result['status'] = 'automatic' if automatic.get('mode') == 'automatic' else result['status']
     result['limits'] = 'caller asserts foreground completion and exit code; not a sandbox against malicious same-UID code'
     return result
 
@@ -241,7 +391,10 @@ def main(argv=None):
     args=p.parse_args(argv)
     try:
         result=diagnose(args.probe); print(json.dumps(result,indent=2))
-        return 0 if result['installed'] and result['local_probe_passed'] is not False else 1
+        automatic_probe = result.get('automatic', {}).get('probe')
+        failed = result['local_probe_passed'] is False or (automatic_probe is not None and not automatic_probe.get('passed')
+                                                            and 'command' in automatic_probe)
+        return 0 if result['installed'] and not failed and result.get('automatic', {}).get('mode') != 'broken' else 1
     except (OSError, ValueError, ImportError, SyntaxError, RecursionError, RuntimeError) as exc:
         print('Token Optimizer: readiness refused: '+str(exc)+'. Originals remain unchanged.',file=sys.stderr)
         return 2

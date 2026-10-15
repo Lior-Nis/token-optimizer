@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import stat
 from pathlib import Path
 import devin_state as state
@@ -23,9 +24,15 @@ def verify_install():
                 raise OSError('unsafe incidental cache directory')
             for cached in entry.iterdir():
                 state.no_symlinks(cached)
-                info=cached.lstat()
+                try:
+                    info=cached.lstat()
+                except FileNotFoundError:
+                    continue  # a concurrent import renamed its temporary file into place
+                # Python writes NAME.pyc.<digits> and renames it to NAME.pyc;
+                # parallel first runs see that in-flight file. It is never imported.
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
-                        or info.st_nlink!=1 or info.st_mode&0o022 or not cached.name.endswith('.pyc')):
+                        or info.st_nlink!=1 or info.st_mode&0o022
+                        or not re.fullmatch(r'[\w.-]+\.pyc(?:\.[0-9]+)?',cached.name)):
                     raise OSError('unmanifested artifact in incidental cache: ' + str(cached) +
                                   '; remove it and retry')
             continue

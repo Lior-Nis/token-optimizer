@@ -10,7 +10,8 @@ import sys
 
 PAYLOAD = ('devin_compress.py', 'devin_state.py', 'devin_doctor.py', 'devin_verify.py', 'devin_source.py',
            'bash_compress.py', 'bash_whitelist.py', 'credential_patterns.py',
-           'token_estimate.py', 'command_filters.py', 'runtime_env.py', 'py_trust.py', 'plugin_env.py', 'refetch_fingerprint.py')
+           'token_estimate.py', 'command_filters.py', 'runtime_env.py', 'py_trust.py', 'plugin_env.py', 'refetch_fingerprint.py',
+           'devin_hooks.py')
 ALLOWED_MODULES = frozenset(Path(name).stem for name in PAYLOAD)
 
 # Repo names outside the installed closure must never fall back to sys.path.
@@ -26,7 +27,7 @@ REPO_MODULES = frozenset((
     'copilot_state', 'copilot_vscode', 'cowork_doctor', 'cowork_install',
     'credential_patterns', 'cursor_doctor', 'cursor_hook_bridge', 'cursor_install',
     'cursor_session', 'cursor_state', 'delta_diff', 'detectors', 'deterministic_candidates',
-    'devin_compress', 'devin_doctor', 'devin_install', 'devin_source', 'devin_state',
+    'devin_compress', 'devin_doctor', 'devin_hooks', 'devin_install', 'devin_source', 'devin_state',
     'devin_verify', 'grok_doctor', 'grok_hook_bridge', 'grok_install', 'grok_session',
     'grok_state', 'hermes_doctor', 'hermes_hook_bridge', 'hermes_install', 'hermes_session',
     'hermes_state', 'hook_io', 'hook_runtime', 'injection', 'install_reconcile', 'measure',
