@@ -286,6 +286,7 @@ def test_runway_meter_path_is_runtime_scoped_and_silent(monkeypatch, tmp_path):
     codex_home = home / ".codex"
     codex_home.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     mod, _snap, claude_dir = _import_measure(monkeypatch, tmp_path, "codex")
     # A live Claude meter exists on the same machine...

@@ -147,8 +147,10 @@ _PATH_EVENTS = {
 
 
 def _compute_exempt() -> tuple[str, ...]:
-    """Real-home subtrees that are not user data: the repo and the interpreter."""
-    out = {str(REPO)}
+    """Real-home subtrees that are not user data: the repo, the interpreter, and
+    the system temp dir (on Windows it lives under the home, in AppData\\Local\\Temp,
+    and pytest's tmp_path is inside it)."""
+    out = {str(REPO), os.path.realpath(tempfile.gettempdir())}
     for p in (sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix):
         out.add(os.path.realpath(p))
     for p in sys.path:

@@ -76,6 +76,7 @@ def _import_measure(monkeypatch, tmp_path, runtime="cursor"):
     cursor_home = home / ".cursor"
     cursor_home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", str(snap))
     monkeypatch.setenv("TOKEN_OPTIMIZER_RUNTIME", runtime)
     monkeypatch.setenv("TOKEN_OPTIMIZER_CURSOR_HOME", str(cursor_home))

@@ -24,8 +24,12 @@ def _hits_for_synth():
 
 def test_home_is_sandboxed():
     real = _home_guard.REAL_HOME
+    sandbox = str(_home_guard.SANDBOX) + os.sep
+    # On Windows the sandbox sits in AppData/Local/Temp, under the real home,
+    # so assert "inside the sandbox" rather than "outside the real home".
     assert os.path.realpath(Path.home()) != real
-    assert not os.path.realpath(os.path.expanduser("~")).startswith(real + os.sep)
+    assert os.path.realpath(Path.home()).startswith(sandbox)
+    assert os.path.realpath(os.path.expanduser("~")).startswith(sandbox)
     for var in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME",
                 "TOKEN_OPTIMIZER_SNAPSHOT_DIR", "CLAUDE_PLUGIN_DATA"):
         assert var not in os.environ or not os.environ[var].startswith(real + os.sep)
@@ -37,10 +41,10 @@ def test_import_time_paths_in_measure_are_not_under_real_home():
         sys.path.insert(0, scripts)
     import measure
 
-    real = _home_guard.REAL_HOME + os.sep
+    sandbox = str(_home_guard.SANDBOX) + os.sep
     for name in ("SNAPSHOT_DIR", "TRENDS_DB", "CLAUDE_DIR", "RUNTIME_DIR", "SETTINGS_PATH"):
         value = os.path.realpath(str(getattr(measure, name)))
-        assert not value.startswith(real), f"measure.{name} cached under real home: {value}"
+        assert value.startswith(sandbox), f"measure.{name} cached outside the sandbox: {value}"
 
 
 def test_guard_flags_read_write_and_sqlite_under_real_home():
