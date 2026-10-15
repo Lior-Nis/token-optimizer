@@ -105,6 +105,10 @@ def _project_rule_files(start: Path) -> list:
         if (folder / '.git').exists() or folder.parent == folder or folder.resolve() == stop:
             break
         folder = folder.parent
+    else:
+        # Ran out of steps before the root: an unvisited ancestor may hold a
+        # deny rule, so the rules are unknown, not empty.
+        raise RulesUnknown(str(start))
     return files
 
 

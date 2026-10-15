@@ -629,6 +629,44 @@ def test_rule_walk_stops_at_home(tmp_path, monkeypatch):
     assert all(str(f).startswith(str(tmp_path / 'home')) for f in files)
 
 
+def _deep_clone(tmp_path, depth):
+    repo = tmp_path / 'clone'
+    (repo / '.git').mkdir(parents=True, exist_ok=True)
+    (repo / '.devin').mkdir(exist_ok=True)
+    (repo / '.devin/config.json').write_text(json.dumps({'permissions': {'deny': ['Exec(git)']}}))
+    cwd = repo.joinpath(*(['d'] * depth))
+    cwd.mkdir(parents=True, exist_ok=True)
+    return cwd
+
+
+def test_rule_walk_that_runs_out_decides_nothing(tmp_path):
+    """A deny rule above the walk limit must never be read as no rules."""
+    import devin_hooks as h
+    user = tmp_path / 'home/.config/devin/config.json'
+    user.parent.mkdir(parents=True)
+    user.write_text(json.dumps({'permissions': {'allow': ['Exec(git)']}}))
+    shallow = _deep_clone(tmp_path, 3)
+    assert h.eligible('git log', h.load_effective_rules(user, shallow), INTERPRETER) is False
+    deep = _deep_clone(tmp_path, h.MAX_WALK + 1)
+    with pytest.raises(h.RulesUnknown):
+        h.load_effective_rules(user, deep)
+    with pytest.raises(h.RulesUnknown):
+        h.load_effective_rules(user, shallow, str(deep))
+
+
+def test_hook_leaves_command_alone_past_the_walk_limit(tmp_path):
+    import devin_hooks as h
+    _install_auto(allow=('Exec(git)',))
+    deep = _deep_clone(tmp_path, h.MAX_WALK + 1)
+    entry = _entries()['PreToolUse']
+    payload = json.dumps({'tool_name': 'exec', 'tool_use_id': 'toolu_deep', 'session_id': 's', 'cwd': str(deep),
+                          'tool_input': {'command': 'git log'}}).encode()
+    run = subprocess.run(['/bin/sh', '-c', entry['hooks'][0]['command']], input=payload, cwd=deep,
+                         capture_output=True, timeout=60)
+    assert run.returncode == 0
+    assert 'updatedInput' not in run.stdout.decode()
+
+
 def test_reinstall_keeps_hook_order():
     import devin_hooks as h
     entries = h.owned_entries(INTERPRETER, ENTRY)
