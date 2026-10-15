@@ -27,6 +27,16 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 BASH_COMPRESS_HOOK = REPO / "skills" / "token-optimizer" / "scripts" / "bash_compress_hook.py"
 
+# Realistic default-format `git log` (distinct hashes, bodies, trailers).
+_DEFAULT_GIT_LOG_OUTPUT = "\n".join(
+    f"commit {i:040x}\nAuthor: Test User <test@example.com>\n"
+    f"Date:   Thu Aug 27 10:{i % 60:02d}:00 2026 +0000\n\n"
+    f"    Commit message number {i}: make some changes to the codebase\n\n"
+    f"    A longer explanation of change {i} that spans a line.\n\n"
+    f"    Signed-off-by: Test User <test@example.com>\n"
+    for i in range(1, 41)
+)
+
 # Long, realistic CLI output that should compress by >10%
 _LONG_GIT_LOG_OUTPUT = "\n".join(
     "commit " + "a" * 40 + "\n"
@@ -130,9 +140,15 @@ def _get_updated_stdout(proc: subprocess.CompletedProcess) -> str | None:
 class TestHookCompressesOutput:
     """updatedToolOutput.stdout must be smaller than original."""
 
+    def test_git_log_signature_output_is_never_rewritten(self):
+        """gpg/signature lines are evidence; --show-signature output passes untouched."""
+        proc = _run_hook("git log --show-signature | head -20", _LONG_GIT_LOG_OUTPUT)
+        assert proc.returncode == 0, f"Hook crashed: {proc.stderr}"
+        assert _get_updated_stdout(proc) is None
+
     def test_git_log_pipeline_is_compressed(self):
-        cmd = "git log --oneline | head -20"
-        proc = _run_hook(cmd, _LONG_GIT_LOG_OUTPUT)
+        cmd = "git log | head -20"
+        proc = _run_hook(cmd, _DEFAULT_GIT_LOG_OUTPUT)
         assert proc.returncode == 0, f"Hook crashed: {proc.stderr}"
 
         compressed = _get_updated_stdout(proc)
@@ -140,8 +156,8 @@ class TestHookCompressesOutput:
             "Expected updatedToolOutput for pipeline command, got pass-through.\n"
             f"stdout: {proc.stdout[:500]}"
         )
-        assert len(compressed) < len(_LONG_GIT_LOG_OUTPUT), (
-            f"Compressed ({len(compressed)} chars) must be < original ({len(_LONG_GIT_LOG_OUTPUT)})"
+        assert len(compressed) < len(_DEFAULT_GIT_LOG_OUTPUT), (
+            f"Compressed ({len(compressed)} chars) must be < original ({len(_DEFAULT_GIT_LOG_OUTPUT)})"
         )
 
         # Verify response shape
