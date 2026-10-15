@@ -410,6 +410,10 @@ def test_errors_still_pass_raw():
 def test_devin_filter_capture_now_compresses(tmp_path, monkeypatch, command, raw):
     import devin_compress as d
     import devin_state as s
+    # CI sets XDG_CONFIG_HOME; any inherited Devin home override would point
+    # outside the synthetic HOME and be refused.
+    for key in ('XDG_CONFIG_HOME', 'TOKEN_OPTIMIZER_DEVIN_HOME', 'DEVIN_CONFIG_DIR', 'TOKEN_OPTIMIZER_RUNTIME'):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('HOME', str(tmp_path))
     s.enable_consent()
     root = s.prepare_capture()
