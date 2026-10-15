@@ -279,6 +279,10 @@ def install_guard() -> None:
     sys.addaudithook(_hook)
     for name in ("stat", "lstat", "access"):
         setattr(os, name, _wrap_stat(name, getattr(os, name), "STAT"))
+    # On Windows these use C fast paths (nt._path_exists etc.) that never call
+    # os.stat, and from 3.14 Path.exists() delegates to os.path.exists.
+    for name in ("exists", "lexists", "isfile", "isdir", "islink"):
+        setattr(os.path, name, _wrap_stat("path." + name, getattr(os.path, name), "STAT"))
     _installed = True
 
 
