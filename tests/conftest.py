@@ -46,11 +46,20 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
+
+# Real-home protection (see tests/_home_guard.py). This MUST run at conftest
+# import, before any test module imports a product script that caches
+# HOME-derived paths at import time.
+import _home_guard  # noqa: E402
+
+_home_guard.install_sandbox()
+_home_guard.install_guard()
 
 _ENV_DISABLE = "TOKEN_OPTIMIZER_TREE_GUARD"
 _ENV_PER_TEST = "TOKEN_OPTIMIZER_TREE_GUARD_PER_TEST"
@@ -252,6 +261,29 @@ def _restore_runtime_env():
             os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def _real_home_guard(request):
+    """Fail any test that touches the developer's REAL home directory.
+
+    Hits are recorded by an audit hook (tests/_home_guard.py) and attributed to
+    the running test by node id; a test that is allowed to touch real home
+    read-only needs an entry in ``_home_guard.ALLOWLIST``, with a reason.
+    """
+    nodeid = request.node.nodeid
+    _home_guard.set_current(nodeid)
+    yield
+    _home_guard.set_current("")
+    hits = _home_guard.take_hits(nodeid)
+    if hits:
+        pytest.fail(
+            "test touched the REAL home directory (%s):\n%s\n"
+            "Product modules cache HOME-derived paths at import; use tmp_path "
+            "and monkeypatch the module constants (see tests/_home_guard.py)."
+            % (_home_guard.REAL_HOME, _home_guard.format_hits(hits)),
+            pytrace=False,
+        )
+
+
 def _report_lines() -> list[str]:
     lines = mutations_since_session_start()
     if not lines:
@@ -282,6 +314,15 @@ def pytest_sessionfinish(session, exitstatus):
     """
     if mutations_since_session_start() and exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    # Real-home touches outside any test (import/collection time) have no test
+    # to fail, so they fail the session here.
+    stray = _home_guard.take_hits("")
+    if stray:
+        sys.stderr.write(
+            "\nREAL HOME TOUCHED OUTSIDE A TEST (import/collection):\n%s\n"
+            % _home_guard.format_hits(stray))
+        if exitstatus == 0:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture()
