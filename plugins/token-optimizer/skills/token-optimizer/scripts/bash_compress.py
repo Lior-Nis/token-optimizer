@@ -346,23 +346,368 @@ def _compress_git_status(output):
     return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
 
 
+def _compress_git_log_basic(output):
+    """Identity: shapes the summarizer must not touch (custom formats, patches,
+    signatures, stat listings) are delivered exactly as git printed them."""
+    return output
+
+
+_GIT_LOG_COMMIT_RE = re.compile(r"^commit ([0-9a-f]{40}|[0-9a-f]{64})(?: \((.*)\))?$")
+_GIT_LOG_HEADER_RE = re.compile(r"^(Author|Date|Merge|Commit|CommitDate|AuthorDate):\s*(.*)$")
+_GIT_LOG_TRAILER_RE = re.compile(
+    r"^(Signed-off-by|Co-authored-by|Reviewed-by|Acked-by|Tested-by|Reported-by|"
+    r"Suggested-by|Helped-by|Cc|Change-Id|Fixes|Closes|Refs?)\s*:", re.IGNORECASE)
+_GIT_LOG_ALL_HASHES_RE = re.compile(r"(?m)^commit ([0-9a-f]{40}|[0-9a-f]{64})\b")
+_GIT_LOG_OUT_HASH_RE = re.compile(r"(?m)^([0-9a-f]{10}) ")
+# Separators str.splitlines() honours beyond "\n" (and NUL): a message holding
+# one would be cut mid-line, so such output is delivered untouched.
+_AMBIGUOUS_SEPARATORS_RE = re.compile("[\x00\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
+_GIT_LOG_MIN_COMMITS = 5
+_GIT_LOG_MAX_COMMITS = 50000
+_GIT_LOG_SHORT = 10
+
+
+def _plural(n, one, many):
+    return f"{n} {one if n == 1 else many}"
+
+
+def _git_log_date(raw):
+    """'Thu Oct 15 12:39:24 2026 +0300' -> '2026-10-15 12:39 +0300' (raw on any doubt)."""
+    try:
+        import datetime as _dt
+        parts = raw.split()
+        stamp = _dt.datetime.strptime(" ".join(parts[:5]), "%a %b %d %H:%M:%S %Y")
+        tz = parts[5] if len(parts) > 5 and re.fullmatch(r"[+-]\d{4}", parts[5]) else ""
+        return (stamp.strftime("%Y-%m-%d %H:%M") + (" " + tz if tz else "")).strip()
+    except Exception:
+        return raw.strip()
+
+
 def _compress_git_log(output):
-    """Compress git log: keep hash + message, strip noise."""
-    lines = output.strip().splitlines()
-    result = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
+    """Summarize default-format ``git log``: one line per commit.
+
+    Keeps, for EVERY commit: 10-char hash, date, author name, subject (plus
+    decorations and a merge marker). Bodies, trailers (Signed-off-by,
+    Co-authored-by ...) and author emails are condensed to counts. Anything
+    that is not cleanly parseable default-format output (patches, --stat,
+    signatures, graph, custom formats, ambiguous separators) is returned
+    unchanged, as is any result whose hash recount disagrees with the input.
+    A last commit cut off by ``| head`` is listed as truncated, never guessed.
+    """
+    if _AMBIGUOUS_SEPARATORS_RE.search(output):
+        return output
+    input_hashes = _GIT_LOG_ALL_HASHES_RE.findall(output)
+    if not _GIT_LOG_MIN_COMMITS <= len(input_hashes) <= _GIT_LOG_MAX_COMMITS:
+        return output
+    commits = []
+    cur = None
+    stream = output.split("\n")
+    if stream and stream[-1] == "":
+        stream.pop()  # the newline that ends the stream is not a blank line
+    for line in stream:
+        m = _GIT_LOG_COMMIT_RE.match(line)
+        if m:
+            cur = {"hash": m.group(1), "deco": m.group(2), "hdr": {}, "msg": [], "in_msg": False}
+            commits.append(cur)
             continue
-        # Skip GPG signature lines
-        if stripped.startswith("gpg:") or stripped.startswith("Primary key"):
+        if cur is None:
+            if line.strip():
+                return output  # preamble: not default format
             continue
-        # Skip merge noise
-        if stripped.startswith("Merge:"):
+        if not cur["in_msg"]:
+            hm = _GIT_LOG_HEADER_RE.match(line)
+            if hm:
+                cur["hdr"][hm.group(1)] = hm.group(2)
+                continue
+            if not line.strip():
+                cur["in_msg"] = True
+                continue
+            return output  # unknown header shape (gpg lines, reflog ...)
+        # message region: default format indents every message line by 4 spaces
+        if line.strip() and not line.startswith("    "):
+            return output  # patch / stat / graph content
+        cur["msg"].append(line[4:] if line.startswith("    ") else line.strip())
+    if len(commits) != len(input_hashes) or [c["hash"] for c in commits] != input_hashes:
+        return output
+
+    def _incomplete(c):
+        # Cut off only when the headers really are incomplete: no Date line, or
+        # the stream ends before the blank line that closes the headers. A
+        # commit with an empty message is complete: "(no message)".
+        return ("Date" not in c["hdr"] and "AuthorDate" not in c["hdr"]) or not c["in_msg"]
+
+    truncated = None
+    if _incomplete(commits[-1]):
+        truncated = commits[-1]
+    for c in commits[:-1]:
+        if "Date" not in c["hdr"] and "AuthorDate" not in c["hdr"]:
+            return output
+    out = []
+    for c in commits:
+        if c is truncated:
+            out.append(f"{c['hash'][:_GIT_LOG_SHORT]} [truncated: the output ends inside this "
+                       f"commit; its date, author and subject are not in the original stream]")
             continue
-        result.append(stripped)
-    compressed = "\n".join(result)
-    return compressed if compressed else output
+        hdr = c["hdr"]
+        author = re.sub(r"\s*<[^>]*>\s*$", "", hdr.get("Author", "?")).strip() or "?"
+        date = _git_log_date(hdr.get("Date") or hdr.get("AuthorDate", ""))
+        msg = list(c["msg"])
+        while msg and not msg[0].strip():
+            msg.pop(0)
+        subject_lines = []
+        while msg and msg[0].strip():
+            subject_lines.append(msg.pop(0).strip())  # git's subject is the first paragraph
+        subject = " ".join(subject_lines) or "(no message)"
+        rest = [m for m in msg if m.strip()]
+        trailers = [m for m in rest if _GIT_LOG_TRAILER_RE.match(m.strip())]
+        body = len(rest) - len(trailers)
+        flags = []
+        if "Merge" in hdr:
+            flags.append("merge")
+        if body:
+            flags.append("+" + _plural(body, "body line", "body lines"))
+        if trailers:
+            flags.append("+" + _plural(len(trailers), "trailer", "trailers"))
+        coauth = [re.sub(r"\s*<[^>]*>\s*$", "", t.split(":", 1)[1]).strip()
+                  for t in trailers if t.strip().lower().startswith("co-authored-by")]
+        if coauth:
+            flags.append("co-authors: " + ", ".join(coauth[:3]))
+        line = f"{c['hash'][:_GIT_LOG_SHORT]} {date} {author} | {subject}"
+        if c["deco"]:
+            line += f" ({c['deco']})"
+        if flags:
+            line += " [" + "; ".join(flags) + "]"
+        out.append(line)
+    body_text = "\n".join(out)
+    # Recount from the text that will actually be delivered.
+    if _GIT_LOG_OUT_HASH_RE.findall(body_text) != [h[:_GIT_LOG_SHORT] for h in input_hashes]:
+        return output
+    header = (f"[git log: {_plural(len(commits), 'commit', 'commits')}, one line each: "
+              f"{_GIT_LOG_SHORT}-char hash, date, author, subject. "
+              f"Text in [ ] counts omitted body lines and trailers and names co-authors; "
+              f"text in ( ) is branch/tag decoration. Author emails and message bodies are "
+              f"omitted; the full original output is recoverable.]")
+    return header + "\n" + body_text
+
+
+_FIND_MIN_PATHS = 40          # fewer paths pass through unchanged
+_FIND_MAX_PATHS = 50000       # larger lists are delivered untouched (time bound)
+_FIND_DIR_KEEP = 8            # a directory with <= this many entries lists all names
+_FIND_DIR_KEEP_SEARCH = 40    # ... in a name/path search, where the names are the answer
+_FIND_EXAMPLES = 3
+_FIND_NOISE_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".next", ".gradle", "target", ".idea",
+})
+_FIND_SEARCH_PREDICATES = frozenset({
+    "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex",
+})
+_FIND_GLOBAL_OPTIONS = frozenset({"-H", "-L", "-P", "-E", "-X", "-x", "-s", "-d"})
+
+
+def _find_ext(name):
+    base = name.rsplit("/", 1)[-1]
+    if "." in base.lstrip("."):
+        return "*." + base.rsplit(".", 1)[-1]
+    return "(no ext)"
+
+
+def _find_name(name):
+    return shlex.quote(name) if re.search(r"[\s'\"\\$`*?\[\](){}<>|&;#~!]", name) else name
+
+
+def _find_summary(label, names, with_examples=True, unit="entry", unit_many="entries",
+                  count=None):
+    count = len(names) if count is None else count
+    exts = {}
+    for n in names:
+        exts[_find_ext(n)] = exts.get(_find_ext(n), 0) + 1
+    ranked = sorted(exts.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown = ", ".join(f"{e} x{k}" for e, k in ranked[:4])
+    if len(ranked) > 4:
+        shown += f", {_plural(len(ranked) - 4, 'other type', 'other types')}"
+    text = f"* {_find_name(label)} ({_plural(count, unit, unit_many)}" + (f": {shown})" if shown else ")")
+    if with_examples and names:
+        text += " e.g. " + " ".join(_find_name(n) for n in names[:_FIND_EXAMPLES])
+    return text
+
+
+def _find_command_scope(command_str):
+    """(roots, search_mode) read from the find invocation, or (None, False)."""
+    if not command_str:
+        return None, False
+    try:
+        tokens = shlex.split(command_str)
+    except ValueError:
+        return None, False
+    if "|" in tokens:
+        tokens = tokens[:tokens.index("|")]
+    idx = next((i for i, t in enumerate(tokens) if t == "find"), None)
+    if idx is None:
+        return None, False
+    rest = tokens[idx + 1:]
+    roots = []
+    i = 0
+    while i < len(rest):
+        t = rest[i]
+        if t in _FIND_GLOBAL_OPTIONS or re.fullmatch(r"-O\d", t):
+            i += 1
+        elif t == "-D":
+            i += 2
+        else:
+            break
+    while i < len(rest) and not (rest[i].startswith("-") or rest[i] in ("(", "!", ")")):
+        roots.append(rest[i])
+        i += 1
+    search = any(t in _FIND_SEARCH_PREDICATES for t in rest[i:])
+    return (roots or ["."]), search
+
+
+def _norm_components(path):
+    parts = [p for p in path.split("/") if p not in ("", ".")]
+    return (path.startswith("/"), tuple(parts))
+
+
+def _under(root, path):
+    r_abs, r = _norm_components(root)
+    p_abs, p = _norm_components(path)
+    return r_abs == p_abs and p[:len(r)] == r
+
+
+def _find_recount(text, paths):
+    """Recount, from the delivered text, how many paths it accounts for."""
+    expected = set(paths)
+    seen = set()
+    total = 0
+    try:
+        for ln in text.split("\n")[1:]:
+            if ln.startswith("* "):
+                t = shlex.split(ln[2:])
+                m = re.fullmatch(r"\((\d+)", t[1])
+                total += int(m.group(1))
+            elif ln.startswith("= "):
+                for name in shlex.split(ln[2:]):
+                    if name not in expected or name in seen:
+                        return False
+                    seen.add(name)
+                    total += 1
+            else:
+                t = shlex.split(ln)
+                label = t[0]
+                for name in t[1:]:
+                    full = label + (name[:-1] if name.endswith("/") else name)
+                    if full not in expected or full in seen:
+                        return False
+                    seen.add(full)
+                    total += 1
+    except (ValueError, IndexError, AttributeError):
+        return False
+    return total == len(paths)
+
+
+def _compress_find(output, command_str=None):
+    """Summarize a plain ``find`` path list, grouped by directory.
+
+    Small lists pass through. Otherwise every directory with few entries lists
+    every name once (its prefix stated once, not per path); larger directories
+    collapse to a count, a type breakdown and example names; with a plain
+    full-tree listing, noise trees (.git, node_modules, __pycache__ ...)
+    collapse whole. Noise is never collapsed when the find root is inside it or
+    when the command is a name/path search. The total path count is always
+    stated. Anything that is not plainly a path list is returned unchanged.
+    """
+    if _AMBIGUOUS_SEPARATORS_RE.search(output):
+        return output
+    paths = [ln for ln in output.split("\n") if ln]
+    if not _FIND_MIN_PATHS <= len(paths) <= _FIND_MAX_PATHS:
+        return output
+    if len(set(paths)) != len(paths):
+        return output
+    for p in paths:
+        # tab/control chars, leading blanks (uniq -c, columns), error lines,
+        # trailing or doubled slashes: not plainly a list of find paths.
+        if (len(p) > 1024 or p != p.strip() or p.startswith("find:")
+                or re.search(r"[\x00-\x1f\x7f]", p) or "//" in p
+                or (len(p) > 1 and p.endswith("/")) or re.match(r"^\S+\s{2,}\S", p)):
+            return output
+    roots, search_mode = _find_command_scope(command_str)
+    if roots is not None:
+        prefixes = [r.rstrip("/") or "/" for r in roots]
+        if not all(any(p == r or p.startswith(r if r.endswith("/") else r + "/")
+                       for r in prefixes) for p in paths):
+            return output
+    else:
+        forms = {("abs" if p.startswith("/") else "dot" if p.split("/")[0] == "." else "rel")
+                 for p in paths}
+        if len(forms) != 1:
+            return output
+    keep = _FIND_DIR_KEEP_SEARCH if search_mode else _FIND_DIR_KEEP
+
+    noise_roots = {}
+    groups = {}
+    special = []
+    dir_set = set()
+    for p in paths:
+        d = p
+        while "/" in d:  # every ancestor directory, even of a collapsed tree
+            d = d[:d.rfind("/")]
+            if not d:
+                break
+            dir_set.add(d)
+        if p in (".", "/") or (not p.startswith("/") and "/" not in p):
+            special.append(p)
+            continue
+        parts = p.split("/")
+        cut = None
+        if not search_mode:
+            for i, comp in enumerate(parts):
+                if comp in _FIND_NOISE_DIRS:
+                    cut = i
+                    break
+        if cut is not None:
+            root = "/".join(parts[:cut + 1])
+            if roots is not None and any(_under(root, r) for r in roots):
+                cut = None  # the find root is inside this noise tree
+        if cut is not None:
+            noise_roots.setdefault(root, []).append("/".join(parts[cut + 1:]))
+            continue
+        parent = p[:p.rfind("/")] or "/"
+        groups.setdefault(parent, []).append(parts[-1])
+
+    out = []
+    collapsed = False
+    if special:
+        out.append("= " + " ".join(_find_name(s) for s in special))
+    for parent in sorted(groups):
+        names = groups[parent]
+        label = parent if parent.endswith("/") else parent + "/"
+        disp = []
+        for n in names:
+            full = (parent if parent != "/" else "") + "/" + n
+            disp.append(n + "/" if full in dir_set else n)
+        if len(names) <= keep:
+            out.append(_find_name(label) + " " + " ".join(_find_name(n) for n in disp))
+        else:
+            collapsed = True
+            out.append(_find_summary(label, names))
+    for root in sorted(noise_roots):
+        collapsed = True
+        members = noise_roots[root]
+        named = [m for m in members if m]
+        out.append(_find_summary(root + "/", named, unit="path collapsed",
+                                 unit_many="paths collapsed", count=len(members)))
+    head = (f"[find: {_plural(len(paths), 'path', 'paths')} total, grouped by directory; "
+            f"a name ending in / has its own children listed in that directory's group.")
+    if special:
+        head += " A line starting with = lists top-level paths such as the search root itself."
+    if collapsed:
+        head += (" Lines starting with * are collapsed groups: they show a count, a type "
+                 "breakdown and a few example names only, not every entry.")
+    head += " The full original output is recoverable.]"
+    result = head + "\n" + "\n".join(out)
+    if not _find_recount(result, paths):
+        return output
+    return result
 
 
 def _compress_git_diff(output):
@@ -981,6 +1326,21 @@ def _compress_lint(output):
 # Pattern dispatch
 # ---------------------------------------------------------------------------
 
+_GIT_LOG_SHAPE_FLAGS = ("--oneline", "--format", "--pretty", "--porcelain", "--null",
+                        "--name-status", "--name-only", "--numstat", "--stat", "--shortstat",
+                        "--dirstat", "--summary", "--patch", "--graph", "--raw", "--cc",
+                        "--diff", "--show-signature", "--abbrev-commit", "--walk-reflogs",
+                        "--left-right", "--cherry", "-L")
+_CONTENT_SHAPED_PATTERNS = frozenset({"find", "git_log"})
+_PIPE_TRIMMERS = frozenset({"head", "tail", "sort"})
+_GIT_LOG_PATH_SEP = "--"
+_GIT_LOG_SHAPE_LETTERS = frozenset("zpuc")
+_GIT_LOG_SHAPE_EXACT = frozenset({"-p", "-u", "-z", "-c", "-m", "-s"})
+_FIND_FPRINT_PREFIX = "-fprint"
+_FIND_RAW_ARGS = frozenset({"-print0", "-printf", "-exec", "-execdir", "-ok", "-okdir",
+                            "-delete", "-ls", "-fls"})
+
+
 def _detect_pattern(command_str):
     """Detect which compression pattern to use based on command."""
     # U9: user exclude runs BEFORE built-in detection so a user can remove a
@@ -1012,14 +1372,56 @@ def _detect_pattern(command_str):
     # the first. shlex keeps a quoted pipe (`grep 'a|b'`) inside its token, so
     # only a real stage-separator `|` splits here. Only reached for read-only
     # pipelines (the PostToolUse hook gates on is_read_only_pipeline first).
+    if "|&" in tokens or ("|" not in tokens and any("|" in t for t in tokens)):
+        # `|&` is a pipe too, and `f|sed` is one when written without spaces.
+        # Re-tokenize with punctuation split off; quoted `|` stays inside its token.
+        try:
+            lexer = shlex.shlex(command_str, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            punct = list(lexer)
+            if "|" in punct or "|&" in punct:
+                tokens = ["|" if t == "|&" else t for t in punct]
+        except ValueError:
+            return None
+
     if "|" in tokens:
         pipes = [i for i, t in enumerate(tokens) if t == "|"]
         last_stage = tokens[pipes[-1] + 1:]
         first_stage = tokens[:pipes[0]]
+        later_stages, cur_stage = [], []
+        for t in tokens:
+            if t == "|":
+                later_stages.append(cur_stage)
+                cur_stage = []
+            else:
+                cur_stage.append(t)
+        later_stages.append(cur_stage)
+        first_p = _detect_pattern(" ".join(shlex.quote(t) for t in first_stage)) if first_stage else None
+        if first_p in _CONTENT_SHAPED_PATTERNS and all(
+                next((t for t in st if "=" not in t), "") in _PIPE_TRIMMERS
+                for st in later_stages[1:]):
+            return first_p  # `| head`, `| tail`, `| sort` keep the list shape
         for stage in (last_stage, first_stage):
             if stage:
                 p = _detect_pattern(" ".join(shlex.quote(t) for t in stage))
                 if p is not None:
+                    if stage is first_stage and p in _CONTENT_SHAPED_PATTERNS:
+                        # find / git log output is summarized only when every
+                        # later stage merely trims or orders it. cut, uniq,
+                        # xargs, awk, sed, wc, stat ... change the content, so
+                        # the result is no longer a path list / commit log.
+                        stages, cur_stage = [], []
+                        for t in tokens:
+                            if t == "|":
+                                stages.append(cur_stage)
+                                cur_stage = []
+                            else:
+                                cur_stage.append(t)
+                        stages.append(cur_stage)
+                        for later in stages[1:]:
+                            name = next((t for t in later if "=" not in t), "")
+                            if name not in _PIPE_TRIMMERS:
+                                return "find_raw" if p.startswith("find") else "git_log_basic"
                     return p
         return None
 
@@ -1051,6 +1453,18 @@ def _detect_pattern(command_str):
                         return None
             return "git_status"
         elif subcmd in ("log",):
+            # Only the default human-readable format is summarized. Anything
+            # that switches the output shape (custom/one-line formats, NUL
+            # separation, porcelain, name/stat listings, patches, graph) keeps
+            # the light cleanup so no machine-readable line is rewritten.
+            for arg in tokens[cmd_start + 2:]:
+                if arg == _GIT_LOG_PATH_SEP:
+                    break
+                if arg.startswith(_GIT_LOG_SHAPE_FLAGS) or arg in _GIT_LOG_SHAPE_EXACT:
+                    return "git_log_basic"
+                if arg.startswith("-") and not arg.startswith("--") and (
+                        set(arg[1:]) & _GIT_LOG_SHAPE_LETTERS):
+                    return "git_log_basic"
             return "git_log"
         elif subcmd in ("diff", "show"):
             return "git_diff"
@@ -1108,7 +1522,13 @@ def _detect_pattern(command_str):
         return "npm_install"
     elif cmd == "cargo" and subcmd == "build":
         return "npm_install"
-    elif cmd in ("ls", "find"):
+    elif cmd == "find":
+        # Machine-oriented or acting find (NUL/printf/exec/delete/ls) is never
+        # rewritten; a plain path list gets the directory-grouping summarizer.
+        if any(a in _FIND_RAW_ARGS or a.startswith(_FIND_FPRINT_PREFIX) for a in tokens[cmd_start + 1:]):
+            return "find_raw"
+        return "find"
+    elif cmd == "ls":
         return "ls"
     # v5.1 lint handlers
     elif cmd in ("eslint", "flake8", "pylint", "shellcheck", "rubocop"):
@@ -1566,6 +1986,9 @@ def _compress_search_results(output):
 _PATTERN_HANDLERS = {
     "git_status": _compress_git_status,
     "git_log": _compress_git_log,
+    "git_log_basic": _compress_git_log_basic,
+    "find": _compress_find,
+    "find_raw": lambda output: output,
     "git_diff": _compress_git_diff,
     "pytest": _compress_pytest,
     "jest": _compress_jest,
@@ -1592,6 +2015,9 @@ _PATTERN_HANDLERS = {
 _COMPRESS_FEATURE_MAP = {
     "git_status": "bash_compress_git",
     "git_log": "bash_compress_git",
+    "git_log_basic": "bash_compress_git",
+    "find": "bash_compress_ls",
+    "find_raw": "bash_compress_ls",
     "git_diff": "bash_compress_git",
     "pytest": "bash_compress_pytest",
     "jest": "bash_compress_jest",
@@ -1779,7 +2205,17 @@ def compress(command_str, raw_output, returncode=0, stderr=""):
     # summarizer, or the model re-runs a narrower query and spends back the
     # tokens we just saved. Both feed the shared re-injection path below (capped
     # at _MAX_REINJECTED_LINES, so a needle-dense log still compresses).
-    preserved_lines = _find_preserved_lines(cleaned) | _find_distinctive_lines(cleaned)
+    # The git log / find summarizers keep every hash and path themselves, so
+    # re-injecting "rare token" lines would only paste raw "commit <hash>" lines
+    # back; they keep only the credential/error scan.
+    _summarizer_pattern = False
+    try:
+        _summarizer_pattern = _detect_pattern(command_str) in ("git_log", "find")
+    except Exception:
+        pass
+    preserved_lines = _find_preserved_lines(cleaned)
+    if not _summarizer_pattern:
+        preserved_lines = preserved_lines | _find_distinctive_lines(cleaned)
 
     # Detect pattern
     pattern = _detect_pattern(command_str)
@@ -1803,7 +2239,10 @@ def compress(command_str, raw_output, returncode=0, stderr=""):
         if handler is None:
             return cleaned
         try:
-            compressed = handler(cleaned)
+            if pattern == "find":
+                compressed = handler(cleaned, command_str)
+            else:
+                compressed = handler(cleaned)
         except Exception:
             return cleaned  # fail open
 
@@ -1828,6 +2267,8 @@ def compress(command_str, raw_output, returncode=0, stderr=""):
                 break
             if line_idx < len(original_lines):
                 preserved_line = original_lines[line_idx]
+                if _summarizer_pattern and preserved_line.strip() in compressed:
+                    continue  # already carried by a summary line
                 if preserved_line not in compressed_line_set:
                     appended.append(preserved_line)
                     compressed_line_set.add(preserved_line)

@@ -62,7 +62,7 @@ VALID_HANDLERS = frozenset({
     "git_status", "git_log", "git_diff", "pytest", "jest", "npm_install",
     "ls", "lint", "logs", "tree", "progress", "list", "build", "sqlite3",
     "disk_stats", "docker_output", "json", "csv", "stack_trace", "k8s",
-    "cloud_cli", "search_results",
+    "cloud_cli", "search_results", "git_log_basic", "find", "find_raw",
 })
 
 # Commands that are NEVER safe to add (shell interpreters, privilege

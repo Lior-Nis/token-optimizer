@@ -754,3 +754,308 @@ def test_uninstall_removes_the_config_backup():
     _quiet(d.install, mode='auto')
     _quiet(d.uninstall)
     assert not (d.state.data_dir() / 'devin-config-backup.json').exists()
+
+
+# ── State checks race os.replace unless made under the writers' lock ────────
+# A stat racing os.replace can return the replaced inode with st_nlink 0
+# (Linux and macOS both do), which private_path() refuses as a hard-link
+# hazard. Each file below is only ever replaced under one lock, so every check
+# of it must sit inside that lock. These tests report st_nlink 0 for a file
+# whenever its lock is not held by this process, as a rival writer could be
+# replacing it at that moment.
+
+def _replaced_outside(monkeypatch, lock, files, held_by=None):
+    import fcntl
+    held = set()
+    real_flock, real_lstat = fcntl.flock, Path.lstat
+    held_by = held_by if held_by is not None else fcntl.LOCK_SH | fcntl.LOCK_EX
+
+    def flock(fd, operation):
+        real_flock(fd, operation)
+        fd = fd if isinstance(fd, int) else fd.fileno()
+        if operation & held_by:
+            held.add(fd)
+        elif operation & fcntl.LOCK_UN:
+            held.discard(fd)
+
+    def holding():
+        try:
+            inode = os.stat(lock).st_ino
+        except FileNotFoundError:
+            return False
+        for fd in list(held):
+            try:
+                if os.fstat(fd).st_ino == inode:
+                    return True
+            except OSError:
+                pass
+            held.discard(fd)
+        return False
+
+    def lstat(self):
+        info = real_lstat(self)
+        if self in files and not holding():
+            info = os.stat_result((info.st_mode, info.st_ino, info.st_dev, 0, info.st_uid,
+                                   info.st_gid, info.st_size, info.st_atime, info.st_mtime, info.st_ctime))
+        return info
+
+    monkeypatch.setattr(fcntl, 'flock', flock)
+    monkeypatch.setattr(Path, 'lstat', lstat)
+
+
+def _hook_in_process(monkeypatch, cwd, tool_use_id='toolu_race'):
+    import io
+    import types
+    import devin_compress as c
+    payload = json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'exec',
+                          'tool_input': {'command': 'grep -rn match .'}, 'cwd': str(cwd),
+                          'tool_use_id': tool_use_id, 'session_id': 'sess-1'}).encode()
+    monkeypatch.setattr(sys, 'stdin', types.SimpleNamespace(buffer=io.BytesIO(payload)))
+    assert c._hook('pre-tool-use') == 0
+    import devin_state as s
+    bindings = s.data_dir() / 'hook-bindings.json'
+    return tool_use_id in (json.loads(bindings.read_text()) if bindings.exists() else {})
+
+
+def test_hook_checks_bindings_only_under_their_lock(tmp_path, monkeypatch, capfd):
+    import fcntl
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    bindings = s.data_dir() / 'hook-bindings.json'
+    assert _hook_in_process(monkeypatch, tmp_path, 'toolu_first')  # the file now exists
+    _replaced_outside(monkeypatch, s.data_dir() / 'hook-bindings.json.lock', {bindings}, fcntl.LOCK_EX)
+    assert _hook_in_process(monkeypatch, tmp_path)
+
+
+def test_hook_checks_install_state_only_under_the_install_lock(tmp_path, monkeypatch, capfd):
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    data = s.data_dir()
+    _replaced_outside(monkeypatch, data / 'install.lock', {data / 'consent.json', data / 'hooks.json'})
+    assert _hook_in_process(monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize('leaf', ['hooks.json', 'consent.json'])
+def test_runner_checks_install_state_only_under_the_install_lock(tmp_path, monkeypatch, capfd, leaf):
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    work = tmp_path / 'w'
+    work.mkdir()
+    for index in range(30):
+        (work / ('m%02d.log' % index)).write_text('match line ok\n' * 50)
+    monkeypatch.chdir(work)
+    # Never let a fallback exec replace the test process.
+    monkeypatch.setattr(c, '_exec_original', lambda argv: 'exec_original')
+    saved = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    capfd.readouterr()
+    _replaced_outside(monkeypatch, s.data_dir() / 'install.lock', {s.data_dir() / leaf})
+    try:
+        code = c._run(['--session', 's', '--', 'grep', '-rn', 'match', '.'])
+    finally:
+        for signum, handler in saved.items():
+            signal.signal(signum, handler)
+    out = capfd.readouterr().out
+    assert code == 0 and out.startswith('[Token Optimizer capture ID:'), (code, out[:200])
+    index = json.loads((s.data_dir() / 'auto-captures.json').read_text())
+    assert [e[0] for e in index] == [p.name for p in (s.data_dir() / 'captures').iterdir()]
+
+
+@pytest.mark.parametrize('command', ['prepare', 'seal', 'recover', 'filter'])
+def test_manual_commands_check_consent_only_under_the_install_lock(tmp_path, monkeypatch, capfd, command):
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto()
+    capture = s.prepare_capture()
+    (capture / 'stdout').write_bytes(b'repeated log line\n' * 1000)
+    if command in ('recover', 'filter'):
+        c.seal_capture(capture, 0)
+    capfd.readouterr()
+    argv = {'prepare': ['prepare'],
+            'seal': ['seal', '--capture', str(capture), '--exit-code', '0'],
+            'recover': ['recover', '--capture-id', capture.name, '--exit-code', '0'],
+            'filter': ['--stdout', str(capture / 'stdout'), '--stderr', str(capture / 'stderr'),
+                       '--exit-code', '0', '--session', 's']}[command]
+    monkeypatch.setenv('TOKEN_OPTIMIZER_RUNTIME', 'devin')
+    pipe = signal.getsignal(signal.SIGPIPE)
+    _replaced_outside(monkeypatch, s.data_dir() / 'install.lock', {s.data_dir() / 'consent.json'})
+    try:
+        code = c.main(argv)
+    finally:
+        signal.signal(signal.SIGPIPE, pipe)
+    assert code == 0, capfd.readouterr().err
+
+
+# ── A stuck installer never freezes a hook or a run ─────────────────────────
+
+_HOLD_INSTALL_LOCK = r'''
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print('locked', flush=True)
+time.sleep(float(sys.argv[2]))
+'''
+
+
+def _hold_install_lock(seconds):
+    import devin_state as s
+    holder = subprocess.Popen([sys.executable, '-I', '-c', _HOLD_INSTALL_LOCK,
+                               str(s.data_dir() / 'install.lock'), str(seconds)],
+                              stdout=subprocess.PIPE)
+    assert holder.stdout.readline() == b'locked\n'
+    return holder
+
+
+def _grep_workdir(tmp_path):
+    work = tmp_path / 'w'
+    work.mkdir()
+    for index in range(30):
+        (work / ('m%02d.log' % index)).write_text('match line ok\n' * 50)
+    return work
+
+
+def test_hook_passes_the_command_through_while_an_install_holds_its_lock(tmp_path):
+    import time
+    _install_auto(allow=('Exec(grep)',))
+    holder = _hold_install_lock(60)
+    try:
+        started = time.monotonic()
+        decision = _call('pre', 'grep -rn match .', cwd=_grep_workdir(tmp_path))  # asserts exit 0
+        elapsed = time.monotonic() - started
+    finally:
+        holder.kill(); holder.wait()
+    assert decision is None and elapsed < 5, (decision, elapsed)
+
+
+def test_runner_refuses_at_once_while_an_install_holds_its_lock(tmp_path):
+    """The runner's gate cannot check the attestation while an install holds
+    install.lock; it refuses (126, nothing run) instead of waiting."""
+    import time
+    import devin_install as d
+    _install_auto(allow=('Exec(grep)',))
+    work = _grep_workdir(tmp_path)
+    entry = str(d.state.data_dir() / 'plugin/devin_compress.py')
+    holder = _hold_install_lock(60)
+    try:
+        started = time.monotonic()
+        run = subprocess.run([sys.executable, '-I', entry, 'run', '--session', 's', '--', 'grep', '-rn', 'match', '.'],
+                             cwd=work, capture_output=True, timeout=30)
+        elapsed = time.monotonic() - started
+    finally:
+        holder.kill(); holder.wait()
+    assert elapsed < 5, elapsed
+    assert run.returncode == 126 and run.stdout == b'', run
+    assert b'an install is in progress' in run.stderr
+    captures = d.state.data_dir() / 'captures'
+    assert not captures.exists() or list(captures.iterdir()) == []
+
+
+def test_hook_proceeds_once_the_install_releases_its_lock_mid_wait(tmp_path):
+    import time
+    _install_auto(allow=('Exec(grep)',))
+    holder = _hold_install_lock(0.8)
+    try:
+        started = time.monotonic()
+        decision = _call('pre', 'grep -rn match .', cwd=_grep_workdir(tmp_path))
+        elapsed = time.monotonic() - started
+    finally:
+        holder.wait()
+    assert decision is not None and 'updatedInput' in decision['hookSpecificOutput']
+    assert 0.5 < elapsed < 5, elapsed
+
+
+def test_runner_proceeds_once_the_install_releases_its_lock_mid_wait(tmp_path):
+    import time
+    import devin_install as d
+    _install_auto(allow=('Exec(grep)',))
+    work = _grep_workdir(tmp_path)
+    entry = str(d.state.data_dir() / 'plugin/devin_compress.py')
+    holder = _hold_install_lock(0.8)
+    try:
+        started = time.monotonic()
+        run = subprocess.run([sys.executable, '-I', entry, 'run', '--session', 's', '--', 'grep', '-rn', 'match', '.'],
+                             cwd=work, capture_output=True, timeout=30)
+        elapsed = time.monotonic() - started
+    finally:
+        holder.wait()
+    assert run.returncode == 0 and run.stdout.startswith(b'[Token Optimizer capture ID:'), run
+    assert 0.5 < elapsed < 5, elapsed
+
+
+def _busy_at(monkeypatch, module, entry):
+    """install_settled() raises InstallBusy on its entry-th use, as a stuck
+    install would after the bounded wait."""
+    import contextlib
+    import devin_state as s
+    real, calls = module.install_settled, []
+
+    @contextlib.contextmanager
+    def settled():
+        calls.append(1)
+        if len(calls) == entry:
+            raise s.InstallBusy('a Token Optimizer install is still in progress')
+        with real():
+            yield
+    monkeypatch.setattr(module, 'install_settled', settled)
+    return calls
+
+
+@pytest.mark.parametrize('entry,expected', [(1, 'refused'), (2, 'exec_original'), (3, 'raw')])
+def test_runner_takes_its_existing_path_at_every_busy_site(tmp_path, monkeypatch, capfd, entry, expected):
+    """Gate: refuse (126, nothing run). Preparation: run the original command
+    unfiltered. Seal/filter: deliver the captured bytes raw and remove them."""
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto(allow=('Exec(grep)',))
+    work = _grep_workdir(tmp_path)
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(c, '_exec_original', lambda argv: 'exec_original')
+    raw = subprocess.run(['grep', '-rn', 'match', '.'], cwd=work, capture_output=True).stdout
+    capfd.readouterr()
+    _busy_at(monkeypatch, c, entry)
+    saved = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        code = c._run(['--session', 's', '--', 'grep', '-rn', 'match', '.'])
+    finally:
+        for signum, handler in saved.items():
+            signal.signal(signum, handler)
+    out = capfd.readouterr()
+    captures = s.data_dir() / 'captures'
+    left = list(captures.iterdir()) if captures.exists() else []
+    if expected == 'refused':
+        assert code == 126 and 'an install is in progress' in out.err
+    elif expected == 'exec_original':
+        assert code == 'exec_original'
+    else:
+        assert code == 0 and out.out.encode() == raw and out.err == ''
+    assert left == []
+
+
+@pytest.mark.parametrize('command', ['prepare', 'seal', 'recover', 'filter'])
+def test_manual_commands_refuse_while_an_install_is_busy(tmp_path, monkeypatch, capfd, command):
+    import signal
+    import devin_compress as c
+    import devin_state as s
+    _install_auto()
+    capture = s.prepare_capture()
+    (capture / 'stdout').write_bytes(b'repeated log line\n' * 1000)
+    if command in ('recover', 'filter'):
+        c.seal_capture(capture, 0)
+    argv = {'prepare': ['prepare'],
+            'seal': ['seal', '--capture', str(capture), '--exit-code', '0'],
+            'recover': ['recover', '--capture-id', capture.name, '--exit-code', '0'],
+            'filter': ['--stdout', str(capture / 'stdout'), '--stderr', str(capture / 'stderr'),
+                       '--exit-code', '0', '--session', 's']}[command]
+    monkeypatch.setenv('TOKEN_OPTIMIZER_RUNTIME', 'devin')
+    capfd.readouterr()
+    _busy_at(monkeypatch, c, 1)
+    pipe = signal.getsignal(signal.SIGPIPE)
+    try:
+        code = c.main(argv)
+    finally:
+        signal.signal(signal.SIGPIPE, pipe)
+    err = capfd.readouterr().err
+    assert code == 2 and 'install is still in progress' in err, err

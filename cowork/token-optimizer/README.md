@@ -250,7 +250,7 @@ Most token tools compress command output. That covers 15-25% of your context. Th
 
 | Compression surface | Token Optimizer | Headroom | RTK | Boost |
 |---|---|---|---|---|
-| **Bash / command output** (git, tests, lint, build, logs) | 🟢 111 commands across 22 pattern families, credential-safe; 564 → 115 tokens on a pytest run | 🟢 SmartCrusher, CodeCompressor, Kompress-v2 | 🟢 100+ filters | 🟢 Command-aware filters |
+| **Bash / command output** (git, tests, lint, build, logs) | 🟢 113 commands across 25 pattern families, credential-safe; 564 → 115 tokens on a pytest run | 🟢 SmartCrusher, CodeCompressor, Kompress-v2 | 🟢 100+ filters | 🟢 Command-aware filters |
 | **Search / grep output** | 🟢 Top hits plus a count; 500 lines → 20 | 🔴 | 🔴 | — |
 | **Tabular / JSON output** (jq, yq, csvtool, mlr) | 🟢 Value-preserving columnar | 🟢 SmartCrusher | 🔴 | — |
 | **File re-reads, delta mode** | 🟢 Diff only; 2,000-token re-read → ~50 | 🔴 | 🔴 | — |
