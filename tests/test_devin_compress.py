@@ -492,3 +492,38 @@ def test_short_status_keeps_its_file_names(tmp_path, monkeypatch):
     assert _strip_id(named.stdout) == _strip_id(generic.stdout)
     assert len(_payload(named)) > 42
     assert b'branch: ?' not in named.stdout
+
+
+def test_auto_index_is_checked_only_under_its_lock(tmp_path, monkeypatch):
+    """Every writer replaces auto-captures.json while holding its flock, and a
+    stat racing a rival's os.replace can return the replaced inode with
+    st_nlink 0 (Linux and macOS both do). Checked before taking the lock, the
+    index was refused as owner-only state: the compressed run had already
+    delivered, so its kept capture silently never reached the index."""
+    import fcntl
+    import json
+    import devin_compress as d
+    import devin_state as s
+    monkeypatch.setenv('HOME', str(tmp_path)); s.enable_consent()
+    first, second = 'capture-' + 'a' * 32, 'capture-' + 'b' * 32
+    d._prune_auto_captures(first)
+    index = s.data_dir() / d.AUTO_INDEX
+    locked = []
+    real_flock, real_lstat = fcntl.flock, Path.lstat
+
+    def flock(fd, operation):
+        real_flock(fd, operation)
+        locked.append(operation & fcntl.LOCK_EX)
+
+    def lstat(self):
+        info = real_lstat(self)
+        if self == index and not any(locked):
+            # Outside the lock a rival may be replacing the index right now.
+            info = os.stat_result((info.st_mode, info.st_ino, info.st_dev, 0, info.st_uid,
+                                   info.st_gid, info.st_size, info.st_atime, info.st_mtime, info.st_ctime))
+        return info
+
+    monkeypatch.setattr(fcntl, 'flock', flock)
+    monkeypatch.setattr(Path, 'lstat', lstat)
+    d._prune_auto_captures(second)
+    assert [name for name, _ in json.loads(index.read_text())] == [first, second]

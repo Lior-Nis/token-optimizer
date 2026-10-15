@@ -541,10 +541,14 @@ def _prune_auto_captures(keep: str | None) -> None:
     from devin_state import data_dir, private_path
     import fcntl
     import time
-    index = private_path(data_dir() / AUTO_INDEX)
     lock = os.open(data_dir() / (AUTO_INDEX + '.lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        # Check the index only while holding the lock every writer replaces it
+        # under: a stat racing a rival's os.replace can return the replaced
+        # inode with st_nlink 0, and refusing that would leave a kept capture
+        # out of the index.
+        index = private_path(data_dir() / AUTO_INDEX)
         _prune_locked(index, keep, now=time.time())
     finally:
         os.close(lock)
