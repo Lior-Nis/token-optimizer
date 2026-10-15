@@ -69,6 +69,12 @@ def test_measure_variant_redacts_feature(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "home" / ".claude"))
     import measure
+    # measure binds TRENDS_DB / SNAPSHOT_DIR at import time. If another test
+    # imported it first, they point at the real user DB, and
+    # _resolve_session_model then queries it through the fake connection below.
+    monkeypatch.setattr(measure, "SNAPSHOT_DIR", tmp_path / "snap")
+    monkeypatch.setattr(measure, "TRENDS_DB", tmp_path / "snap" / "trends.db")
+    monkeypatch.setattr(measure, "_RESOLVED_MODEL_CACHE", {})
     captured = {}
 
     class _FakeConn:
