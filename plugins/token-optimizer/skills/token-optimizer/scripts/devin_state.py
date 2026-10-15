@@ -114,13 +114,25 @@ def private_path(path: Path, *, directory=False, create=False) -> Path:
     return path
 
 
+class InstallBusy(OSError):
+    """install.lock stayed exclusively held for the whole bounded wait. An
+    OSError, so every caller takes its existing fail-open or refuse path."""
+
+
+INSTALL_WAIT_SECONDS = 2.0
+
+
 @contextlib.contextmanager
 def install_settled():
     """Hold install.lock shared. Install, refresh and uninstall replace
     consent.json, install.json, the payload and hooks.json only while holding
     it exclusively, and a stat racing os.replace can return the replaced inode
     with st_nlink 0, so checks of those files belong inside this hold. Before
-    any install there is no lock and nothing to replace."""
+    any install there is no lock and nothing to replace.
+
+    The wait is bounded: a hung or stopped installer must never freeze a hook
+    or a run, so after INSTALL_WAIT_SECONDS this raises InstallBusy."""
+    import errno
     import fcntl
     try:
         lock = data_dir() / 'install.lock'
@@ -130,7 +142,17 @@ def install_settled():
         fd = -1  # the gated check reports any real problem itself
     try:
         if fd >= 0:
-            fcntl.flock(fd, fcntl.LOCK_SH)
+            deadline = time.monotonic() + INSTALL_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                        raise
+                if time.monotonic() >= deadline:
+                    raise InstallBusy('a Token Optimizer install is still in progress')
+                time.sleep(0.02)
         yield
     finally:
         if fd >= 0:

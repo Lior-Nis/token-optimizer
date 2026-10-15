@@ -88,7 +88,7 @@ if not _source_development:
 
 
 try:
-    from devin_state import consent_ok, install_settled, record
+    from devin_state import InstallBusy, consent_ok, install_settled, record
 except (ImportError, SyntaxError) as _initial_error:
     _initial_message = 'Token Optimizer: bootstrap manifest gate refused: ' + str(_initial_error) + '. Originals remain unchanged.'
     if __name__ == '__main__':
@@ -622,6 +622,12 @@ def _run(args) -> int:
             _note('Token Optimizer: command is not eligible for the output filter; it was not run.')
             return 126
         session = hooks.session_label(args[1])
+    except InstallBusy:
+        # Attestation cannot be checked while an install holds its lock, and an
+        # unchecked wrapper must never become a general runner: refuse, at once.
+        _note('Token Optimizer: an install is in progress, so eligibility could not be checked; '
+              'the command was not run. Retry once the install finishes.')
+        return 126
     except Exception:
         _note('Token Optimizer: eligibility check unavailable; the command was not run.')
         return 126
