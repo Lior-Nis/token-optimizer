@@ -6,6 +6,8 @@
 - `find` path lists now compress: grouped by directory with every name kept for small directories and a count, type breakdown and example names for larger ones. In a full-tree listing the `.git`, `node_modules` and `__pycache__` trees collapse to a count with examples; they are never collapsed when the find root is inside them or the command is a `-name`/`-path` search. The total path count is always stated and absolute roots keep their real prefix. `find . -type f` on this repo drops from about 23,700 to 4,000 estimated tokens.
 - Summaries apply only when `find` or `git log` is the command, or is followed only by `head`, `tail` or `sort` (through `|` or `|&`, with or without spaces). Pipelines through `cut`, `uniq`, `xargs`, `awk`, `sed` and similar, `find` with `-print0`, `-printf`, `-exec`, `-delete`, `-ls` or `-fprint`, error lines, names containing newlines or other ambiguous separators, and lists over 50,000 paths are delivered untouched. Failed commands still pass raw.
 - Claude Code and Devin recover the full original exactly as before (archive pointer and capture ID).
+- Devin automatic mode is steadier under load: when many commands finished at once, a compressed result could miss the cleanup list and stay on disk until `uninstall --purge`. Checks of Token Optimizer's own state files now run under the same lock their writers hold, a failed capture preparation leaves nothing behind, and a cleanup failure is reported instead of swallowed.
+- While an install, refresh or uninstall is running, Devin hooks wait at most 2 seconds for it, then let the command run normally without compression; nothing hangs.
 
 ## [5.13.45] - 2026-10-14
 
