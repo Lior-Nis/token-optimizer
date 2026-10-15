@@ -22,7 +22,8 @@ The compressor has a dedicated handler per command family, so each kind of outpu
 
 | Family | Covers | How it compresses |
 |---|---|---|
-| Version control | `git status`, `git diff`, `git log` | Counts and groups instead of full listings |
+| Version control | `git status`, `git diff`, `git log` | Counts and groups instead of full listings; default-format `git log` becomes one line per commit |
+| Path lists | `find` | Grouped by directory with counts; large and noise directories collapsed; total always stated |
 | Test runners | `pytest`, plus cypress, playwright, mocha, karma routed through the same path | Failures and summary, passing cases collapsed |
 | Lint | eslint, ruff, flake8, shellcheck, rubocop, golangci-lint | Grouped by rule code |
 | Listings | `ls`, `pip list`, `npm ls`, `docker ps` | Top-N with a tail marker |

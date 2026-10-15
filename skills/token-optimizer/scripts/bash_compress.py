@@ -346,8 +346,8 @@ def _compress_git_status(output):
     return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
 
 
-def _compress_git_log(output):
-    """Compress git log: keep hash + message, strip noise."""
+def _compress_git_log_basic(output):
+    """Light git log cleanup for non-default formats: strip GPG/merge noise only."""
     lines = output.strip().splitlines()
     result = []
     for line in lines:
@@ -363,6 +363,210 @@ def _compress_git_log(output):
         result.append(stripped)
     compressed = "\n".join(result)
     return compressed if compressed else output
+
+
+_GIT_LOG_COMMIT_RE = re.compile(r"^commit ([0-9a-f]{40}|[0-9a-f]{64})(?: \((.*)\))?$")
+_GIT_LOG_HEADER_RE = re.compile(r"^(Author|Date|Merge|Commit|CommitDate|AuthorDate):\s*(.*)$")
+_GIT_LOG_TRAILER_RE = re.compile(
+    r"^(Signed-off-by|Co-authored-by|Reviewed-by|Acked-by|Tested-by|Reported-by|"
+    r"Suggested-by|Helped-by|Cc|Change-Id|Fixes|Closes|Refs?)\s*:", re.IGNORECASE)
+_GIT_LOG_MIN_COMMITS = 5
+_GIT_LOG_SHORT = 10
+
+
+def _git_log_date(raw):
+    """'Thu Oct 15 12:39:24 2026 +0300' -> '2026-10-15 12:39 +0300' (raw on any doubt)."""
+    try:
+        import datetime as _dt
+        parts = raw.split()
+        stamp = _dt.datetime.strptime(" ".join(parts[:5]), "%a %b %d %H:%M:%S %Y")
+        tz = parts[5] if len(parts) > 5 and re.fullmatch(r"[+-]\d{4}", parts[5]) else ""
+        return (stamp.strftime("%Y-%m-%d %H:%M") + (" " + tz if tz else "")).strip()
+    except Exception:
+        return raw.strip()
+
+
+def _compress_git_log(output):
+    """Summarize default-format ``git log``: one line per commit.
+
+    Keeps, for EVERY commit: short hash, date, author name, subject (plus
+    decorations and a merge marker). Bodies, trailers (Signed-off-by,
+    Co-authored-by ...) and author emails are condensed to a count. Anything
+    that is not cleanly parseable default-format output (patches, --stat,
+    graph, custom formats) falls back to the light cleanup, and the result is
+    only used if the number of commits is provably unchanged.
+    """
+    lines = output.splitlines()
+    commits = []
+    cur = None
+    for line in lines:
+        m = _GIT_LOG_COMMIT_RE.match(line)
+        if m:
+            cur = {"hash": m.group(1), "deco": m.group(2), "hdr": {}, "msg": []}
+            commits.append(cur)
+            continue
+        if cur is None:
+            if line.strip():
+                return _compress_git_log_basic(output)  # preamble: not default format
+            continue
+        if not cur["msg"] and not cur.get("in_msg"):
+            hm = _GIT_LOG_HEADER_RE.match(line)
+            if hm:
+                cur["hdr"][hm.group(1)] = hm.group(2)
+                continue
+            if not line.strip():
+                cur["in_msg"] = True
+                continue
+            return _compress_git_log_basic(output)  # unknown header shape
+        # message region: default format indents every message line by 4 spaces
+        if line.strip() and not line.startswith("    "):
+            return _compress_git_log_basic(output)  # patch/stat/graph content
+        cur["msg"].append(line[4:] if line.startswith("    ") else line)
+        cur["in_msg"] = True
+    if len(commits) < _GIT_LOG_MIN_COMMITS:
+        return _compress_git_log_basic(output)
+
+    out = []
+    for c in commits:
+        hdr = c["hdr"]
+        if "Date" not in hdr and "AuthorDate" not in hdr:
+            return _compress_git_log_basic(output)
+        author = re.sub(r"\s*<[^>]*>\s*$", "", hdr.get("Author", "?")).strip() or "?"
+        date = _git_log_date(hdr.get("Date") or hdr.get("AuthorDate", ""))
+        msg = [m for m in c["msg"]]
+        while msg and not msg[0].strip():
+            msg.pop(0)
+        subject = msg[0].strip() if msg else "(no message)"
+        rest = [m for m in msg[1:] if m.strip()]
+        trailers = [m for m in rest if _GIT_LOG_TRAILER_RE.match(m.strip())]
+        body = len(rest) - len(trailers)
+        flags = []
+        if "Merge" in hdr:
+            flags.append("merge")
+        if body:
+            flags.append(f"+{body} body lines")
+        if trailers:
+            flags.append(f"+{len(trailers)} trailers")
+        # Co-authors are attribution an agent may need: keep the names.
+        coauth = [re.sub(r"\s*<[^>]*>\s*$", "", t.split(":", 1)[1]).strip()
+                  for t in trailers if t.strip().lower().startswith("co-authored-by")]
+        if coauth:
+            flags.append("co-authors: " + ", ".join(coauth[:3]))
+        line = f"{c['hash'][:_GIT_LOG_SHORT]} {date} {author} | {subject}"
+        if c["deco"]:
+            line += f" ({c['deco']})"
+        if flags:
+            line += " [" + "; ".join(flags) + "]"
+        out.append(line)
+    if len(out) != len(commits) or len(commits) != len(_GIT_LOG_HASH_COUNT_RE.findall(output)):
+        return _compress_git_log_basic(output)
+    header = (f"[git log: {len(commits)} commits, one line each: "
+              f"{_GIT_LOG_SHORT}-char hash, date, author, subject. "
+              f"Bodies, trailers and emails condensed to counts.]")
+    return header + "\n" + "\n".join(out)
+
+
+_GIT_LOG_HASH_COUNT_RE = re.compile(r"(?m)^commit (?:[0-9a-f]{40}|[0-9a-f]{64})\b")
+
+
+_FIND_MIN_PATHS = 40          # fewer paths pass through unchanged
+_FIND_DIR_KEEP = 8            # a directory with <= this many entries lists all names
+_FIND_NOISE_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".next", ".gradle", "target", ".idea",
+})
+
+
+def _find_ext(name):
+    base = name.rsplit("/", 1)[-1]
+    if "." in base.lstrip("."):
+        return "*." + base.rsplit(".", 1)[-1]
+    return "(no ext)"
+
+
+def _find_name(name):
+    return shlex.quote(name) if re.search(r"[\s'\"\\$`]", name) else name
+
+
+def _find_summary(label, names, with_examples=True, unit="entries"):
+    exts = {}
+    for n in names:
+        exts[_find_ext(n)] = exts.get(_find_ext(n), 0) + 1
+    ranked = sorted(exts.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown = ", ".join(f"{e} x{k}" for e, k in ranked[:4])
+    if len(ranked) > 4:
+        shown += f", {len(ranked) - 4} other types"
+    text = f"{label} ({len(names)} {unit}: {shown})"
+    if with_examples:
+        text += " e.g. " + " ".join(_find_name(n) for n in names[:3])
+    return text
+
+
+def _compress_find(output):
+    """Summarize a plain ``find`` path list, grouped by directory.
+
+    Small lists pass through. Otherwise: every directory with few entries
+    lists every name once (the directory prefix is stated once, not per
+    path); large homogeneous directories collapse to a count, a type
+    breakdown and a few examples; noise trees (.git, node_modules,
+    __pycache__ ...) collapse whole. The total path count is always stated.
+    Anything that is not plainly a path list is returned unchanged.
+    """
+    lines = output.splitlines()
+    paths = [ln for ln in lines if ln]
+    if len(paths) < _FIND_MIN_PATHS:
+        return output
+    if any(("\t" in p or "\x00" in p or len(p) > 1024 or p != p.strip("\r")) for p in paths):
+        return output
+    if len(set(paths)) != len(paths):
+        return output
+    # Plainly a path list: every line is rooted the same way (./x, /x, ~/x, or a
+    # bare relative path). Reject anything that looks like columns or prose.
+    if sum(1 for p in paths if re.match(r"^\S+\s{2,}\S", p)) > 0:
+        return output
+
+    noise_roots = {}      # collapsed noise prefix -> [relative paths]
+    groups = {}           # parent dir -> [names]
+    dir_set = set()
+    for p in paths:
+        parts = p.split("/")
+        cut = None
+        for i, comp in enumerate(parts[:-1]):
+            if comp in _FIND_NOISE_DIRS:
+                cut = i
+                break
+        if cut is None and parts[-1] in _FIND_NOISE_DIRS:
+            cut = len(parts) - 1
+        if cut is not None:
+            root = "/".join(parts[:cut + 1])
+            noise_roots.setdefault(root, []).append("/".join(parts[cut + 1:]))
+            continue
+        parent = "/".join(parts[:-1])
+        groups.setdefault(parent, []).append(parts[-1])
+        for i in range(1, len(parts)):
+            dir_set.add("/".join(parts[:i]))
+
+    out = [f"[find: {len(paths)} paths total. Grouped by directory; a name ending "
+           f"in / has children listed elsewhere; collapsed groups show counts.]"]
+    kept_entries = 0
+    for parent in sorted(groups):
+        names = groups[parent]
+        label = (parent if parent else ".") + "/"
+        disp = [n + "/" if (parent + "/" + n if parent else n) in dir_set else n for n in names]
+        if len(names) <= _FIND_DIR_KEEP:
+            out.append(f"{label} " + " ".join(_find_name(n) for n in disp))
+        else:
+            out.append(_find_summary(label, names))
+        kept_entries += len(names)
+    for root in sorted(noise_roots):
+        inner = [r for r in noise_roots[root] if r]
+        out.append(_find_summary(root + "/", noise_roots[root] if not inner else inner,
+                                 with_examples=False, unit="paths collapsed"))
+    result = "\n".join(out)
+    # Safety: the path count is the contract. Recount what the summary claims.
+    if kept_entries + sum(len(v) for v in noise_roots.values()) != len(paths):
+        return output
+    return result
 
 
 def _compress_git_diff(output):
@@ -981,6 +1185,19 @@ def _compress_lint(output):
 # Pattern dispatch
 # ---------------------------------------------------------------------------
 
+_GIT_LOG_SHAPE_FLAGS = ("--oneline", "--format", "--pretty", "--porcelain", "--null",
+                        "--name-status", "--name-only", "--numstat", "--stat", "--shortstat",
+                        "--dirstat", "--summary", "--patch", "--graph", "--raw", "--cc",
+                        "--diff", "--show-signature", "--abbrev-commit", "--walk-reflogs",
+                        "--left-right", "--cherry")
+_GIT_LOG_PATH_SEP = "--"
+_GIT_LOG_SHAPE_LETTERS = frozenset("zpuc")
+_GIT_LOG_SHAPE_EXACT = frozenset({"-p", "-u", "-z", "-c", "-m", "-s"})
+_FIND_FPRINT_PREFIX = "-fprint"
+_FIND_RAW_ARGS = frozenset({"-print0", "-printf", "-exec", "-execdir", "-ok", "-okdir",
+                            "-delete", "-ls", "-fls"})
+
+
 def _detect_pattern(command_str):
     """Detect which compression pattern to use based on command."""
     # U9: user exclude runs BEFORE built-in detection so a user can remove a
@@ -1051,6 +1268,18 @@ def _detect_pattern(command_str):
                         return None
             return "git_status"
         elif subcmd in ("log",):
+            # Only the default human-readable format is summarized. Anything
+            # that switches the output shape (custom/one-line formats, NUL
+            # separation, porcelain, name/stat listings, patches, graph) keeps
+            # the light cleanup so no machine-readable line is rewritten.
+            for arg in tokens[cmd_start + 2:]:
+                if arg == _GIT_LOG_PATH_SEP:
+                    break
+                if arg.startswith(_GIT_LOG_SHAPE_FLAGS) or arg in _GIT_LOG_SHAPE_EXACT:
+                    return "git_log_basic"
+                if arg.startswith("-") and not arg.startswith("--") and (
+                        set(arg[1:]) & _GIT_LOG_SHAPE_LETTERS):
+                    return "git_log_basic"
             return "git_log"
         elif subcmd in ("diff", "show"):
             return "git_diff"
@@ -1108,7 +1337,13 @@ def _detect_pattern(command_str):
         return "npm_install"
     elif cmd == "cargo" and subcmd == "build":
         return "npm_install"
-    elif cmd in ("ls", "find"):
+    elif cmd == "find":
+        # Machine-oriented or acting find (NUL/printf/exec/delete/ls) is never
+        # rewritten; a plain path list gets the directory-grouping summarizer.
+        if any(a in _FIND_RAW_ARGS or a.startswith(_FIND_FPRINT_PREFIX) for a in tokens[cmd_start + 1:]):
+            return "find_raw"
+        return "find"
+    elif cmd == "ls":
         return "ls"
     # v5.1 lint handlers
     elif cmd in ("eslint", "flake8", "pylint", "shellcheck", "rubocop"):
@@ -1566,6 +1801,9 @@ def _compress_search_results(output):
 _PATTERN_HANDLERS = {
     "git_status": _compress_git_status,
     "git_log": _compress_git_log,
+    "git_log_basic": _compress_git_log_basic,
+    "find": _compress_find,
+    "find_raw": lambda output: output,
     "git_diff": _compress_git_diff,
     "pytest": _compress_pytest,
     "jest": _compress_jest,
@@ -1592,6 +1830,9 @@ _PATTERN_HANDLERS = {
 _COMPRESS_FEATURE_MAP = {
     "git_status": "bash_compress_git",
     "git_log": "bash_compress_git",
+    "git_log_basic": "bash_compress_git",
+    "find": "bash_compress_ls",
+    "find_raw": "bash_compress_ls",
     "git_diff": "bash_compress_git",
     "pytest": "bash_compress_pytest",
     "jest": "bash_compress_jest",

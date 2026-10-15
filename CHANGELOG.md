@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.46] - 2026-10-15
+
+- `git log` output now compresses: for the default format, every commit becomes one line (short hash, date, author name, subject), with bodies, trailers and author emails condensed to counts and Co-authored-by names kept. `git log -60` on this repo drops from 6,117 to 2,252 estimated tokens, so the automatic Devin path now delivers it compressed instead of raw. Custom formats (`--oneline`, `--format`, `--pretty`, `-z`, `--porcelain`), `--stat`/`--name-status`/`--numstat`, `--graph` and patches (`-p`) are never rewritten into this form.
+- `find` path lists now compress: grouped by directory with every name kept for small directories, large or noise directories (`.git`, `node_modules`, `__pycache__`) collapsed to counts with a type breakdown, and the total path count always stated. `find . -type f` on this repo drops from 22,010 to 3,758 estimated tokens. `find` with `-print0`, `-printf`, `-exec`, `-delete`, `-ls` or `-fprint` is never rewritten, and failed commands still pass raw.
+- Claude Code and Devin recover the full original exactly as before (archive pointer and capture ID).
+
 ## [5.13.45] - 2026-10-14
 
 - New for Devin CLI and Devin Desktop's agent: automatic mode. `bash install.sh --devin --auto` wires two hooks into the `hooks` key of `~/.config/devin/config.json`, so large command output is compressed in interactive sessions and `devin -p` with no new prompts. `bash install.sh --devin` alone stays manual-only (the `/token-optimizer-output` skill remains the fallback), `--manual` removes the hooks and keeps the skill, and a plain reinstall keeps the active mode. Restart running Devin sessions after installing.
