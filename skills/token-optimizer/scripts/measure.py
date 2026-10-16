@@ -35112,11 +35112,29 @@ def _scaled_tool_call_thresholds():
     crit = _int_env("TOKEN_OPTIMIZER_TOOL_CALL_CRITICAL", int(base_crit * scale))
     return warn, crit
 
-_TOOL_CALL_WARN, _TOOL_CALL_CRITICAL = _scaled_tool_call_thresholds()
-_TOOL_CALL_WARN_THRESHOLDS = [
-    (_TOOL_CALL_CRITICAL, "CRITICAL", f"{_TOOL_CALL_CRITICAL}+ tool calls, adherence degraded"),
-    (_TOOL_CALL_WARN,     "WARNING",  f"{_TOOL_CALL_WARN}+ tool calls, consider fresh session"),
-]
+# Resolved at the call site, never at import (#246). detect_context_window()
+# reads helpers defined ~11k lines further down this module
+# (_resolve_feature_env, _TRUTHY_ENV_VALUES, the settings.json loaders). At
+# import time those names do not exist yet, so a module-level call raised
+# NameError, the broad fallback above swallowed it, and every process kept the
+# 200K thresholds (25/40) whatever window it actually ran on: a 1M session
+# got "CRITICAL: 40+ tool calls" instead of the scaled 324.
+# detect_context_window() caches on its inputs, so resolving per call costs a
+# tuple compare. tests/test_tool_call_thresholds_lazy.py traces the import for
+# any swallowed NameError so this class of bug cannot come back quietly.
+def _tool_call_warn_thresholds():
+    """[(threshold, level, message)] for the current context window, highest first.
+
+    The list keeps its name and literal messages (assigned, not built) because
+    tests/test_verbosity_diet_guard.py scrapes ``_TOOL_CALL_WARN_THRESHOLDS``
+    by AST to budget the injected message length.
+    """
+    warn, crit = _scaled_tool_call_thresholds()
+    _TOOL_CALL_WARN_THRESHOLDS = [
+        (crit, "CRITICAL", f"{crit}+ tool calls, adherence degraded"),
+        (warn, "WARNING",  f"{warn}+ tool calls, consider fresh session"),
+    ]
+    return _TOOL_CALL_WARN_THRESHOLDS
 
 # Configurable via env vars
 _CHECKPOINT_MAX_FILES = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_FILES", 10)
@@ -36227,7 +36245,7 @@ def compute_quality_score(quality_data, session_id=None):
     tc = quality_data.get("tool_calls", 0)
     tool_call_warning = None
     if fill_pct >= 0.50:
-        for threshold, level, message in _TOOL_CALL_WARN_THRESHOLDS:
+        for threshold, level, message in _tool_call_warn_thresholds():
             if tc >= threshold:
                 tool_call_warning = {"level": level, "tool_calls": tc, "message": message}
                 break
@@ -36265,6 +36283,11 @@ def compute_quality_score(quality_data, session_id=None):
         "fill_denominator": fill_denominator,
         "compact_window": compact_window,
         "compact_window_source": compact_window_source,
+        # Whether fill_pct is a share of that compact window rather than the
+        # model window, and the model-window share beside it, so a reader of
+        # the cache (the context hint) can label the percentage correctly (#249).
+        "compact_window_reduced": bool(compact_window_reduced),
+        "model_fill_pct": round(model_fill * 100, 1),
     }
 
 
@@ -55064,6 +55087,50 @@ def _ensure_health_daemon_revive_first():
 _WINDOW_SOURCE_MAX_CHARS = 48
 
 
+def _format_window_size(window):
+    """1_000_000 -> "1M", 600_000 -> "600k", 512 -> "512"."""
+    if window >= 1_000_000 and window % 1_000_000 == 0:
+        return f"{window // 1_000_000}M"
+    if window >= 1000:
+        return f"{window // 1000}k"
+    return str(window)
+
+
+def _safe_note_text(text, extra="", limit=_WINDOW_SOURCE_MAX_CHARS):
+    """Restrict an UNTRUSTED provenance string to a charset that cannot carry
+    newlines or control characters, collapse whitespace, and hard-cap it."""
+    text = "".join(c for c in (text or "") if c.isalnum() or c in " _-:/+" + extra)
+    return " ".join(text.split())[:limit].strip()
+
+
+def _format_reduced_window_note(cached, model_window, model_size):
+    """The clause for a fill measured against a REDUCED compact window (#249).
+
+    With ``autoCompactWindow`` (or CLAUDE_CODE_AUTO_COMPACT_WINDOW) below the
+    model window, compute_quality_score divides by the compact window: the
+    percentage answers "how close to auto-compact", which is what nudges gate
+    on. The note used to name the model window beside it ("87% (1M window)"),
+    so the reader took the opposite denominator. Returns "" when no reduction
+    is in effect or the cache predates the fields, so the plain note is used.
+    """
+    if not cached.get("compact_window_reduced"):
+        return ""
+    try:
+        compact = int(cached.get("compact_window") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if not 0 < compact < model_window:
+        return ""
+    model_fill = cached.get("model_fill_pct")
+    if not isinstance(model_fill, (int, float)):
+        fill = cached.get("fill_pct")
+        model_fill = fill * compact / model_window if isinstance(fill, (int, float)) else None
+    share = f"{model_fill:.0f}% of " if model_fill is not None else ""
+    source = _safe_note_text(cached.get("compact_window_source"), extra="=.[]'", limit=64)
+    origin = f", source: {source}" if source else ""
+    return f" (of {_format_window_size(compact)} compact window, {share}{model_size} model window{origin})"
+
+
 def _format_window_note(cached):
     """Render the denominator and its origin, e.g. " (1M window, source: default 1M)".
 
@@ -55090,12 +55157,14 @@ def _format_window_note(cached):
     if window <= 0:
         return ""
 
-    if window >= 1_000_000 and window % 1_000_000 == 0:
-        size = f"{window // 1_000_000}M"
-    elif window >= 1000:
-        size = f"{window // 1000}k"
-    else:
-        size = str(window)
+    size = _format_window_size(window)
+
+    # A fill measured against a reduced compact window is labelled with THAT
+    # window, and the model window beside it, never as a share of the model
+    # window alone (#249).
+    reduced = _format_reduced_window_note(cached, window, size)
+    if reduced:
+        return reduced
 
     # The provenance string is UNTRUSTED. It embeds env values (CLAUDE_MODEL,
     # ANTHROPIC_MODEL) and config fields verbatim, and this note is injected into
@@ -55109,8 +55178,7 @@ def _format_window_note(cached):
     # so a multi-megabyte value cannot bloat the very window this tool protects.
     source = (cached.get("model_context_window_source") or "")
     source = source.split(".")[0].split("(")[0].strip()
-    source = "".join(c for c in source if c.isalnum() or c in " _-:/+")
-    source = " ".join(source.split())[:_WINDOW_SOURCE_MAX_CHARS].strip()
+    source = _safe_note_text(source, limit=_WINDOW_SOURCE_MAX_CHARS)
     return f" ({size} window, source: {source})" if source else f" ({size} window)"
 
 

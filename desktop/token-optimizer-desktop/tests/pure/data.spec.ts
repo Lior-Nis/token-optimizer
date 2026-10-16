@@ -11,6 +11,7 @@ import {
   gather,
   mergeStored,
   readQuality,
+  readStatusBar,
   resetLauncher,
   runMeasure,
   shouldReset,
@@ -466,6 +467,8 @@ test('an older Token Optimizer that reports no compact window changes nothing', 
 
 const WINDOWS_SCRIPTS = 'C:\\Users\\me\\.claude\\skills\\token-optimizer\\scripts'
 const STORE_MISSING = 'Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.'
+// The same notice on a German Windows (#247): the alias speaks the user's language.
+const STORE_MISSING_DE = 'Python wurde nicht gefunden; ohne Argumente ausführen, um aus dem Microsoft Store zu installieren, oder deaktivieren Sie diese Verknüpfung unter "Einstellungen > Apps > Erweiterte App-Einstellungen > App-Ausführungsaliase".'
 
 for (const exitCode of [9009, 49]) {
   test(`Windows missing-Python result ${exitCode} falls back and remembers the working launcher`, async () => {
@@ -488,10 +491,66 @@ for (const exitCode of [9009, 49]) {
   })
 }
 
+// The alias is told apart by exit code, empty stdout, a Windows install and the
+// alias names alone, never by its notice: the notice is localized (#247), and
+// on some hosts it goes straight to the console, so stderr is empty.
+for (const scenario of [
+  { name: 'a localized (German) notice', stderr: STORE_MISSING_DE },
+  { name: 'a notice that went to the console, not stderr', stderr: '' },
+  { name: 'no stderr at all', stderr: undefined },
+  { name: 'the English notice', stderr: STORE_MISSING },
+]) {
+  test(`exit 49 with ${scenario.name} falls through to the next launcher and remembers it`, async () => {
+    resetLauncher()
+    const w = world()
+    const io = fakeIo(w)
+    io.run = async (argv, init) => {
+      w.runs.push({ argv, timeoutMs: init.timeoutMs })
+      return argv[0] === 'python3'
+        ? { exitCode: 49, stdout: '', ...(scenario.stderr === undefined ? {} : { stderr: scenario.stderr }) }
+        : { exitCode: 0, stdout: STATUS }
+    }
+    const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
+    assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
+    w.runs = []
+    await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })
+    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python'])
+    resetLauncher()
+  })
+}
+
+test('the status bar reads through a localized Store alias', async () => {
+  resetLauncher()
+  const w = world()
+  const io = fakeIo(w)
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    return argv[0] === 'python3' ? { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE } : { exitCode: 0, stdout: STATUS }
+  }
+  const bar = await readStatusBar(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, 'sess-1')
+  assert.ok(bar !== null && bar !== 'outdated' && bar !== 'nopython', `status bar read: ${String(bar)}`)
+  assert.equal(bar.savings?.sessionTokens, 41_000)
+  assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
+  resetLauncher()
+})
+
+test('only localized Store aliases and no py launcher reports that Python is needed', async () => {
+  resetLauncher()
+  const w = world()
+  const io = fakeIo(w)
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    if (argv[0] === 'py') throw new Error('spawn py ENOENT')
+    return { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE }
+  }
+  assert.equal(await readStatusBar(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, 'sess-1'), 'nopython')
+  assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python', 'py'])
+  resetLauncher()
+})
+
 for (const scenario of [
   { name: 'POSIX root', scriptsDir: SCRIPTS, stdout: '', stderr: STORE_MISSING },
-  { name: 'ordinary script error', scriptsDir: WINDOWS_SCRIPTS, stdout: '', stderr: 'measurement failed' },
-  { name: 'ambiguous Python not found', scriptsDir: WINDOWS_SCRIPTS, stdout: '', stderr: 'Python was not found in configuration' },
   { name: 'command already produced output', scriptsDir: WINDOWS_SCRIPTS, stdout: STATUS, stderr: STORE_MISSING },
 ]) {
   test(`exit 49 is not retried for ${scenario.name}`, async () => {
