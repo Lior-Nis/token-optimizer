@@ -51,6 +51,10 @@ if sys.version_info < (3, 9):
 # for EOF (the multi-minute stop-hook hang).
 _child_proc: subprocess.Popen | None = None
 
+# Hard ceiling on one hook child, seconds. One name for both the POSIX reap
+# timer and the Windows wait so tests can shorten it in a single place.
+_CHILD_WAIT_TIMEOUT_S = 120
+
 
 def _reap(proc, posix_sig):
     """Reap the child process. Never raises.
@@ -611,8 +615,34 @@ def main() -> int:
             _popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(cmd, **_popen_kwargs)
         _child_proc = proc
+        if os.name != "nt":
+            # POSIX: a blocking waitpid returns the instant the child exits.
+            # Popen.wait(timeout=...) instead busy-polls with sleeps that double
+            # up to 50 ms, so a hook that finished at 83 ms was only noticed
+            # at ~137 ms; every hook on every tool call paid that overshoot.
+            # The ceiling moves to a daemon timer that reaps the child's
+            # process group, which makes the blocking wait return. _reap's
+            # poll() takes the waitpid lock non-blocking, so it cannot deadlock
+            # against this wait. SIGTERM/SIGINT still interrupt the wait and
+            # run _forward_and_exit (PEP 475 runs handlers before retrying).
+            import threading
+
+            def _timeout_reap():
+                try:
+                    _reap(proc, signal.SIGKILL)
+                except Exception:
+                    pass
+
+            reaper = threading.Timer(_CHILD_WAIT_TIMEOUT_S, _timeout_reap)
+            reaper.daemon = True
+            reaper.start()
+            try:
+                proc.wait()
+            finally:
+                reaper.cancel()
+            return 0
         try:
-            proc.wait(timeout=120)
+            proc.wait(timeout=_CHILD_WAIT_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             # Important: Popen.wait doesn't auto-kill on timeout. Leaving
             # the child alive would leak a process holding the trends.db

@@ -298,19 +298,20 @@ class Sandbox:
     def patched_run_py(self, timeout_s: int = PATCHED_TIMEOUT_S) -> Path:
         """A copy of the REAL run.py whose child wait() is shortened.
 
-        run.py waits a hard-coded 120 s for its child. The only change is that
-        number; the assertion below fails loudly if run.py's wait line ever
-        changes shape, rather than silently testing something else.
+        run.py caps its child at _CHILD_WAIT_TIMEOUT_S = 120 (the Windows wait
+        and the POSIX reap timer both read it). The only change is that
+        number; the assertion below fails loudly if the constant ever changes
+        shape, rather than silently testing something else.
         """
         src = REAL_RUN_PY.read_text(encoding="utf-8")
-        needle = "proc.wait(timeout=120)"
+        needle = "_CHILD_WAIT_TIMEOUT_S = 120"
         assert src.count(needle) == 1, (
             "hooks/run.py no longer contains exactly one %r; update patched_run_py() so the "
             "shortened-timeout hang test still exercises the real wait/reap code" % needle
         )
         d = self.tmp / "patched_runner"
         d.mkdir(exist_ok=True)
-        (d / "run.py").write_text(src.replace(needle, "proc.wait(timeout=%d)" % timeout_s), encoding="utf-8")
+        (d / "run.py").write_text(src.replace(needle, "_CHILD_WAIT_TIMEOUT_S = %d" % timeout_s), encoding="utf-8")
         # run.py resolves module_runner.py next to itself.
         (d / "module_runner.py").write_text(REAL_MODULE_RUNNER.read_text(encoding="utf-8"), encoding="utf-8")
         return d / "run.py"
