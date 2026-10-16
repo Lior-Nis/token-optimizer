@@ -147,6 +147,9 @@ class _Controlled:
         self.tmp.cleanup()
 
     def cache_file(self):
+        return Path(self.tmp.name) / "cache" / "token-optimizer" / "ancestor-scan-v2.json"
+
+    def v1_cache_file(self):
         return Path(self.tmp.name) / "cache" / "token-optimizer" / "ancestor-scan.json"
 
 
@@ -298,6 +301,52 @@ def test_parallel_sessions_do_not_evict_each_other():
                     runtime_env._PROC_SCAN_SNAPSHOT = None
                     assert runtime_env._opencode_in_process_tree() is False
             assert calls["n"] == 2, "a second session's write evicted the first's negative"
+        finally:
+            _stop(patches)
+
+
+@_requires_ps
+def test_v1_and_v2_copies_do_not_overwrite_each_other():
+    """An older plugin copy still writes the v1 single-entry file. v2 must
+    neither read it nor touch it, so the two never thrash one file."""
+    with _Controlled() as ctx:
+        v1 = ctx.v1_cache_file()
+        v1.parent.mkdir(parents=True, exist_ok=True)
+        v1_payload = json.dumps({"version": 1, "key": runtime_env._ancestor_cache_key(), "ts": time.time()})
+        v1.write_text(v1_payload)
+        table = _ps_table(*_hook_chain())
+        calls, patches = _patch_ps(table)
+        try:
+            assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 1, "a v1 entry must not satisfy the v2 cache"
+            runtime_env._PROC_SCAN_SNAPSHOT = None
+            assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 1, "v2 entry written after the miss must hit"
+        finally:
+            _stop(patches)
+        assert v1.read_text() == v1_payload, "v2 must leave the v1 file alone"
+        assert json.loads(ctx.cache_file().read_text())["version"] == runtime_env._ANCESTOR_CACHE_VERSION
+
+
+@_requires_ps
+def test_v1_payload_at_v2_path_reads_as_one_miss_then_is_rewritten():
+    """A v1-shaped payload (or any foreign shape) at the v2 path is one miss,
+    then the file is rewritten in v2 format and the next process hits."""
+    with _Controlled() as ctx:
+        path = ctx.cache_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"version": 1, "key": runtime_env._ancestor_cache_key(), "ts": time.time()}))
+        table = _ps_table(*_hook_chain())
+        calls, patches = _patch_ps(table)
+        try:
+            assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 1
+            data = json.loads(path.read_text())
+            assert data["version"] == runtime_env._ANCESTOR_CACHE_VERSION
+            assert runtime_env._ancestor_cache_key() in data["entries"]
+            runtime_env._PROC_SCAN_SNAPSHOT = None
+            assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 1, "rewritten v2 file must hit"
         finally:
             _stop(patches)
 

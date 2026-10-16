@@ -817,7 +817,10 @@ def _load_proc_snapshot() -> dict:
 
 def _ancestor_cache_path() -> Path:
     """Runtime-neutral cache location (XDG cache), safe to compute pre-detection."""
-    return _xdg_base("XDG_CACHE_HOME", ".cache") / "token-optimizer" / "ancestor-scan.json"
+    # Own filename per format: a v1 install (older plugin copy, other runtime
+    # adapter) keeps writing ancestor-scan.json, and if both shared one file
+    # each would read the other's format as a miss and overwrite it.
+    return _xdg_base("XDG_CACHE_HOME", ".cache") / "token-optimizer" / "ancestor-scan-v2.json"
 
 
 def _parent_starttime() -> str:
