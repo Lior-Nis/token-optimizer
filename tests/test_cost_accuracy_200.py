@@ -330,6 +330,30 @@ def test_append_logs_are_capped(tmp_path, monkeypatch):
     assert len(data) <= 10_000 and data.startswith(b"old line")
 
 
+def _busy_wait(tmp_path, timeout_ms):
+    """How long this machine really waits for a ``busy_timeout`` of ``timeout_ms``."""
+    import sqlite3
+    path = tmp_path / "busy-probe.db"
+    holder = sqlite3.connect(str(path))
+    holder.execute("PRAGMA journal_mode=WAL")
+    holder.execute("CREATE TABLE IF NOT EXISTS t(x)")
+    holder.commit()
+    waiter = sqlite3.connect(str(path))
+    waiter.execute(f"PRAGMA busy_timeout={int(timeout_ms)}")
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        t0 = time.monotonic()
+        try:
+            waiter.execute("INSERT INTO t VALUES (1)")
+        except sqlite3.OperationalError:
+            pass
+        return time.monotonic() - t0
+    finally:
+        holder.rollback()
+        holder.close()
+        waiter.close()
+
+
 def test_dashboard_read_does_not_wait_behind_a_held_write_lock(tmp_path, monkeypatch):
     """Upkeep writes on the read path give up fast when a collector holds the lock."""
     import sqlite3
@@ -365,8 +389,13 @@ def test_dashboard_read_does_not_wait_behind_a_held_write_lock(tmp_path, monkeyp
         writer.close()
 
     # Giving up after the 0.2 s upkeep timeout fits easily; waiting out the 5 s
-    # busy timeout does not, however slow the runner.
-    assert elapsed < baseline + 2.5
+    # busy timeout does not, however slow the runner. The upkeep makes two
+    # retried writes of three attempts each, so six busy waits plus 0.6 s of
+    # backoff sleeps. The waits are measured, not assumed: SQLite's busy
+    # handler sleeps in slices that stretch under load (a 200 ms timeout waited
+    # 0.86 s on a Mac at load 39), which is the machine, not the read path.
+    budget = baseline + 6 * _busy_wait(tmp_path, 200) + 0.6 + 1.0
+    assert elapsed < budget, f"held-lock read took {elapsed:.2f}s, budget {budget:.2f}s"
     assert day["total_cost_usd"] == pytest.approx(_cost(measure, "claude-opus-4-8"), abs=1e-4)
 
 
