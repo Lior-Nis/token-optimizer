@@ -55,22 +55,18 @@ Token Optimizer cuts the tokens your AI coding assistant wastes, keeps your work
 
 Works on the AI coding tools below, with a [Devin output-filter beta](https://github.com/alexgreensh/token-optimizer/blob/main/devin/README.md) (manual skill, or `install.sh --devin --auto` for automatic compression):
 
-<table align="center">
-  <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="72" height="72" alt="Claude Code"></a><br><sub><b>Claude Code</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="72" height="72" alt="Codex"></a><br><sub><b>Codex</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="72" height="72" alt="OpenCode"></a><br><sub><b>OpenCode</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="72" height="72" alt="OpenClaw"></a><br><sub><b>OpenClaw</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="72" height="72" alt="Hermes"></a><br><sub><b>Hermes</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="72" height="72" alt="GitHub Copilot"></a><br><sub><b>GitHub Copilot</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="72" height="72" alt="Pi Coding Agent"></a><br><sub><b>Pi Coding Agent</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="72" height="72" alt="Cursor"></a><br><sub><b>Cursor</b></sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="72" height="72" alt="Google Antigravity"></a><br><sub><b>Google Antigravity</b> (beta)</sub></td>
-    <td align="center" width="150"><a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="72" height="72" alt="Grok Build"></a><br><sub><b>Grok Build</b> (beta)</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/claude-code/"><img src="skills/token-optimizer/assets/platforms/claude-code.svg" width="96" alt="Claude Code"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/codex/"><img src="skills/token-optimizer/assets/platforms/codex.svg" width="96" alt="Codex"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="96" alt="OpenCode"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="96" alt="OpenClaw"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="96" alt="Hermes"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="96" alt="GitHub Copilot"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="96" alt="Pi Coding Agent"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="96" alt="Cursor"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/antigravity/"><img src="skills/token-optimizer/assets/platforms/antigravity.svg" width="96" alt="Google Antigravity (beta)"></a>
+  <a href="https://alexgreensh.github.io/token-optimizer/platforms/grok/"><img src="skills/token-optimizer/assets/platforms/grok.svg" width="96" alt="Grok Build (beta)"></a>
+</p>
 
 ## What You Get
 
