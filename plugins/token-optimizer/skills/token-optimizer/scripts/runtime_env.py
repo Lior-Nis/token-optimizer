@@ -729,10 +729,14 @@ def _opencode_env_signal() -> bool:
 # ---------------------------------------------------------------------------
 
 _ANCESTOR_CACHE_TTL_SECONDS = 120
-_ANCESTOR_CACHE_VERSION = 1
-# Bound reads of the ancestor-scan cache file. The payload this module writes
-# is ~120 bytes; anything larger is corrupt or hostile and is ignored.
-_MAX_CACHE_BYTES = 4096
+# v2: one entry per parent session ({"entries": {key: ts}}). v1 held a single
+# entry, so every parallel host session evicted the others' negatives.
+_ANCESTOR_CACHE_VERSION = 2
+# Entries kept (newest first). Each is ~100 bytes; 24 stays well under the cap.
+_ANCESTOR_CACHE_MAX_ENTRIES = 24
+# Bound reads of the ancestor-scan cache file. A full payload is ~2.5 KB;
+# anything larger is corrupt or hostile and is ignored.
+_MAX_CACHE_BYTES = 8192
 
 # Every env var whose value can change which runtime a hook resolves to. The
 # cache key hashes their values so two sessions with different signals never
@@ -859,38 +863,54 @@ def _ancestor_cache_key() -> str:
     return f"{os.getppid()}:{start}:{hashlib.sha256(raw.encode('utf-8', 'replace')).hexdigest()}"
 
 
-def _ancestor_negative_cached() -> bool:
-    """True when a fresh cache entry says this session had no opencode ancestor."""
+def _load_ancestor_entries() -> dict:
+    """Fresh {key: ts} entries from the cache file; {} on any problem."""
     try:
         path = _ancestor_cache_path()
         if not path.is_file() or path.stat().st_size > _MAX_CACHE_BYTES:
-            return False
+            return {}
         with path.open("r", encoding="utf-8") as fh:
-            entry = json.load(fh)
-        if not isinstance(entry, dict):
-            return False
-        if entry.get("version") != _ANCESTOR_CACHE_VERSION:
-            return False
-        if entry.get("key") != _ancestor_cache_key():
-            return False
-        ts = entry.get("ts")
-        if not isinstance(ts, (int, float)):
-            return False
-        return (time.time() - ts) < _ANCESTOR_CACHE_TTL_SECONDS
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return {}
+        if data.get("version") != _ANCESTOR_CACHE_VERSION:
+            return {}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        now = time.time()
+        return {
+            k: ts for k, ts in entries.items()
+            if isinstance(k, str) and isinstance(ts, (int, float))
+            and 0 <= now - ts < _ANCESTOR_CACHE_TTL_SECONDS
+        }
     except (OSError, ValueError, RecursionError):
-        return False
+        return {}
+
+
+def _ancestor_negative_cached() -> bool:
+    """True when a fresh cache entry says this session had no opencode ancestor."""
+    return _ancestor_cache_key() in _load_ancestor_entries()
 
 
 def _store_ancestor_negative() -> None:
-    """Persist a negative opencode-ancestor scan result. Best-effort, atomic."""
+    """Persist a negative opencode-ancestor scan result. Best-effort, atomic.
+
+    Keeps every other session's fresh entry, so parallel host sessions (one
+    parent pid each) no longer evict each other and re-pay the ps scan. A
+    concurrent writer can drop an entry (last replace wins); that only costs
+    one extra scan, never a wrong answer.
+    """
     tmp = None
     try:
         path = _ancestor_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        entries = _load_ancestor_entries()
+        entries[_ancestor_cache_key()] = time.time()
+        newest = sorted(entries.items(), key=lambda kv: kv[1])[-_ANCESTOR_CACHE_MAX_ENTRIES:]
         payload = json.dumps({
             "version": _ANCESTOR_CACHE_VERSION,
-            "key": _ancestor_cache_key(),
-            "ts": time.time(),
+            "entries": dict(newest),
         })
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         with tmp.open("w", encoding="utf-8") as fh:

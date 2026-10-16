@@ -267,14 +267,56 @@ def test_expired_cache_entry_is_ignored():
         try:
             assert runtime_env._opencode_in_process_tree() is False
             cache = ctx.cache_file()
-            entry = json.loads(cache.read_text())
-            entry["ts"] = time.time() - (runtime_env._ANCESTOR_CACHE_TTL_SECONDS + 5)
-            cache.write_text(json.dumps(entry))
+            data = json.loads(cache.read_text())
+            stale = time.time() - (runtime_env._ANCESTOR_CACHE_TTL_SECONDS + 5)
+            data["entries"] = {k: stale for k in data["entries"]}
+            cache.write_text(json.dumps(data))
             runtime_env._PROC_SCAN_SNAPSHOT = None
             assert runtime_env._opencode_in_process_tree() is False
             assert calls["n"] == 2, "expired entry must re-scan"
         finally:
             _stop(patches)
+
+
+@_requires_ps
+def test_parallel_sessions_do_not_evict_each_other():
+    """Two host sessions (different parent pids) each keep their negative.
+
+    The v1 cache held one entry, so session B's write evicted session A's and
+    A's next hook re-ran ps. Both must now hit."""
+    with _Controlled():
+        table = _ps_table(*_hook_chain())
+        calls, patches = _patch_ps(table)
+        try:
+            for ppid in (4001, 4002):
+                with mock.patch.object(runtime_env.os, "getppid", return_value=ppid):
+                    runtime_env._PROC_SCAN_SNAPSHOT = None
+                    assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 2
+            for ppid in (4001, 4002):
+                with mock.patch.object(runtime_env.os, "getppid", return_value=ppid):
+                    runtime_env._PROC_SCAN_SNAPSHOT = None
+                    assert runtime_env._opencode_in_process_tree() is False
+            assert calls["n"] == 2, "a second session's write evicted the first's negative"
+        finally:
+            _stop(patches)
+
+
+@_requires_ps
+def test_cache_entries_are_bounded():
+    with _Controlled() as ctx:
+        table = _ps_table(*_hook_chain())
+        calls, patches = _patch_ps(table)
+        try:
+            for ppid in range(5000, 5000 + runtime_env._ANCESTOR_CACHE_MAX_ENTRIES + 10):
+                with mock.patch.object(runtime_env.os, "getppid", return_value=ppid):
+                    runtime_env._PROC_SCAN_SNAPSHOT = None
+                    runtime_env._opencode_in_process_tree()
+        finally:
+            _stop(patches)
+        data = json.loads(ctx.cache_file().read_text())
+        assert len(data["entries"]) == runtime_env._ANCESTOR_CACHE_MAX_ENTRIES
+        assert ctx.cache_file().stat().st_size <= runtime_env._MAX_CACHE_BYTES
 
 
 @_requires_ps
