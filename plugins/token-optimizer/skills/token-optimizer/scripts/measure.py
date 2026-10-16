@@ -35112,11 +35112,29 @@ def _scaled_tool_call_thresholds():
     crit = _int_env("TOKEN_OPTIMIZER_TOOL_CALL_CRITICAL", int(base_crit * scale))
     return warn, crit
 
-_TOOL_CALL_WARN, _TOOL_CALL_CRITICAL = _scaled_tool_call_thresholds()
-_TOOL_CALL_WARN_THRESHOLDS = [
-    (_TOOL_CALL_CRITICAL, "CRITICAL", f"{_TOOL_CALL_CRITICAL}+ tool calls, adherence degraded"),
-    (_TOOL_CALL_WARN,     "WARNING",  f"{_TOOL_CALL_WARN}+ tool calls, consider fresh session"),
-]
+# Resolved at the call site, never at import (#246). detect_context_window()
+# reads helpers defined ~11k lines further down this module
+# (_resolve_feature_env, _TRUTHY_ENV_VALUES, the settings.json loaders). At
+# import time those names do not exist yet, so a module-level call raised
+# NameError, the broad fallback above swallowed it, and every process kept the
+# 200K thresholds (25/40) whatever window it actually ran on: a 1M session
+# got "CRITICAL: 40+ tool calls" instead of the scaled 324.
+# detect_context_window() caches on its inputs, so resolving per call costs a
+# tuple compare. tests/test_tool_call_thresholds_lazy.py traces the import for
+# any swallowed NameError so this class of bug cannot come back quietly.
+def _tool_call_warn_thresholds():
+    """[(threshold, level, message)] for the current context window, highest first.
+
+    The list keeps its name and literal messages (assigned, not built) because
+    tests/test_verbosity_diet_guard.py scrapes ``_TOOL_CALL_WARN_THRESHOLDS``
+    by AST to budget the injected message length.
+    """
+    warn, crit = _scaled_tool_call_thresholds()
+    _TOOL_CALL_WARN_THRESHOLDS = [
+        (crit, "CRITICAL", f"{crit}+ tool calls, adherence degraded"),
+        (warn, "WARNING",  f"{warn}+ tool calls, consider fresh session"),
+    ]
+    return _TOOL_CALL_WARN_THRESHOLDS
 
 # Configurable via env vars
 _CHECKPOINT_MAX_FILES = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_FILES", 10)
@@ -36227,7 +36245,7 @@ def compute_quality_score(quality_data, session_id=None):
     tc = quality_data.get("tool_calls", 0)
     tool_call_warning = None
     if fill_pct >= 0.50:
-        for threshold, level, message in _TOOL_CALL_WARN_THRESHOLDS:
+        for threshold, level, message in _tool_call_warn_thresholds():
             if tc >= threshold:
                 tool_call_warning = {"level": level, "tool_calls": tc, "message": message}
                 break
