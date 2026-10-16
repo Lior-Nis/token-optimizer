@@ -55,6 +55,15 @@ const WINDOWS_NOT_FOUND = 9009
 // Some Bun Windows runtimes expose only the low byte of the process exit code.
 const WINDOWS_NOT_FOUND_LOW_BYTE = WINDOWS_NOT_FOUND & 0xff
 
+/**
+ * The names Windows' App Installer claims as Store aliases (python.exe and
+ * python3.exe under WindowsApps). `py` is the real launcher in C:\\Windows
+ * and is never an alias, so its exit 49 is a real answer.
+ */
+function isStoreAliasName(launcher: readonly string[] | undefined): boolean {
+  return launcher?.[0] === 'python3' || launcher?.[0] === 'python'
+}
+
 let launcherIndex = 0
 
 /** Forgets which launcher worked (tests, and nothing else). */
@@ -259,13 +268,18 @@ export async function runMeasure(
       const result = await io.run(measureArgv(root, args, PYTHON_LAUNCHERS[i]), init)
 
       const windowsRoot = /^[A-Za-z]:[\\/]/.test(root.scriptsDir) || root.scriptsDir.startsWith('\\\\')
-      // A real exit 49 repeating both alias diagnostics is indistinguishable here.
+      // The Store alias (AppInstallerPythonRedirector) exits 9009, seen as 49
+      // where the runtime keeps the low byte, prints nothing to stdout, and
+      // writes its notice in the user's language, or straight to the console
+      // and so not to stderr at all. The text is therefore never consulted:
+      // on a Windows install, exit 49 with an empty stdout from the python3 or
+      // python name is the alias. measure.py never exits 49 of its own, so the
+      // one thing this can mistake is a script failure that also printed
+      // nothing, and that costs one more launcher attempt, not a wrong answer.
       const storeAliasMissing = result.exitCode === WINDOWS_NOT_FOUND_LOW_BYTE
         && windowsRoot
-        && (PYTHON_LAUNCHERS[i]?.[0] === 'python3' || PYTHON_LAUNCHERS[i]?.[0] === 'python')
+        && isStoreAliasName(PYTHON_LAUNCHERS[i])
         && result.stdout.trim() === ''
-        && /Python was not found/i.test(result.stderr ?? '')
-        && /Microsoft Store|App execution aliases/i.test(result.stderr ?? '')
 
       if ((result.exitCode === WINDOWS_NOT_FOUND || storeAliasMissing) && i < PYTHON_LAUNCHERS.length - 1) {
         lastError = new Error('python launcher not found')
