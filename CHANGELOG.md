@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.13.48] - 2026-10-16
+
+- Tool-call fatigue warnings now scale with the real context window: a 1M session warns at 202 calls and goes critical at 324, instead of the 200K values of 25 and 40.
+- The desktop status bar and Full dashboard work on non-English Windows: the Microsoft Store python alias is detected by its exit code, in any language.
+- The context hint names the window it measured against: `Context 87% (of 600k compact window, 53% of 1M model window)` when autoCompactWindow is set.
+- The README platform icons are one size on every screen, with their names built in, and the row wraps cleanly on phones.
+- A new import guard keeps the tool-call thresholds from silently falling back to 200K values again.
+
 ## [5.13.47] - 2026-10-16
 
 - Up-to-date model prices: gpt-5.5-cyber-preview.
