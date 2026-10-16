@@ -912,14 +912,20 @@ def test_run_py_timeout_reap_nt_uses_proc_kill(monkeypatch, tmp_path):
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX os.killpg reap semantics")
 def test_run_py_timeout_reap_posix_uses_killpg(monkeypatch, tmp_path):
-    """On posix, TimeoutExpired reaps via os.killpg (unchanged behavior)."""
+    """On posix, the timeout reaps via os.killpg (unchanged behavior).
+
+    POSIX run.py blocks in proc.wait() and a daemon timer reaps the group at
+    _CHILD_WAIT_TIMEOUT_S, so the fake wait() blocks until that reap lands."""
+    import threading
     mod = _load_run_py()
     _set_posix(monkeypatch, mod)
     root = _make_plugin_root(tmp_path)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(root / "_data"))
     monkeypatch.setattr(mod, "_check_consent", lambda *_a, **_k: True)
+    monkeypatch.setattr(mod, "_CHILD_WAIT_TIMEOUT_S", 0.05)
     killpg_calls = []
+    reaped = threading.Event()
     class _FakeProc:
         pid = 54321
         def poll(self):
@@ -927,20 +933,52 @@ def test_run_py_timeout_reap_posix_uses_killpg(monkeypatch, tmp_path):
         def wait(self, timeout=None):
             if timeout is not None:
                 raise subprocess.TimeoutExpired(cmd="x", timeout=timeout)
+            assert reaped.wait(10), "posix timeout never reaped the hung child"
             return 0
         def kill(self):
             killpg_calls.append("kill")
+            reaped.set()
     def fake_popen(cmd, **k):
         return _FakeProc()
     monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
     def fake_killpg(pgid, sig):
         killpg_calls.append(("killpg", pgid, sig))
+        reaped.set()
     monkeypatch.setattr(mod.os, "killpg", fake_killpg)
     monkeypatch.setattr(mod.os, "getpgid", lambda pid: pid)
     mod.sys.argv = ["run.py", "scripts/dummy_hook.py", "--quiet"]
     mod.main()
     assert any(isinstance(c, tuple) and c[0] == "killpg" for c in killpg_calls), (
         "posix timeout must reap via os.killpg"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX blocking-wait latency path")
+def test_run_py_posix_waits_without_timeout(monkeypatch, tmp_path):
+    """POSIX run.py must block in proc.wait() with NO timeout. CPython's
+    wait(timeout=...) busy-polls with sleeps doubling to 50 ms, which added
+    ~40-80 ms to every hook after the child had already exited."""
+    mod = _load_run_py()
+    _set_posix(monkeypatch, mod)
+    root = _make_plugin_root(tmp_path)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(root))
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(root / "_data"))
+    monkeypatch.setattr(mod, "_check_consent", lambda *_a, **_k: True)
+    wait_calls = []
+    class _FakeProc:
+        pid = 54321
+        def poll(self):
+            return 0
+        def wait(self, timeout=None):
+            wait_calls.append(timeout)
+            return 0
+        def kill(self):
+            pass
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda cmd, **k: _FakeProc())
+    mod.sys.argv = ["run.py", "scripts/dummy_hook.py", "--quiet"]
+    assert mod.main() == 0
+    assert wait_calls == [None], (
+        "posix run.py must call proc.wait() with no timeout (got %r)" % wait_calls
     )
 
 
