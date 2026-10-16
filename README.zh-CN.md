@@ -59,6 +59,7 @@ Token Optimizer 砍掉你的 AI 编程助手浪费的 token，让你的工作在
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/opencode/"><img src="skills/token-optimizer/assets/platforms/opencode.svg" width="96" alt="OpenCode"></a>
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/openclaw/"><img src="skills/token-optimizer/assets/platforms/openclaw.svg" width="96" alt="OpenClaw"></a>
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/hermes/"><img src="skills/token-optimizer/assets/platforms/hermes.svg" width="96" alt="Hermes"></a>
+  <picture><source media="(max-width: 767px)" srcset="skills/token-optimizer/assets/platforms/row-break-none.svg"><img src="skills/token-optimizer/assets/platforms/row-break.svg" alt=""></picture>
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/copilot/"><img src="skills/token-optimizer/assets/platforms/copilot.svg" width="96" alt="GitHub Copilot"></a>
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/pi/"><img src="skills/token-optimizer/assets/platforms/pi.svg" width="96" alt="Pi Coding Agent"></a>
   <a href="https://alexgreensh.github.io/token-optimizer/platforms/cursor/"><img src="skills/token-optimizer/assets/platforms/cursor.svg" width="96" alt="Cursor"></a>
