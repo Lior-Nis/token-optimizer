@@ -381,6 +381,11 @@
    "output": 75.0,
    "cache_read": 1.25
   },
+  "gpt-5.5-cyber-preview": {
+   "input": 12.5,
+   "output": 75.0,
+   "cache_read": 1.25
+  },
   "gpt-5.5-pro": {
    "input": 30.0,
    "output": 180.0,
@@ -686,5 +691,5 @@
    "cache_read": 0.4
   }
  },
- "generated_at": "2026-10-14T12:06:47Z"
+ "generated_at": "2026-10-16T11:36:52Z"
 }

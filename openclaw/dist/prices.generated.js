@@ -66,6 +66,7 @@ exports.GENERATED_PRICING = {
     "gpt-5.4-pro": { input: 30.0 / 1e6, output: 180.0 / 1e6, cacheRead: 30.0 / 1e6, cacheWrite: 0 / 1e6 },
     "gpt-5.5": { input: 5.0 / 1e6, output: 30.0 / 1e6, cacheRead: 0.5 / 1e6, cacheWrite: 0 / 1e6 },
     "gpt-5.5-cyber": { input: 12.5 / 1e6, output: 75.0 / 1e6, cacheRead: 1.25 / 1e6, cacheWrite: 0 / 1e6 },
+    "gpt-5.5-cyber-preview": { input: 12.5 / 1e6, output: 75.0 / 1e6, cacheRead: 1.25 / 1e6, cacheWrite: 0 / 1e6 },
     "gpt-5.5-pro": { input: 30.0 / 1e6, output: 180.0 / 1e6, cacheRead: 30.0 / 1e6, cacheWrite: 0 / 1e6 },
     "gpt-5.6": { input: 4.0 / 1e6, output: 20.0 / 1e6, cacheRead: 0.4 / 1e6, cacheWrite: 5.0 / 1e6 },
     "gpt-5.6-cyber": { input: 12.5 / 1e6, output: 75.0 / 1e6, cacheRead: 1.25 / 1e6, cacheWrite: 15.625 / 1e6 },
