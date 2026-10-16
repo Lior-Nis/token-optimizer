@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.49] - 2026-10-17
+
+- Hooks finish sooner on macOS and Linux: the hook runner now wakes the moment a hook is done instead of polling for it. In our tests each hook, on every tool call and prompt, finished 25-80 ms faster.
+- Parallel Claude Code sessions no longer evict each other's process-scan cache, so fewer hooks pay for a fresh `ps` scan.
+- On Windows the before-compact checkpoint is written again. The save now has 15 s instead of 2.5 s, so after a compact you get today's checkpoint, not an older one. Thanks @Rewdzi (#253).
+
 ## [5.13.48] - 2026-10-16
 
 - Tool-call fatigue warnings now scale with the real context window: a 1M session warns at 202 calls and goes critical at 324, instead of the 200K values of 25 and 40.
