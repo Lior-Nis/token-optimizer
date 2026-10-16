@@ -40,6 +40,7 @@ from hook_runtime import (  # noqa: E402
     BUDGET_POSTTOOL_MEASURE,
     BUDGET_POSTTOOL_RUNNER,
     BUDGET_PRETOOL,
+    BUDGET_PRECOMPACT_CAPTURE,
     BUDGET_PRETOOL_MEASURE,
     BUDGET_STOP,
     HookDeadline,
@@ -52,6 +53,10 @@ from hook_runtime import (  # noqa: E402
 # hooks.json entries in this repo use 5-20s. Every budget must sit well under
 # the SMALLEST of those (the 5s Stop keepwarm-arm entry).
 SMALLEST_HOST_CEILING = 5.0
+# Entries whose work cannot fit the blanket 5 s cap. They still must clear half
+# of their OWN host timeout. The PreCompact checkpoint save takes 7-9 s on
+# Windows (#253) and its async hook has a 30 s timeout.
+LONG_SAVE_ENTRIES = {("PreCompact", "measure", "compact-capture")}
 
 
 # --------------------------------------------------------------------------
@@ -132,7 +137,7 @@ EXPECTED = {
     # streak write, so it gets the same runner budget as PostToolUse.
     ("PostToolUseFailure", "posttooluse_runner", ""): BUDGET_POSTTOOL_RUNNER,
     ("PreCompact", "measure", "dynamic-compact-instructions"): BUDGET_POSTTOOL_MEASURE,
-    ("PreCompact", "measure", "compact-capture"): BUDGET_STOP,
+    ("PreCompact", "measure", "compact-capture"): BUDGET_PRECOMPACT_CAPTURE,
     ("PreCompact", "read_cache", "--clear"): BUDGET_POSTTOOL_MEASURE,
     ("PostCompact", "measure", "quality-cache"): BUDGET_POSTTOOL_MEASURE,
     ("CwdChanged", "read_cache", "--clear"): BUDGET_POSTTOOL_MEASURE,
@@ -195,6 +200,8 @@ def test_every_budget_clears_the_smallest_host_ceiling_with_margin():
             f"{event} {module} {args}: budget {secs}s is not comfortably under "
             f"its own {timeout}s host ceiling"
         )
+        if (event, module, (args or [""])[0]) in LONG_SAVE_ENTRIES:
+            continue
         assert secs < SMALLEST_HOST_CEILING, (
             f"{event} {module} {args}: budget {secs}s exceeds the smallest host "
             f"ceiling ({SMALLEST_HOST_CEILING}s)"
@@ -229,7 +236,7 @@ def test_every_budget_clears_the_smallest_host_ceiling_with_margin():
         ("codex_hook_bridge", ["subagent-start"], 2.5),
         ("codex_hook_bridge", ["subagent-stop"], 2.5),
         ("measure", ["dynamic-compact-instructions", "--quiet"], BUDGET_POSTTOOL_MEASURE),
-        ("measure", ["compact-capture", "--trigger", "auto", "--quiet"], BUDGET_STOP),
+        ("measure", ["compact-capture", "--trigger", "auto", "--quiet"], BUDGET_PRECOMPACT_CAPTURE),
         ("measure", ["quality-cache", "--force", "--quiet"], BUDGET_POSTTOOL_MEASURE),
         ("read_cache", ["--clear", "--quiet"], BUDGET_POSTTOOL_MEASURE),
     ],
@@ -553,7 +560,17 @@ def _capture_budgets(tmp_path, extra_args):
 
 
 def test_compact_capture_default_budget_is_unchanged(tmp_path):
-    assert _capture_budgets(tmp_path, []) == [8.0]
+    assert _capture_budgets(tmp_path, []) == [14.0]
+
+
+def test_precompact_inner_capture_budget_sits_just_under_the_entry_budget():
+    """The PreCompact save is bounded twice: the entry budget (module_runner)
+    and compact-capture's own default. If the inner one sits far below the
+    outer, raising the entry budget buys nothing (#253: 8-9 s Windows saves
+    cut at 8 s). It must stay below the outer so it is the one that fires."""
+    import measure
+    inner = measure._COMPACT_CAPTURE_BUDGET_DEFAULT_S
+    assert BUDGET_PRECOMPACT_CAPTURE - 1.0 <= inner < BUDGET_PRECOMPACT_CAPTURE
 
 
 def test_compact_capture_budget_seconds_raises_the_cap(tmp_path):
@@ -564,12 +581,12 @@ def test_compact_capture_budget_seconds_raises_the_cap(tmp_path):
     "args,want",
     [
         (["--budget-seconds", "600"], 60.0),   # capped
-        (["--budget-seconds", "0"], 8),        # non-positive -> default
-        (["--budget-seconds", "-5"], 8),
-        (["--budget-seconds", "nan"], 8),
-        (["--budget-seconds", "abc"], 8),
-        (["--budget-seconds"], 8),             # missing value
-        (["--trigger", "stop", "--quiet"], 8), # hooks pass nothing
+        (["--budget-seconds", "0"], 14),        # non-positive -> default
+        (["--budget-seconds", "-5"], 14),
+        (["--budget-seconds", "nan"], 14),
+        (["--budget-seconds", "abc"], 14),
+        (["--budget-seconds"], 14),             # missing value
+        (["--trigger", "stop", "--quiet"], 14), # hooks pass nothing
     ],
 )
 def test_compact_capture_budget_seconds_is_bounded(args, want):

@@ -43656,14 +43656,17 @@ def _install_hook_budget(seconds=8, on_timeout=None):
     return HookDeadline(seconds, on_timeout=on_timeout).start()
 
 
-_COMPACT_CAPTURE_BUDGET_DEFAULT_S = 8
+# Just under hook_runtime.BUDGET_PRECOMPACT_CAPTURE (15 s), so this inner guard
+# is the one that ends a slow PreCompact save, with room past the 7-9 s measured
+# on Windows (#253). Stop/StopFailure stay capped by their 2.5 s entry budget.
+_COMPACT_CAPTURE_BUDGET_DEFAULT_S = 14
 _COMPACT_CAPTURE_BUDGET_MAX_S = 60
 
 
 def _compact_capture_budget_seconds(args):
     """Wall-clock budget for `compact-capture`, from `--budget-seconds N`.
 
-    Hooks pass nothing and keep the 8 s default. A missing, unreadable or
+    Hooks pass nothing and keep the 14 s default. A missing, unreadable or
     non-positive value gives the default; anything above 60 s is capped at 60."""
     try:
         argv = list(args or ())
@@ -56496,7 +56499,7 @@ if __name__ == "__main__":
         # feel like anything but a freeze). Cap it and fail open: a skipped checkpoint on
         # a single Stop is invisible (progressive checkpoints already cover the session),
         # a frozen hook is not. Mirrors the keepwarm-arm budget in the block below.
-        # Hooks keep the 8s default. A caller that waits on the result (the desktop
+        # Hooks keep the 14s default. A caller that waits on the result (the desktop
         # Start fresh button) passes --budget-seconds N, capped at 60.
         _tok_hook_old_sig = _install_hook_budget(_compact_capture_budget_seconds(args))
         try:

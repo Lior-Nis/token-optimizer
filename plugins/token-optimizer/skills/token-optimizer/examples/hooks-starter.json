@@ -59,7 +59,7 @@
             "type": "command",
             "command": "for b in bash /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do command -v \"$b\" >/dev/null 2>&1 || continue; L=\"${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/token-optimizer}/hooks/python-launcher.sh\"; [ -r \"$L\" ] || exit 0; exec \"$b\" \"$L\" \"${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/token-optimizer}/hooks/run.py\" skills/token-optimizer/scripts/measure.py compact-capture --trigger auto --quiet; done; exit 0",
             "async": true,
-            "timeout": 20
+            "timeout": 30
           }
         ]
       },
