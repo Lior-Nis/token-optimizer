@@ -145,6 +145,11 @@ BUDGET_POSTTOOL = 0.75
 BUDGET_PRETOOL_MEASURE = 2.0
 BUDGET_POSTTOOL_MEASURE = 2.0
 BUDGET_STOP = 2.5
+# The before-compact checkpoint is a full transcript read and write: ~1 s on
+# macOS, 7-9 s measured on Windows (#253). Under BUDGET_STOP it was cut off
+# silently and the next restore fell back to an older checkpoint. Half of the
+# hook's 30 s host timeout. The hook is async, so compaction never waits on it.
+BUDGET_PRECOMPACT_CAPTURE = 15.0
 BUDGET_CODEX_SESSION_START = 4.5
 BUDGET_CODEX_USER_PROMPT = 4.5
 BUDGET_CODEX_SUBAGENT = 2.5
@@ -198,7 +203,7 @@ def _entry_budget_rules():
         ("codex_hook_bridge", _flags_exactly("subagent-start"), BUDGET_CODEX_SUBAGENT, "Codex:SubagentStart"),
         ("codex_hook_bridge", _flags_exactly("subagent-stop"), BUDGET_CODEX_SUBAGENT, "Codex:SubagentStop"),
         ("measure", _subcommand("dynamic-compact-instructions", "--quiet"), BUDGET_POSTTOOL_MEASURE, "PreCompact:dynamic-compact-instructions"),
-        ("measure", _trigger("compact-capture", "auto"), BUDGET_STOP, "PreCompact:compact-capture"),
+        ("measure", _trigger("compact-capture", "auto"), BUDGET_PRECOMPACT_CAPTURE, "PreCompact:compact-capture"),
         ("measure", _flags_exactly("quality-cache", "--force", "--quiet"), BUDGET_POSTTOOL_MEASURE, "PostCompact:quality-cache"),
         # PreCompact and CwdChanged intentionally share this exact argv shape;
         # the resolver has no event parameter, so the label stays event-neutral.
