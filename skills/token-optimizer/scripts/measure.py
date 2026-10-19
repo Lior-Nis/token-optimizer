@@ -55275,8 +55275,10 @@ def run_ensure_health():
         pass
     # v5.0.2: Self-heal hooks with correct semantics for each install mode.
     # Claude Code only: reads/writes ~/.claude/settings.json for hook management.
-    # Never in a cloud VM: the hooks come from the repo's .claude/settings.json,
-    # so writing them into ~/.claude/settings.json would fire every hook twice.
+    # Never in a cloud VM (lean profile): the cloud kit's setup script wires
+    # the hooks into the VM's ~/.claude/settings.json, so adding the canonical
+    # set there too would fire every hook twice (setup_all_hooks also stands
+    # down via _cloud_kit_owns_hooks when the lean profile is off).
     if not _is_codex and not _lean:
         try:
             last_check = _read_config_flag("last_hook_heal_check", 0)

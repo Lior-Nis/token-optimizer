@@ -44,7 +44,7 @@ This module keeps runtime integration deliberately simple:
   TOKEN_OPTIMIZER_RUNTIME=grok. GROK_HOME is Grok Build's OWN variable — TO reads
   it but never asks users to set it; TOKEN_OPTIMIZER_GROK_HOME is TO's own
   collision-free override.
-- Cowork and Claude Code cloud (claude.ai/code, ``claude --remote``) are NOT
+- Cowork and Claude Code cloud (claude.ai/code, ``claude --cloud``) are NOT
   separate runtimes: both run the same Claude Code engine in a VM, so
   ``detect_runtime()`` still returns ``"claude"`` in either. ``remote_host()``
   is a REFINEMENT signal exposed alongside it (mirroring how the runtime

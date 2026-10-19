@@ -9,6 +9,6 @@ You don't `npm install` it. Install it from your cloud environment's setup scrip
 
 Each new session in that environment then runs the real Token Optimizer hooks, in any repo. The setup script downloads this tarball from registry.npmjs.org and checks its sha512 before running anything in it. It never fails your setup and prints nothing (log: `~/.cache/token-optimizer-cloud/install.log` in the VM).
 
-Docs: https://github.com/alexgreensh/token-optimizer#claude-code-cloud-sessions
+Docs: https://alexgreensh.github.io/token-optimizer/install/claude-code-cloud/
 
 License: PolyForm Noncommercial 1.0.0, plus the small-business grant in `LICENSE-SMALL-BUSINESS.md`.

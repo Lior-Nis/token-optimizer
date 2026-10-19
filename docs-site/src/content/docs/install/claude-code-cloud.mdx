@@ -40,11 +40,11 @@ The setup script always succeeds, even if the registry is unreachable, and print
 
 By default the script pins the version you printed it from, plus that version's sha512. The code that runs is fixed until you paste a new script. To update, run `cloud-setup-script` again after updating Token Optimizer and replace the lines.
 
-`python3 measure.py cloud-setup-script --latest` prints a script that follows the newest published version instead. It still checks the tarball against the sha512 the registry publishes, which catches corruption in transit, but it trusts the registry account for what "latest" is. Cloud environments cache their setup for about a week, so either way a new version arrives when the environment rebuilds.
+`python3 measure.py cloud-setup-script --latest` prints a script that follows the newest published version instead. Plainly: it trusts whatever is published on npm as `@alexgreensh/token-optimizer`. It checks each download against the sha512 the registry publishes for it, which proves the bytes arrived intact, not who published them, so anyone who gained publish rights on the package could ship code into every environment that uses `--latest`. The pinned default only runs the exact bytes you printed the script for. Cloud environments cache their setup for about a week, so either way a new version arrives when the environment rebuilds.
 
 ## Startup cost
 
-The setup script runs when the environment is built, before Claude Code starts, not at every session: one ~1.6 MB download and under a second of install work. During a session, hooks cost what they cost on your desktop.
+The setup script runs when the environment is built, before Claude Code starts, not at every session: one ~1.6 MB download plus a short install (0.8 s on a Mac in testing; not yet timed inside a cloud VM). During a session, hooks cost what they cost on your desktop.
 
 ## Limits
 
@@ -60,7 +60,13 @@ From inside a cloud session:
 python3 ~/.cache/token-optimizer-cloud/*/skills/token-optimizer/scripts/measure.py cloud-doctor
 ```
 
-It checks the install, and that the hooks in settings still match `hooks.json`.
+It checks the install, that the hooks in settings still match `hooks.json`, and names the **live route**: the hooks in `~/.claude/settings.json` (what the setup script writes), the managed fallback below, the Token Optimizer plugin itself (when account plugin sync delivers it, the cloud hooks stand down), or none. If the setup script ran but the hooks are missing from `~/.claude/settings.json` in the session, it says so in plain words: something rewrote the file after the setup script.
+
+### Managed fallback (optional)
+
+`python3 measure.py cloud-setup-script --managed-fallback` adds one step: the same hooks are also written to `/etc/claude-code/managed-settings.d/50-token-optimizer-cloud.json`, Token Optimizer's own drop-in file in Claude Code's managed settings directory. If anything rewrites `~/.claude/settings.json` after the setup script, the hooks still load from there. Claude Code runs a handler defined in more than one settings file once, and the two copies are identical, so nothing runs twice. No other file in that directory, and never `managed-settings.json`, is touched; removing the kit deletes only this file.
+
+It is off by default for a reason: Claude Code documents reading the managed settings file for **self-hosted** environments (and only when no server-managed settings or MDM policy supply the managed tier), while Anthropic-hosted sessions take policy from server-managed settings. Today's Anthropic-hosted VMs start with no `~/.claude/settings.json` and keep their own hooks in a separate file, so the default route has nothing to collide with.
 
 - Set `TOKEN_OPTIMIZER_CLOUD_KIT=off` in the environment's variables to switch the hooks off without touching the setup script, or delete the lines to remove it.
 - Outside a cloud VM the hooks do nothing, and if the real plugin is ever loaded in the same VM (an account-synced copy, for example), the cloud hooks stand down so nothing runs twice.
