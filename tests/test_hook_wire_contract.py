@@ -596,9 +596,21 @@ def test_manifest_list_is_complete():
     (except the Cowork probe plugin) is driven above."""
     driven = {CLAUDE_MANIFEST, CODEX_PLUGIN_MANIFEST, COWORK_MANIFEST}
     shipped = set()
-    for p in REPO.rglob("hooks.json"):
+    # Shipped = tracked by git. A local build/ (npm pack staging) or any other
+    # untracked copy is not shipped and must not decide this test. Copies
+    # without .git (the regression-guard harness) fall back to a scan that
+    # skips build output.
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "--", "*hooks.json"],
+            capture_output=True, text=True, check=True).stdout.split()
+        candidates = [REPO / t for t in tracked]
+    except (OSError, subprocess.CalledProcessError):
+        candidates = list(REPO.rglob("hooks.json"))
+    for p in candidates:
         rel = p.relative_to(REPO).as_posix()
-        if any(part in rel for part in ("node_modules/", "/examples/", "to-hook-probe/", "tests/")):
+        if rel.startswith("build/") or any(
+                part in rel for part in ("node_modules/", "/examples/", "to-hook-probe/", "tests/")):
             continue
         data = json.loads(p.read_text(encoding="utf-8"))
         if _entries_from(data, "x"):
