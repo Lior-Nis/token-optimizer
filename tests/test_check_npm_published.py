@@ -7,6 +7,7 @@ to go red, so its red paths run here against a local registry, never npmjs.org.
 from __future__ import annotations
 
 import http.server
+import os
 import json
 import subprocess
 import sys
@@ -138,3 +139,34 @@ def test_gate_is_wired_into_the_release():
     assert wf.index("bash scripts/sign-release.sh") < wf.index("scripts/check_npm_published.py")
     releasing = (REPO / "packaging" / "npm" / "RELEASING.md").read_text(encoding="utf-8")
     assert "scripts/check_npm_published.py --expect-integrity" in releasing
+
+
+def _gate_step_script() -> str:
+    """The run: block of the Sign release npm gate step, as bash text."""
+    wf = (REPO / ".github" / "workflows" / "sign-release.yml").read_text(encoding="utf-8")
+    step = wf[wf.index("- name: Check the cloud npm package for this release is published"):]
+    body = step[step.index("run: |") + len("run: |"):]
+    lines = []
+    for line in body.splitlines()[1:]:
+        if line.strip() and not line.startswith("          "):
+            break
+        lines.append(line[10:])
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="runs the workflow step under bash")
+def test_sign_release_gate_skips_tags_that_predate_the_script(tmp_path):
+    """Review 2 LOW-4: a workflow_dispatch backfill of an old tag checks out a
+    tree without scripts/check_npm_published.py, and the step failed the whole
+    signing workflow. It must skip there, and still run the gate otherwise."""
+    script = _gate_step_script()
+    old = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), capture_output=True, text=True,
+                         env={"PATH": os.environ.get("PATH", ""), "TAG": "v5.11.64"}, timeout=30)
+    assert old.returncode == 0, old.stderr
+    assert "skipped" in old.stdout
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "check_npm_published.py").write_text(
+        "import sys; print('GATE', sys.argv[1:]); sys.exit(1)\n", encoding="utf-8")
+    new = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), capture_output=True, text=True,
+                         env={"PATH": os.environ.get("PATH", ""), "TAG": "v9.9.9"}, timeout=30)
+    assert new.returncode == 1 and "GATE" in new.stdout and "v9.9.9" in new.stdout

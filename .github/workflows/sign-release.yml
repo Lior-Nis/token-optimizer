@@ -101,8 +101,16 @@ jobs:
       # missing npm package turns this workflow red without also breaking the
       # script installer. Same answer as `npm view <pkg>@<ver> dist.integrity`.
       # Retries cover registry propagation when npm publish ran moments before
-      # the release was created. Tags that predate packaging/npm are skipped.
+      # the release was created. Tags that predate the gate (a workflow_dispatch
+      # backfill of an old tag checks out a tree without the script) or
+      # packaging/npm are skipped, never failed.
       - name: Check the cloud npm package for this release is published
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/check_npm_published.py ]; then
+            echo "skipped: $TAG predates scripts/check_npm_published.py"
+            exit 0
+          fi
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30
