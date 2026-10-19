@@ -841,7 +841,10 @@ def test_run_sh_logs_session_starts_wired_by_another_layer(tmp_path):
     root = _fake_root(tmp_path)
     script = tmp_path / cloud_kit.RUNNER_NAME
     script.write_text(cloud_kit.render_run_sh(root, tmp_path / "pyc", "9.9.9"), encoding="utf-8")
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "CLAUDE_CODE_REMOTE": "true"}
+    # Pin both HOME and CLAUDE_CONFIG_DIR (tests/test_host_safety_guard.py): the
+    # launcher is a fake echo, but nothing here may resolve the real ~/.claude.
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_CODE_REMOTE": "true"}
 
     def start():
         return subprocess.run(["sh", str(script), "hooks/sessionstart_runner.py"], capture_output=True,
