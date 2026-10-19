@@ -81,6 +81,13 @@ _HOME_OVERRIDE_VARS = (
     "TOKEN_OPTIMIZER_DEVIN_HOME", "DEVIN_CONFIG_DIR",
     "TOKEN_OPTIMIZER_SNAPSHOT_DIR", "OPENCODE_DATA_DIR", "OPENCODE_CONFIG_DIR",
     "HOMEDRIVE", "HOMEPATH",
+    # Hosted-VM markers (runtime_env.remote_host): a suite run INSIDE a Claude
+    # Code cloud or Cowork session would otherwise flip every test into the
+    # cloud lean profile / Cowork state routing. Tests that need them set them.
+    "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
+    "TOKEN_OPTIMIZER_REMOTE_HOST", "TOKEN_OPTIMIZER_REMOTE_LEAN",
+    "TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER",
+    "CLAUDE_PROJECT_DIR", "PYTHONPYCACHEPREFIX",
 )
 
 SANDBOX: Path | None = None

@@ -30,13 +30,15 @@ Two distribution paths work:
 
 ## Runtime detection
 
-Inside Cowork, `is_cowork()` returns true while `detect_runtime()` still resolves to `claude`, so the engine paths are unchanged and the human-facing label reads `Claude Code (Cowork)`. Any of these host markers is enough to detect Cowork:
+Inside Cowork, `is_cowork()` returns true while `detect_runtime()` still resolves to `claude`, so the engine paths are unchanged and the human-facing label reads `Claude Code (Cowork)`. Claude Code cloud sessions (claude.ai/code, `claude --remote`) are a different VM host with their own label, `Claude Code (cloud)`, and `is_claude_code_cloud()` instead. The host markers resolve in this order:
 
-| Signal | Notes |
-|---|---|
-| `CLAUDE_CODE_REMOTE=true` | The only documented cloud-vs-desktop signal. Primary. |
-| `CLAUDE_CODE_CONTAINER_ID` | Observed in every Cowork VM, undocumented. Fallback. |
-| `CLAUDE_PLUGIN_ROOT` under `/plugins/synced/` | Where org-console account-synced plugins land. |
+| Signal | Resolves to | Notes |
+|---|---|---|
+| `TOKEN_OPTIMIZER_REMOTE_HOST=cloud`, `cowork` or `local` | as set | Explicit pin for launchers that know where they run. |
+| `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_...`) | cloud | Observed in every Claude Code cloud VM. |
+| `CLAUDE_CODE_CONTAINER_ID` | Cowork | Observed in every Cowork VM, undocumented. |
+| `CLAUDE_PLUGIN_ROOT` under `/plugins/synced/` | Cowork | Where org-console account-synced plugins land. |
+| `CLAUDE_CODE_REMOTE=true` alone | cloud | The documented "running in the cloud" signal. It used to be read as Cowork, which labelled every cloud session Cowork. |
 
 `AI_AGENT` is deliberately not a signal: the local Claude Code CLI also exports `AI_AGENT=claude-code_<version>_harness` into every hook subprocess, so that marker cannot tell a Cowork VM from a desktop session.
 

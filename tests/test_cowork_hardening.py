@@ -9,7 +9,9 @@ desktop path is unchanged alongside the Cowork behavior.
          hookSpecificOutput.additionalContext envelope in Cowork.
   unified per-session state dir: quality-cache + checkpoints + run-once
          markers resolve under the SAME base as SNAPSHOT_DIR in Cowork.
-  is_cowork() keys on the DOCUMENTED CLAUDE_CODE_REMOTE=true signal.
+  is_cowork() keys on the Cowork-only markers (CLAUDE_CODE_CONTAINER_ID, a
+         /plugins/synced/ plugin path). CLAUDE_CODE_REMOTE alone is the Claude
+         Code cloud signal (is_claude_code_cloud), not Cowork.
   measure.py self-location resolver recognizes the /plugins/synced/ tree.
   report prints an HONEST platform-overhead caveat in Cowork (no fabricated
          calibration number).
@@ -43,6 +45,8 @@ def _cache_clear(fn):
 
 _COWORK_ENV = (
     "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "TOKEN_OPTIMIZER_REMOTE_HOST",
     "CLAUDE_CODE_CONTAINER_ID",
     "AI_AGENT",
     "CLAUDE_PLUGIN_ROOT",
@@ -55,21 +59,29 @@ def _reset_cowork_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("TOKEN_OPTIMIZER_NO_PROC_SCAN", "1")
     _cache_clear(runtime_env.is_cowork)
+    _cache_clear(runtime_env.is_claude_code_cloud)
+    _cache_clear(runtime_env.remote_host)
     _cache_clear(runtime_env.detect_runtime)
 
 
 # --------------------------------------------------------------------------- #
-# is_cowork() via the documented CLAUDE_CODE_REMOTE signal
+# CLAUDE_CODE_REMOTE alone means Claude Code cloud, not Cowork
 # --------------------------------------------------------------------------- #
 
-def test_is_cowork_true_via_documented_remote_env(monkeypatch):
+def test_remote_env_alone_is_claude_code_cloud_not_cowork(monkeypatch):
+    """The documented CLAUDE_CODE_REMOTE=true describes Claude Code cloud. Read
+    as a Cowork marker, it labelled every cloud session "Claude Code (Cowork)"
+    and switched on the Cowork caveats and exclusions there (2026-10-19)."""
     _reset_cowork_env(monkeypatch)
     assert runtime_env.is_cowork() is False  # nothing set -> not cowork
+    assert runtime_env.is_claude_code_cloud() is False
 
     _reset_cowork_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     _cache_clear(runtime_env.is_cowork)
-    assert runtime_env.is_cowork() is True
+    _cache_clear(runtime_env.is_claude_code_cloud)
+    assert runtime_env.is_cowork() is False
+    assert runtime_env.is_claude_code_cloud() is True
     # Still the claude runtime, never a new runtime name.
     monkeypatch.setenv("CLAUDECODE", "1")
     _cache_clear(runtime_env.detect_runtime)
@@ -77,19 +89,28 @@ def test_is_cowork_true_via_documented_remote_env(monkeypatch):
 
 
 @pytest.mark.parametrize("val", ["true", "TRUE", "1", "yes", "on"])
-def test_is_cowork_remote_truthy_values(monkeypatch, val):
+def test_remote_truthy_values_mean_cloud(monkeypatch, val):
     _reset_cowork_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", val)
-    _cache_clear(runtime_env.is_cowork)
-    assert runtime_env.is_cowork() is True
+    assert runtime_env.is_claude_code_cloud() is True
+    assert runtime_env.is_cowork() is False
 
 
 @pytest.mark.parametrize("val", ["false", "0", "", "no", "off"])
-def test_is_cowork_remote_falsy_values_leave_it_off(monkeypatch, val):
+def test_remote_falsy_values_leave_both_off(monkeypatch, val):
     _reset_cowork_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", val)
-    _cache_clear(runtime_env.is_cowork)
     assert runtime_env.is_cowork() is False
+    assert runtime_env.is_claude_code_cloud() is False
+
+
+def test_cowork_marker_wins_over_bare_remote(monkeypatch):
+    """A Cowork VM that also exports CLAUDE_CODE_REMOTE stays Cowork."""
+    _reset_cowork_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_CODE_CONTAINER_ID", "cowork-abc")
+    assert runtime_env.is_cowork() is True
+    assert runtime_env.is_claude_code_cloud() is False
 
 
 def test_is_cowork_undocumented_fallback_still_holds(monkeypatch):
@@ -155,18 +176,24 @@ def test_is_cowork_native_ai_agent_harness_is_not_cowork(monkeypatch, ai_agent):
     )
 
 
-def test_is_cowork_native_ai_agent_does_not_shadow_real_remote(monkeypatch):
-    """AI_AGENT being set must not prevent a genuine CLAUDE_CODE_REMOTE signal.
+def test_is_cowork_native_ai_agent_does_not_shadow_real_marker(monkeypatch):
+    """AI_AGENT being set must not prevent a genuine Cowork signal.
 
     The removal of the AI_AGENT check must not break the positive path: when a
-    real Cowork marker (CLAUDE_CODE_REMOTE) is present alongside the native
-    AI_AGENT harness value, is_cowork() still returns True.
+    real Cowork marker (CLAUDE_CODE_CONTAINER_ID) is present alongside the
+    native AI_AGENT harness value, is_cowork() still returns True; with only
+    CLAUDE_CODE_REMOTE it is cloud.
     """
     _reset_cowork_env(monkeypatch)
     monkeypatch.setenv("AI_AGENT", "claude-code_2.1.258_harness")
-    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
-    _cache_clear(runtime_env.is_cowork)
+    monkeypatch.setenv("CLAUDE_CODE_CONTAINER_ID", "cowork-abc")
     assert runtime_env.is_cowork() is True
+
+    _reset_cowork_env(monkeypatch)
+    monkeypatch.setenv("AI_AGENT", "claude-code_2.1.258_harness")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    assert runtime_env.is_cowork() is False
+    assert runtime_env.is_claude_code_cloud() is True
 
 
 # --------------------------------------------------------------------------- #
@@ -257,7 +284,7 @@ def _run_state_probe(tmp_path, *, cowork):
         "TOKEN_OPTIMIZER_NO_PROC_SCAN": "1",
     }
     if cowork:
-        env["CLAUDE_CODE_REMOTE"] = "true"
+        env["CLAUDE_CODE_CONTAINER_ID"] = "cowork-probe"
     res = subprocess.run([sys.executable, "-c", probe], capture_output=True,
                          text=True, env=env, timeout=60)
     assert res.returncode == 0, res.stderr
