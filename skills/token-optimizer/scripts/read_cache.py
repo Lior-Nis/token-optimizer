@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sqlite3
+import stat as stat_module
 import sys
 import time
 from datetime import datetime
@@ -423,6 +424,109 @@ def _make_store(
         return SessionStore(session_id, busy_timeout_ms=busy_timeout_ms)
     except Exception:
         return None
+
+
+# --- Compaction boundary detection -----------------------------------------
+# After a compaction the model no longer holds the files it read earlier, so a
+# file_reads row from before the boundary must not make a re-Read "redundant".
+# Native Claude Code clears the rows from SessionStart(compact)
+# (--clear-compacted), but hosts without that hook (the Cowork build ships no
+# SessionStart/PreCompact) never cleared them, and soft_block then told the
+# model a file was "already in context" when it was gone. So the Read hook
+# checks the transcript itself: Claude Code appends a
+# {"type":"system","subtype":"compact_boundary"} row at every /compact or
+# auto-compact, followed by the summary as a user row with
+# "isCompactSummary": true. A per-session cursor (session_meta) means each
+# Read scans only the bytes appended since the previous Read.
+_COMPACT_SCAN_META_KEY = "compact_scan_cursor"
+_COMPACT_MARKERS = (b"compact_boundary", b"isCompactSummary")
+_COMPACT_SCAN_CHUNK = 1 << 20  # 1 MiB
+_COMPACT_SCAN_MAX_SECONDS = 0.25
+
+
+def _is_compact_boundary_row(line: bytes) -> bool:
+    """True for a real compaction row, not a tool result that merely quotes
+    the marker text (reading TO's own source would otherwise trip it)."""
+    if not any(m in line for m in _COMPACT_MARKERS):
+        return False
+    try:
+        row = json.loads(line.decode("utf-8", errors="replace"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(row, dict):
+        return False
+    if row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+        return True
+    return row.get("isCompactSummary") is True
+
+
+def _scan_for_compaction(store: Any, transcript_path: Any) -> bool:
+    """Advance this session's transcript cursor; True when a compaction
+    boundary appeared since the last scan.
+
+    Line-aligned: the cursor only moves past complete lines, so a row being
+    written while we read is seen whole on the next Read. Bounded by
+    _COMPACT_SCAN_MAX_SECONDS; an unfinished scan resumes next time. A
+    transcript that shrank or changed path restarts from 0. Fail-open: any
+    error returns False (status quo behaviour), never raises.
+    """
+    if store is None or not transcript_path:
+        return False
+    try:
+        path = str(transcript_path)
+        st = os.stat(path)
+        if not stat_module.S_ISREG(st.st_mode):
+            return False
+        size = st.st_size
+        offset = 0
+        try:
+            raw = store.get_meta(_COMPACT_SCAN_META_KEY)
+            if raw:
+                cur = json.loads(raw)
+                if isinstance(cur, dict) and cur.get("path") == path:
+                    offset = int(cur.get("offset") or 0)
+        except Exception:
+            offset = 0
+        if offset > size:
+            offset = 0  # rewritten / truncated transcript: rescan
+        if offset == size:
+            return False
+        found = False
+        start = time.monotonic()
+        pos = offset
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            carry = b""
+            while pos + len(carry) < size:
+                chunk = fh.read(min(_COMPACT_SCAN_CHUNK, size - pos - len(carry)))
+                if not chunk:
+                    break
+                buf = carry + chunk
+                cut = buf.rfind(b"\n")
+                if cut < 0:
+                    carry = buf
+                    if len(carry) > 64 * _COMPACT_SCAN_CHUNK:
+                        break  # absurd single line: stop, resume later
+                    continue
+                complete, carry = buf[: cut + 1], buf[cut + 1:]
+                if any(m in complete for m in _COMPACT_MARKERS):
+                    for line in complete.split(b"\n"):
+                        if line and _is_compact_boundary_row(line):
+                            found = True
+                            break
+                pos += len(complete)
+                if time.monotonic() - start > _COMPACT_SCAN_MAX_SECONDS:
+                    break
+        if pos != offset:
+            try:
+                store.set_meta(
+                    _COMPACT_SCAN_META_KEY, json.dumps({"path": path, "offset": pos})
+                )
+            except Exception:
+                pass
+        return found
+    except Exception:
+        return False
 
 
 def _cache_path(session_id: str) -> Path:
@@ -1304,6 +1408,19 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
                 session_id,
                 f"hint->read: {os.path.basename(file_path)}",
             )
+    except Exception:
+        pass
+
+    # A compaction since the last Read dropped every earlier read from the
+    # model's context: forget them so this Read is judged a first read.
+    try:
+        if _scan_for_compaction(store, hook_input.get("transcript_path")):
+            store.clear_file_entries()
+            if not quiet:
+                print(
+                    f"[Read Cache] Compaction detected; cleared file_reads for {session_id}",
+                    file=sys.stderr,
+                )
     except Exception:
         pass
 
