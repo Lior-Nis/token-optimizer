@@ -25396,6 +25396,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         return _collect_grok_sessions(days=days, quiet=quiet, rebuild=rebuild)
 
     conn = _init_trends_db()
+    _session_log_has_origin = bool(_origin_insert_parts(conn, "session_log")[0])
 
     # Capture the existing comparison before refreshing historical session rows.
     # The user's baseline must not move as collection catches up.
@@ -25581,7 +25582,15 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # e.g. "claude" or "opencode") is the correct fallback.
         session_platform = parsed.get("runtime") or detect_runtime()
 
-        # Insert session_log
+        # Insert session_log. ``origin`` rides along only when the column
+        # exists: if the migration lost its busy wait, every insert naming a
+        # missing column would fail and the whole collect would store nothing
+        # (review #10). Same rule as the event writers (_origin_insert_parts).
+        if _session_log_has_origin:
+            o_col, o_mark, o_val = ", origin", ", ?", (row_origin,)
+            o_upd = ",\n               origin=COALESCE(session_log.origin, excluded.origin)"
+        else:
+            o_col, o_mark, o_val, o_upd = "", "", (), ""
         cur = conn.execute(
             """INSERT INTO session_log
                (jsonl_path, date, project, duration_minutes, input_tokens,
@@ -25592,8 +25601,8 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                     all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
                     quality_score, quality_grade, stale_waste_tokens, is_sidechain,
                     sidechain_reason, reported_input_tokens, reported_output_tokens,
-                    reported_model_usage_json, platform, session_uuid, daily_usage_json, origin)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    reported_model_usage_json, platform, session_uuid, daily_usage_json""" + o_col + """)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + o_mark + """)
                ON CONFLICT(jsonl_path) DO UPDATE SET
                date=MAX(session_log.date, excluded.date),
                project=excluded.project,
@@ -25629,8 +25638,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                reported_model_usage_json=excluded.reported_model_usage_json,
                platform=excluded.platform,
                session_uuid=COALESCE(excluded.session_uuid, session_log.session_uuid),
-               daily_usage_json=excluded.daily_usage_json,
-               origin=COALESCE(session_log.origin, excluded.origin)
+               daily_usage_json=excluded.daily_usage_json""" + o_upd + """
                WHERE session_log.collected_at IS NULL
                   OR excluded.collected_at >= session_log.collected_at""",
             (
@@ -25668,8 +25676,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 session_platform,
                 session_uuid,
                 json.dumps(daily_usage),
-                row_origin,
-            ),
+            ) + o_val,
         )
         if cur.rowcount != 1:
             continue

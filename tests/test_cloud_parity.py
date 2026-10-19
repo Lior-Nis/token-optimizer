@@ -946,6 +946,46 @@ def test_session_log_origin_survives_teleported_copy(tmp_path, monkeypatch):
     assert rows[0][2] == str(local_copy)
 
 
+@pytest.mark.skipif(sqlite3.sqlite_version_info < (3, 35, 0), reason="needs ALTER TABLE DROP COLUMN")
+def test_collect_still_stores_sessions_when_origin_migration_was_lost(tmp_path, monkeypatch):
+    """Review #10: collect_sessions always named the origin column. If the
+    session_log ALTER lost its busy wait (another writer held the DB), every
+    insert failed with "no such column" and the collect stored nothing. It now
+    adds origin only when the column exists, like the event writers."""
+    monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", str(tmp_path / "snap"))
+    monkeypatch.setenv("TOKEN_OPTIMIZER_RUNTIME", "claude")
+    for var in _HOST_ENV:
+        monkeypatch.delenv(var, raising=False)
+    fake_claude = tmp_path / "claude_home"
+    sid = "8a1c9a2e-7b4d-4e8a-9c1f-0a2b3c4d5e70"
+    path = fake_claude / "projects" / "-Users-me-repo" / f"{sid}.jsonl"
+    path.parent.mkdir(parents=True)
+    _transcript(path, 2)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_claude))
+    for mod_name in ("measure", "runtime_env", "plugin_env"):
+        monkeypatch.delitem(sys.modules, mod_name, raising=False)
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    m = importlib.import_module("measure")
+
+    real_init = m._init_trends_db
+
+    def _init_without_origin():
+        conn = real_init()
+        if "origin" in {r[1] for r in conn.execute("PRAGMA table_info(session_log)")}:
+            conn.execute("ALTER TABLE session_log DROP COLUMN origin")
+            conn.commit()
+        return conn
+
+    monkeypatch.setattr(m, "_init_trends_db", _init_without_origin)
+    m.collect_sessions(days=3650, quiet=True)
+    conn = sqlite3.connect(str(m.TRENDS_DB))
+    try:
+        assert "origin" not in _cols(m.TRENDS_DB, "session_log")
+        assert conn.execute("SELECT session_uuid FROM session_log").fetchall() == [(sid,)]
+    finally:
+        conn.close()
+
+
 # --------------------------------------------------------------------------- #
 # 8. Per-account schedulers are never touched from a redirected HOME
 # --------------------------------------------------------------------------- #
