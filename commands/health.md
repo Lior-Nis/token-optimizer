@@ -21,6 +21,18 @@ if [ -z "$RUNTIME" ]; then
     RUNTIME="opencode"
   elif [ -n "$CODEX_HOME" ]; then
     RUNTIME="codex"
+  # Explicit config-dir env of another harness: same tier as Python's
+  # detect_runtime() (above CLAUDECODE, which every Claude Code child inherits).
+  elif [ -n "$HERMES_HOME" ]; then
+    RUNTIME="hermes"
+  elif [ -n "$COPILOT_HOME" ] || [ -n "$TOKEN_OPTIMIZER_COPILOT_HOME" ]; then
+    RUNTIME="copilot"
+  elif [ -n "$TOKEN_OPTIMIZER_CURSOR_HOME" ]; then
+    RUNTIME="cursor"
+  elif [ -n "$TOKEN_OPTIMIZER_ANTIGRAVITY_HOME" ]; then
+    RUNTIME="antigravity"
+  elif [ -n "$GROK_HOME" ] || [ -n "$TOKEN_OPTIMIZER_GROK_HOME" ]; then
+    RUNTIME="grok"
   elif [ -n "$CLAUDECODE" ] || [ -n "$CLAUDE_CODE_ENTRYPOINT" ] || [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
     RUNTIME="claude"
   elif [ -d "$HOME/.config/opencode" ] && [ ! -d "$HOME/.codex" ]; then

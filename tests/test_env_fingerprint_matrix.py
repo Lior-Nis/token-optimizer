@@ -70,6 +70,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -616,6 +617,21 @@ BASH_TOOL_HOSTS = {
     "opencode_beside_claude": ({}, (".config/opencode", ".claude/projects"), "opencode"),
     "opencode_env_signal": ({"OPENCODE_CONFIG_DIR": "{home}/.config/opencode"},
                             (".config/opencode", ".claude/projects", ".codex"), "opencode"),
+    # Harnesses Python names by their config-dir env. The preamble exports its
+    # answer as TOKEN_OPTIMIZER_RUNTIME, which overrides Python, so it must give
+    # the same name (it used to say codex/claude here).
+    "copilot_home": ({"COPILOT_HOME": "{home}/.copilot"}, (".copilot", ".claude/projects"), "copilot"),
+    "copilot_home_codex_on_disk": ({"COPILOT_HOME": "{home}/.copilot"}, (".copilot", ".codex"), "copilot"),
+    "copilot_nested_in_claude": ({"COPILOT_HOME": "{home}/.copilot", "CLAUDECODE": "1"},
+                                 (".copilot", ".claude/projects"), "copilot"),
+    "copilot_to_override": ({"TOKEN_OPTIMIZER_COPILOT_HOME": "{home}/.copilot"}, (".copilot", ".codex"), "copilot"),
+    "hermes_home_codex_on_disk": ({"HERMES_HOME": "{home}/.hermes"}, (".hermes", ".codex"), "hermes"),
+    "hermes_nested_in_claude": ({"HERMES_HOME": "{home}/.hermes", "CLAUDECODE": "1"},
+                                (".hermes", ".claude/projects", ".codex"), "hermes"),
+    "cursor_to_home": ({"TOKEN_OPTIMIZER_CURSOR_HOME": "{home}/.cursor"}, (".cursor", ".codex"), "cursor"),
+    "antigravity_to_home": ({"TOKEN_OPTIMIZER_ANTIGRAVITY_HOME": "{home}/.gemini/antigravity"},
+                            (".gemini/antigravity", ".codex"), "antigravity"),
+    "grok_home": ({"GROK_HOME": "{home}/.grok", "CLAUDECODE": "1"}, (".grok", ".codex"), "grok"),
 }
 
 
@@ -654,6 +670,22 @@ def test_skill_preamble_picks_the_running_harness(tmp_path, name, rel):
                           env=env, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == BASH_TOOL_HOSTS[name][2], f"{rel} under {name}: {proc.stdout!r}"
+
+
+# Rows with no env signal at all: there the preamble's directory heuristic is
+# the only signal (Python, with the process scan off, has nothing to go on), so
+# its answer is the one that should win. Every other row must agree.
+DIR_HEURISTIC_ONLY = {"codex_bash_tool", "opencode_beside_claude"}
+
+
+@pytest.mark.parametrize("name", [n for n in BASH_TOOL_HOSTS if n not in DIR_HEURISTIC_ONLY])
+def test_skill_preamble_agrees_with_python_detector(tmp_path, name):
+    """The preamble's RUNTIME is exported and wins over Python, so wherever
+    the host gives an env signal the two must name the same harness
+    (Copilot/Hermes used to differ)."""
+    env, home = bash_tool_machine(tmp_path, name)
+    got = probe(env, tmp_path, REPO / "skills" / "token-optimizer" / "scripts")
+    assert got["runtime"] == BASH_TOOL_HOSTS[name][2], (name, got)
 
 
 def test_python_detection_in_a_claude_bash_tool_ignores_codex_on_disk(tmp_path):
@@ -1046,3 +1078,119 @@ def test_opencode_session_beside_claude_code_leaves_claude_untouched(tmp_path):
                            capture_output=True, text=True, timeout=120)
     assert "OpenCode" in quick.stdout + quick.stderr, (quick.stdout[-400:], quick.stderr[-400:])
     assert {p: p.read_bytes() for p in (home / ".claude").rglob("*") if p.is_file()} == claude_before
+
+
+# --------------------------------------------------------------------------- #
+# Repairing users the Codex-plugin bug already hit: Claude Code's statusLine
+# pointing into ~/.codex/plugins/cache/... (or at a statusline.js that is gone)
+# --------------------------------------------------------------------------- #
+
+SL_JS = "skills/token-optimizer/scripts/statusline.js"
+CODEX_CACHE_SL = "{home}/.codex/plugins/cache/alexgreensh-token-optimizer/token-optimizer/{ver}/" + SL_JS
+# A script (install.sh) install: not under /plugins/cache/, so the old
+# cache-root heal never applied to it.
+SCRIPT_INSTALL = dataclasses.replace(HOSTS["cli"], name="cli_script_install",
+                                     plugin="home/alex/.claude/token-optimizer", marketplace_install=False)
+
+
+def _seed_statusline(home: Path, command: str) -> tuple[Path, dict]:
+    sp = home / ".claude" / "settings.json"
+    s = json.loads(sp.read_text())
+    s.update({"theme": "dark", "env": {"FOO": "bar"}, "permissions": {"allow": ["Bash(ls:*)"]},
+              "statusLine": {"type": "command", "command": command, "padding": 0}})
+    sp.write_text(json.dumps(s, indent=2))
+    return sp, s
+
+
+def _sl_session(machine, h, command_fn, make_file=None):
+    env, home, project, plugin = materialize(machine, h)
+    command = command_fn(home=home, plugin=plugin)
+    if make_file:
+        target = Path(make_file.format(home=home, ver="5.13.49"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("// some statusline\n")
+    sp, before = _seed_statusline(home, command)
+    transcript = transcript_for(machine, h, project)
+    write_transcript(transcript, project)
+    run_session(machine, h, env, project, transcript)
+    return home, plugin, before, json.loads(sp.read_text())
+
+
+def _assert_healed(home, plugin, before, after):
+    cmd = after["statusLine"]["command"]
+    path = re.search(r"'([^']*statusline\.js)'", cmd).group(1)
+    assert Path(path).is_file(), cmd
+    assert ".codex" not in path and Path(path).resolve().is_relative_to((home / ".claude").resolve()), cmd
+    assert cmd.startswith("node '") and cmd.endswith("'"), cmd
+    # Every other key, and every other statusLine key, unchanged.
+    # (SessionStart's own unrelated heals may ADD keys such as cleanupPeriodDays.)
+    assert {k: after.get(k) for k in before if k != "statusLine"} == \
+        {k: v for k, v in before.items() if k != "statusLine"}
+    assert {k: v for k, v in after["statusLine"].items() if k != "command"} == \
+        {k: v for k, v in before["statusLine"].items() if k != "command"}
+
+
+@pytest.mark.parametrize("h", [HOSTS["cli"], SCRIPT_INSTALL], ids=["plugin_cache", "script_install"])
+def test_claude_session_repoints_statusline_from_codex_cache(machine, h):
+    """Bug 1's victims: the Codex copy still exists (Codex hasn't updated yet),
+    so nothing looks broken until Codex prunes it. Re-point it now."""
+    home, plugin, before, after = _sl_session(
+        machine, h, lambda home, plugin: "node '" + CODEX_CACHE_SL.format(home=home, ver="5.13.49") + "'",
+        make_file=CODEX_CACHE_SL)
+    _assert_healed(home, plugin, before, after)
+
+
+@pytest.mark.parametrize("h", [HOSTS["cli"], SCRIPT_INSTALL], ids=["plugin_cache", "script_install"])
+def test_claude_session_repoints_statusline_to_a_deleted_file(machine, h):
+    home, plugin, before, after = _sl_session(
+        machine, h, lambda home, plugin: f"node '{home}/old-clone/token-optimizer/{SL_JS}'")
+    _assert_healed(home, plugin, before, after)
+
+
+@pytest.mark.parametrize("command_fn,make_file", [
+    # A dev clone of Token Optimizer that exists: the user's choice.
+    (lambda home, plugin: f"node '{home}/dev/token-optimizer/{SL_JS}'", "{home}/dev/token-optimizer/" + SL_JS),
+    # Another tool's status line.
+    (lambda home, plugin: "npx -y ccstatusline@latest", None),
+    # Someone else's statusline.js that happens to be gone.
+    (lambda home, plugin: f"node '{home}/gone/other-tool/statusline.js'", None),
+], ids=["dev_clone", "foreign_tool", "foreign_missing_js"])
+def test_claude_session_leaves_other_statuslines_alone(machine, command_fn, make_file):
+    home, plugin, before, after = _sl_session(machine, HOSTS["cli"], command_fn, make_file)
+    assert {k: after.get(k) for k in before} == before
+
+
+def test_codex_session_never_touches_claude_statusline(machine):
+    h = HOSTS["codex_plugin"]
+    env, home, project, plugin = materialize(machine, h)
+    sp, before = _seed_statusline(
+        home, f"node '{home}/.claude/plugins/cache/alexgreensh-token-optimizer/token-optimizer/5.13.40/{SL_JS}'")
+    raw = sp.read_bytes()
+    transcript = transcript_for(machine, h, project)
+    write_transcript(transcript, project)
+    run_session(machine, h, env, project, transcript)
+    assert sp.read_bytes() == raw
+
+
+def _doctor(machine, h, command_fn, make_file=None):
+    env, home, project, plugin = materialize(machine, h)
+    if make_file:
+        target = Path(make_file.format(home=home))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("// statusline\n")
+    _seed_statusline(home, command_fn(home=home, plugin=plugin))
+    measure = plugin / "skills" / "token-optimizer" / "scripts" / "measure.py"
+    proc = subprocess.run([sys.executable, str(measure), "doctor"], env=env, cwd=str(project),
+                          capture_output=True, text=True, timeout=120)
+    return [l for l in proc.stdout.splitlines() if "Quality bar" in l]
+
+
+def test_doctor_flags_a_status_line_running_a_missing_file(machine):
+    lines = _doctor(machine, HOSTS["cli"], lambda home, plugin: f"node '{home}/old-clone/token-optimizer/{SL_JS}'")
+    assert lines and "missing file" in lines[0] and "old-clone" in lines[0], lines
+
+
+def test_doctor_names_another_token_optimizer_checkout(machine):
+    lines = _doctor(machine, HOSTS["cli"], lambda home, plugin: f"node '{home}/dev/token-optimizer/{SL_JS}'",
+                    "{home}/dev/token-optimizer/" + SL_JS)
+    assert lines and "another Token Optimizer copy" in lines[0] and "/dev/token-optimizer/" in lines[0], lines
