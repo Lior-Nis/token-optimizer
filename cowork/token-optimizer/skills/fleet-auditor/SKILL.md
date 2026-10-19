@@ -19,32 +19,19 @@ Use when running multiple agent systems, spending $2-5/day on agents, suspecting
 ```bash
 RUNTIME="${TOKEN_OPTIMIZER_RUNTIME:-}"
 if [ -z "$RUNTIME" ]; then
-  if [ -n "$CLAUDE_PLUGIN_ROOT" ] || [ -n "$CLAUDE_PLUGIN_DATA" ]; then
-    RUNTIME="claude"
-  elif [ -n "$OPENCODE" ] || [ -n "$OPENCODE_BIN" ] || [ -n "$OPENCODE_CONFIG_DIR" ] || [ -n "$OPENCODE_CONFIG" ]; then
-    RUNTIME="opencode"
-  elif [ -n "$CODEX_HOME" ]; then
-    RUNTIME="codex"
-  # Explicit config-dir env of another harness: same tier as Python's
-  # detect_runtime() (above CLAUDECODE, which every Claude Code child inherits).
-  elif [ -n "$HERMES_HOME" ]; then
-    RUNTIME="hermes"
-  elif [ -n "$COPILOT_HOME" ] || [ -n "$TOKEN_OPTIMIZER_COPILOT_HOME" ]; then
-    RUNTIME="copilot"
-  elif [ -n "$TOKEN_OPTIMIZER_CURSOR_HOME" ]; then
-    RUNTIME="cursor"
-  elif [ -n "$TOKEN_OPTIMIZER_ANTIGRAVITY_HOME" ]; then
-    RUNTIME="antigravity"
-  elif [ -n "$GROK_HOME" ] || [ -n "$TOKEN_OPTIMIZER_GROK_HOME" ]; then
-    RUNTIME="grok"
-  elif [ -n "$CLAUDECODE" ] || [ -n "$CLAUDE_CODE_ENTRYPOINT" ] || [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
-    RUNTIME="claude"
-  elif [ -d "$HOME/.config/opencode" ] && [ ! -d "$HOME/.codex" ]; then
-    RUNTIME="opencode"
-  elif [ -d "$HOME/.codex" ]; then
-    RUNTIME="codex"
-  else
-    RUNTIME="claude"
+  if [ -n "$CLAUDE_PLUGIN_ROOT" ] || [ -n "$CLAUDE_PLUGIN_DATA" ]; then RUNTIME="claude"
+  elif [ -n "$OPENCODE" ] || [ -n "$OPENCODE_BIN" ] || [ -n "$OPENCODE_CONFIG_DIR" ] || [ -n "$OPENCODE_CONFIG" ]; then RUNTIME="opencode"
+  elif [ -n "$CODEX_HOME" ]; then RUNTIME="codex"
+  # Another harness's config-dir env: same tier as Python's detect_runtime().
+  elif [ -n "$HERMES_HOME" ]; then RUNTIME="hermes"
+  elif [ -n "$COPILOT_HOME" ] || [ -n "$TOKEN_OPTIMIZER_COPILOT_HOME" ]; then RUNTIME="copilot"
+  elif [ -n "$TOKEN_OPTIMIZER_CURSOR_HOME" ]; then RUNTIME="cursor"
+  elif [ -n "$TOKEN_OPTIMIZER_ANTIGRAVITY_HOME" ]; then RUNTIME="antigravity"
+  elif [ -n "$GROK_HOME" ] || [ -n "$TOKEN_OPTIMIZER_GROK_HOME" ]; then RUNTIME="grok"
+  elif [ -n "$CLAUDECODE" ] || [ -n "$CLAUDE_CODE_ENTRYPOINT" ] || [ -n "$CLAUDE_CODE_SESSION_ID" ]; then RUNTIME="claude"
+  elif [ -d "$HOME/.config/opencode" ] && [ ! -d "$HOME/.codex" ]; then RUNTIME="opencode"
+  elif [ -d "$HOME/.codex" ]; then RUNTIME="codex"
+  else RUNTIME="claude"
   fi
 fi
 
