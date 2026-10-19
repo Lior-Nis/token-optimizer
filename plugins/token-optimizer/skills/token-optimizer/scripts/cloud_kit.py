@@ -148,8 +148,17 @@ def runner_args(command: str) -> list:
     return args
 
 
+def _sh_path(path) -> str:
+    """A path as the POSIX shell that runs the kit sees it: forward slashes on
+    every host. The kit's commands and run.sh only ever run under sh in a
+    Linux VM, and MARKER ("/" + RUNNER_NAME) is how our entries are found
+    again, so a host-native backslash path (rendering on Windows) would write
+    entries that neither sh nor the strip/doctor/self-heal match."""
+    return Path(path).as_posix()
+
+
 def hook_command(runner: Path, args: list) -> str:
-    r = shlex.quote(str(runner))
+    r = shlex.quote(_sh_path(runner))
     return "[ -r %s ] || exit 0; exec sh %s %s" % (r, r, " ".join(args))
 
 
@@ -461,7 +470,7 @@ exec bash "$L" "$R/hooks/run.py" "$@"
 
 
 def render_run_sh(root: Path, pycache: Path, version: str) -> str:
-    return RUN_SH.format(root=shlex.quote(str(root)), pycache=shlex.quote(str(pycache)),
+    return RUN_SH.format(root=shlex.quote(_sh_path(root)), pycache=shlex.quote(_sh_path(pycache)),
                          version=version, runner_name=RUNNER_NAME, route_log=ROUTE_LOG)
 
 

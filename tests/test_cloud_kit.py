@@ -79,10 +79,26 @@ def test_hook_map_matches_hooks_json_entry_for_entry():
 
 def test_generated_command_is_guarded_and_absolute():
     cmd = cloud_kit.hook_command(RUNNER, ["hooks/stop_runner.py"])
-    assert cmd == ("[ -r %s ] || exit 0; exec sh %s hooks/stop_runner.py" % (RUNNER, RUNNER))
+    assert cmd == ("[ -r %s ] || exit 0; exec sh %s hooks/stop_runner.py" % (RUNNER.as_posix(), RUNNER.as_posix()))
     spaced = cloud_kit.hook_command(Path("/home/a b") / cloud_kit.RUNNER_NAME, ["x.py"])
     assert "'/home/a b/token-optimizer-cloud-run.sh'" in spaced
     assert cloud_kit.MARKER in spaced
+
+
+def test_windows_host_paths_render_as_posix_for_sh(monkeypatch):
+    """The kit only runs under sh in a Linux VM, but tests (and a dry run) may
+    render it on Windows. Host backslash paths must come out as forward
+    slashes, or MARKER never matches and merge/strip/doctor/self-heal all
+    miss our own entries (Windows CI, 5.13.50)."""
+    from pathlib import PureWindowsPath
+
+    monkeypatch.setattr(cloud_kit, "Path", PureWindowsPath)
+    runner = PureWindowsPath(r"C:\Users\me\.cache\token-optimizer-cloud") / cloud_kit.RUNNER_NAME
+    cmd = cloud_kit.hook_command(runner, ["hooks/stop_runner.py"])
+    assert "\\" not in cmd and cloud_kit.MARKER in cmd
+    assert cmd.startswith("[ -r C:/Users/me/.cache/token-optimizer-cloud/token-optimizer-cloud-run.sh ]")
+    run_sh = cloud_kit.render_run_sh(PureWindowsPath(r"C:\c\5.13.50"), PureWindowsPath(r"C:\c\pycache"), "5.13.50")
+    assert "R=C:/c/5.13.50\n" in run_sh and "PYTHONPYCACHEPREFIX=C:/c/pycache\n" in run_sh
 
 
 def test_unknown_hook_shape_is_refused_not_guessed():
@@ -290,7 +306,7 @@ def test_install_copies_writes_runner_and_prunes(tmp_path, staged):
     assert (cache / version / "hooks" / "run.py").is_file()
     assert report["pruned"] == ["1.0.0"] and not (cache / "1.0.0").exists()
     run_sh = (cache / cloud_kit.RUNNER_NAME).read_text(encoding="utf-8")
-    assert "R=" + str(cache / version) in run_sh and os.access(cache / cloud_kit.RUNNER_NAME, os.X_OK)
+    assert "R=" + (cache / version).as_posix() in run_sh and os.access(cache / cloud_kit.RUNNER_NAME, os.X_OK)
     assert "CLAUDE_PLUGIN_ROOT" in run_sh and "PYTHONPYCACHEPREFIX" in run_sh
     settings = json.loads((claude / "settings.json").read_text(encoding="utf-8"))
     assert settings["hooks"] == cloud_kit.generate_hook_map(HOOKS_JSON, cache / cloud_kit.RUNNER_NAME)
