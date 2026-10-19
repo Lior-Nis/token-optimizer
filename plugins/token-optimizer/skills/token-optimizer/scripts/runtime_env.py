@@ -55,8 +55,8 @@ This module keeps runtime integration deliberately simple:
   =cloud_*``, ``CLAUDE_CODE_REMOTE_SESSION_ID``, the cloud kit's runner, or the
   ``TOKEN_OPTIMIZER_REMOTE_HOST`` pin); a bare ``CLAUDE_CODE_REMOTE=true`` is
   "remote". ``CLAUDE_CODE_CONTAINER_ID`` and a ``/plugins/synced/`` plugin root
-  appear in the cloud VM too, so only the plugin root still means Cowork, and
-  only when no cloud evidence is present. ``AI_AGENT`` is deliberately NOT a
+  appear in the cloud VM too, so they mean Cowork only when no cloud evidence
+  is present. ``AI_AGENT`` is deliberately NOT a
   signal: native Claude Code also sets ``AI_AGENT=claude-code_*_harness``, so
   the harness marker is ambiguous and would false-positive on the local CLI.
   Nothing about the existing ``detect_runtime()`` returns changes.
@@ -222,7 +222,8 @@ _CLAUDE_PLUGIN_ENVS = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA")
 #     in cloud, unset locally"; docs-grounding.md §3). On its own it says only
 #     "a hosted VM", so it resolves to "remote": neither Cowork nor cloud.
 #   - CLAUDE_CODE_CONTAINER_ID: set inside Cowork VMs AND the Claude Code cloud
-#     VM (live probe 2026-10-19), so it is no longer read as a host signal.
+#     VM (live probe 2026-10-19), so it means Cowork only when no cloud
+#     evidence (session id, cloud environment type, kit) is present.
 #   - CLAUDE_PLUGIN_ROOT under /plugins/synced/: Cowork plugins arrive via the
 #     org admin console account-sync, landing under a synced-plugin path. The
 #     cloud VM has the same synced dir, so this is a Cowork hint only when no
@@ -242,20 +243,22 @@ _COWORK_SYNCED_PLUGIN_MARKER = "/plugins/synced/"
 # cloud_default AND CLAUDE_CODE_CONTAINER_ID, and carries an (empty, for now)
 # ~/.claude/plugins/synced/<org>_<account>/ dir where account plugin sync will
 # deliver plugins. So neither CLAUDE_CODE_CONTAINER_ID nor a /plugins/synced/
-# plugin root is Cowork-only: both were read as Cowork markers and would have
-# labelled every cloud session Cowork. The resolution order is now:
+# plugin root is Cowork-only: checked before the cloud signals they labelled
+# every cloud session Cowork. They now count as Cowork only after every cloud
+# signal has been checked. The resolution order is:
 #   1. TOKEN_OPTIMIZER_REMOTE_HOST=cloud|cowork|local  (explicit pin, wins)
 #   2. CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE: "cloud*" -> cloud, "*cowork*" ->
 #      cowork, any other value -> no signal (fall through)
 #   3. TOKEN_OPTIMIZER_CLOUD_KIT_VERSION non-blank      -> cloud (exported by
 #      the cloud kit's runner, only when CLAUDE_CODE_REMOTE=true)
 #   4. CLAUDE_CODE_REMOTE_SESSION_ID non-blank         -> cloud
-#   5. synced plugin root (/plugins/synced/)           -> cowork (legacy
-#      heuristic, only reached with no cloud evidence above)
-#   6. CLAUDE_CODE_REMOTE truthy, nothing else         -> "remote" (a hosted
+#   5. synced plugin root (/plugins/synced/)           -> cowork
+#   6. CLAUDE_CODE_CONTAINER_ID non-blank              -> cowork
+#      (5 and 6 are only reached with no cloud evidence above: the cloud VM
+#      carries both, but always with the session id and environment type)
+#   7. CLAUDE_CODE_REMOTE truthy, nothing else         -> "remote" (a hosted
 #      VM of unknown kind: no Cowork caveats, no cloud lean profile)
-#   7. otherwise                                        -> "" (local)
-# CLAUDE_CODE_CONTAINER_ID is a signal for neither host on its own.
+#   8. otherwise                                        -> "" (local)
 _CLOUD_SESSION_ID_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
 _CLOUD_KIT_ENV = "TOKEN_OPTIMIZER_CLOUD_KIT_VERSION"
 _REMOTE_HOST_OVERRIDE_ENV = "TOKEN_OPTIMIZER_REMOTE_HOST"
@@ -1403,6 +1406,11 @@ def _resolve_remote_host() -> str:
             val = os.environ.get(env_var, "")
             if val and _COWORK_SYNCED_PLUGIN_MARKER in val.replace("\\", "/"):
                 return REMOTE_HOST_COWORK
+        # Observed in every Cowork VM. The cloud VM sets it too, but a cloud
+        # VM always carries the session id and the cloud environment type,
+        # which returned above, so reaching here with it means Cowork.
+        if os.environ.get(_COWORK_CONTAINER_ENV, "").strip():
+            return REMOTE_HOST_COWORK
         if _truthy_env(_COWORK_REMOTE_ENV):
             return REMOTE_HOST_UNKNOWN
     except Exception:
@@ -1427,16 +1435,16 @@ def remote_host() -> str:
       4. ``CLAUDE_CODE_REMOTE_SESSION_ID`` set (``cse_...``): cloud. Observed
          in every live cloud probe.
       5. ``CLAUDE_PLUGIN_ROOT`` / ``CLAUDE_PLUGIN_DATA`` under
-         ``/plugins/synced/``: Cowork. Only reached with no cloud evidence: the
-         cloud VM has a ``plugins/synced/`` dir too, and account plugin sync
-         will deliver plugins there.
+         ``/plugins/synced/``, or ``CLAUDE_CODE_CONTAINER_ID`` set: Cowork.
+         Only reached with no cloud evidence: the cloud VM carries both (a
+         ``plugins/synced/`` dir for account plugin sync, and a container id),
+         but always alongside the session id and environment type.
       6. ``CLAUDE_CODE_REMOTE`` truthy with none of the above: ``"remote"``.
          It is the documented "running in a remote web environment" signal
          (code.claude.com hooks docs) but says nothing about which host, so it
          earns neither the Cowork caveats nor the cloud lean profile.
 
-    ``CLAUDE_CODE_CONTAINER_ID`` is NOT a signal: the cloud VM sets it too.
-    ``AI_AGENT`` is NOT a signal either: native Claude Code (the local CLI)
+    ``AI_AGENT`` is NOT a signal: native Claude Code (the local CLI)
     exports ``AI_AGENT=claude-code_<version>_harness`` into every hook
     subprocess, so the ``_harness`` marker is ambiguous (see PR #142).
 
@@ -1461,9 +1469,8 @@ def is_cowork() -> bool:
     A REFINEMENT of the claude runtime, not a new runtime: ``detect_runtime()``
     still returns ``"claude"`` inside Cowork. Resolved by :func:`remote_host`:
     the pin, a ``*cowork*`` environment type, or (with no cloud evidence) a
-    ``/plugins/synced/`` plugin root/data path. ``CLAUDE_CODE_REMOTE`` and
-    ``CLAUDE_CODE_CONTAINER_ID`` do not mean Cowork: the Claude Code cloud VM
-    sets both. Never raises.
+    ``/plugins/synced/`` plugin root/data path or ``CLAUDE_CODE_CONTAINER_ID``.
+    ``CLAUDE_CODE_REMOTE`` alone does not mean Cowork. Never raises.
     """
     return _resolve_remote_host() == REMOTE_HOST_COWORK
 
