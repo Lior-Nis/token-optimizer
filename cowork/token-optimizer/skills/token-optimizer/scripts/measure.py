@@ -840,16 +840,25 @@ def _scheduler_job_paths():
 def _scheduler_job_points_elsewhere():
     """The first per-account job that belongs to a different install (none of
     its paths sit under this process's Claude home, runtime home, data dirs or
-    plugin root), as ``"<artifact> -> <path>"``; '' when there is none, when no
-    job exists, or when it cannot be read (fail open: an unreadable job is no
-    evidence of another install)."""
+    plugin root) while at least one of them still exists, as
+    ``"<artifact> -> <existing path>"``; '' when there is none, when no job
+    exists, when the job only points at paths that are gone (a stale job is
+    repaired, not protected), or when it cannot be read (fail open)."""
     answer = ""
     try:
         roots = _this_install_roots()
         for artifact, paths in _scheduler_job_paths().items():
             paths = [p for p in paths if p]
-            if paths and not any(_is_under(p, r) for p in paths for r in roots):
-                answer = "%s -> %s" % (artifact, paths[0])
+            if not paths or any(_is_under(p, r) for p in paths for r in roots):
+                continue
+            # A job is another install's only while that install still exists:
+            # at least one path it runs or writes is on disk. A dead job (account
+            # renamed by Migration Assistant, CLAUDE_CONFIG_DIR moved, old data
+            # dir deleted) points at nothing, and refusing to repair it would
+            # leave the dashboard broken forever with nobody to own it.
+            live = [p for p in paths if os.path.exists(p)]
+            if live:
+                answer = "%s -> %s" % (artifact, live[0])
                 break
     except Exception:
         answer = ""
@@ -5083,9 +5092,18 @@ def doctor(as_json=False):
                            f"self-heal disabled by a permanent install failure "
                            f"({_mk or 'reason unknown'}) "
                            f"(fix: {_measure_cli()} setup-daemon)"))
+        elif _daemon_snapshot_sandboxed():
+            checks.append(("OK", "Dashboard daemon",
+                           "not managed from this process (HOME or data dir redirected: sandbox)"))
+            score += 1
         elif _daemon_resurrection_blocked() is not None:
             checks.append(("OK", "Dashboard daemon", "disabled by user (opt-out honored)"))
             score += 1
+        elif (_foreign_job := _scheduler_job_points_elsewhere()):
+            checks.append(("!!", "Dashboard daemon",
+                           f"owned by another install: {_foreign_job} "
+                           f"(this install will not re-point it; run `setup-daemon --uninstall` "
+                           f"from that install, or set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1)"))
         elif _verify_daemon_port(timeout_seconds=1, retries=1, retry_sleep=0):
             checks.append(("OK", "Dashboard daemon",
                            f"running at http://localhost:{DAEMON_PORT}/token-optimizer"))
@@ -34155,6 +34173,22 @@ def _normalized_platform():
     return raw
 
 
+def _setup_daemon_cli(args):
+    """`setup-daemon` CLI entry. A refusal used to return "noop-sandbox" to a
+    caller that ignored it, so the command printed nothing and the user had
+    no idea why the dashboard never came back. Prints the reason, exit 1."""
+    dry = "--dry-run" in args
+    uninstall = "--uninstall" in args
+    this_install_only = "--this-install-only" in args
+    result = setup_daemon(dry_run=dry, uninstall=uninstall, this_install_only=this_install_only)
+    if result == "noop-sandbox":
+        detail = "" if (uninstall or _daemon_snapshot_sandboxed()) else _scheduler_job_points_elsewhere()
+        print("[Token Optimizer] setup-daemon " + _SCHEDULER_REFUSAL
+              + (" (existing job: %s)" % detail if detail else ""))
+        return 1
+    return 0
+
+
 def setup_daemon(dry_run=False, uninstall=False, this_install_only=False, latch_optout=True):
     """Install or remove the persistent dashboard HTTP server daemon.
 
@@ -34870,14 +34904,21 @@ def _daemon_midsession_pulse():
     installer. Returns a short status string. Never raises, never blocks.
     """
     try:
-        if _scheduler_install_refused():
-            return "noop-sandbox"
         if _remote_lean_profile():
             return "noop-remote"
+        # Frozen sandbox flag only: this pulse runs on every UserPromptSubmit.
+        # The "job owned by another install" check reads the scheduler (on
+        # Windows a `schtasks /Query`, up to 10 s when Task Scheduler is
+        # wedged), so it lives in the writers that would actually re-point a
+        # job (_install_*, _restart_dashboard_daemon, the heals, setup_daemon),
+        # never on a per-prompt path.
+        if _daemon_snapshot_sandboxed():
+            return "noop-sandbox"
         # SAFETY gates run EVERY turn, BEFORE the probe throttle: a
         # disabled/uninstalled/thrashing daemon must NEVER be revived, not even on
-        # the 59/60 throttled turns. All are cheap (a stat + a small config read +
-        # platform.system()); detect_runtime is paid by quality-cache regardless.
+        # the 59/60 throttled turns. All below are cheap (a stat + a small config
+        # read + platform.system(); no scheduler query); detect_runtime is paid
+        # by quality-cache regardless.
         if _is_foreign_runtime() or detect_runtime() != "claude":
             return "noop-foreign"
         # Filesystem tombstone is AUTHORITATIVE and independent of config.json: a
@@ -35120,8 +35161,12 @@ def _daemon_resurrection_blocked():
     ``"disabled"`` | ``"install-failed"``) or None when the action may proceed. The tombstone
     stat fails open (matching ``_daemon_install_failed_marker_present``: an
     unreadable state dir is not evidence of intent). Never raises.
+
+    Reads only the frozen sandbox flag, never the scheduler: this gate sits on
+    hot hook paths. A job owned by another install is refused by the writers
+    themselves (_scheduler_install_refused), and doctor reports it on its own.
     """
-    if _scheduler_install_refused():
+    if _daemon_snapshot_sandboxed():
         return "sandbox"
     try:
         if os.path.exists(str(DAEMON_THRASH_BREADCRUMB)):
@@ -55058,7 +55103,7 @@ def run_ensure_health():
     try:
         current_marker = f'TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"'
         legacy_dir = RUNTIME_DIR / "_backups" / "token-optimizer"
-        candidate_paths = set() if (_scheduler_install_refused() or _lean) else {
+        candidate_paths = set() if (_daemon_snapshot_sandboxed() or _lean) else {
             SNAPSHOT_DIR / "dashboard-server.py", legacy_dir / "dashboard-server.py"}
         # The auto-update refresh writes dashboard-server.py (not the LaunchAgent
         # plist) and reloads via `launchctl kickstart`, which restarts the process
@@ -55633,10 +55678,12 @@ def _ensure_health_daemon_revive_first():
     pulse provides a second, session-independent recovery path. Idempotent +
     fail-open: a spawn failure is swallowed, never raised into the hook.
     """
-    if _scheduler_install_refused():
-        return "noop-sandbox"
     if _remote_lean_profile():
         return "noop-remote"
+    # Frozen flag only (SessionStart hot path); the detached daemon-revive child
+    # runs the writers, which apply the full _scheduler_install_refused().
+    if _daemon_snapshot_sandboxed():
+        return "noop-sandbox"
     try:
         _proc = spawn_detached(
             [_detached_python_exe(), str(MEASURE_PY_PATH), "daemon-revive"],
@@ -56933,10 +56980,7 @@ if __name__ == "__main__":
                 if "fail" in reason or "error" in reason:
                     sys.exit(1)
     elif args[0] == "setup-daemon":
-        dry = "--dry-run" in args
-        uninstall = "--uninstall" in args
-        this_install_only = "--this-install-only" in args
-        setup_daemon(dry_run=dry, uninstall=uninstall, this_install_only=this_install_only)
+        sys.exit(_setup_daemon_cli(args))
     elif args[0] == "cleanup":
         # Confirm gate. `dry = "--dry-run" in args` meant a
         # typo ("--dryrun", "--dry_run", "-dry-run") silently performed the
