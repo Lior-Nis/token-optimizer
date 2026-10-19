@@ -151,4 +151,10 @@ MUTATIONS = [
      MEASURE,
      [("    if not _write_checkpoint_atomic(checkpoint_path, checkpoint_content):\n        return None",
        "    if True:\n        return None")]),
+
+    ("Codex plugin Stop: rollout transcript refused by a runtime-only confinement, no checkpoint (#253 class)",
+     [WIRE + "::test_checkpoint_hooks_really_write_the_checkpoint[codex-plugin]"],
+     "plugins/token-optimizer/" + MEASURE,
+     [("    if _use_codex_session_adapter(resolved):\n        try:\n            roots = [r.resolve() for r in codex_session.session_roots()]",
+       "    if _use_codex_session_adapter():\n        try:\n            roots = [r.resolve() for r in codex_session.session_roots()]")]),
 ]

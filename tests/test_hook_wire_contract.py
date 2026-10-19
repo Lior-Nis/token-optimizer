@@ -325,7 +325,8 @@ class Sandbox:
         return path
 
     def transcript_for(self, harness, sid=SID):
-        if harness == "codex-global":
+        # Codex sends its own rollout path, whichever way TO was installed.
+        if harness in ("codex-global", "codex-plugin"):
             return self.codex_rollout(sid)
         if sid == SID:
             return self.transcript
@@ -856,7 +857,7 @@ CHECKPOINT_HOOKS = [
 ]
 
 
-@pytest.mark.parametrize("harness", ["claude", "cloud-kit", "cowork", "codex-global"])
+@pytest.mark.parametrize("harness", ["claude", "cloud-kit", "cowork", "codex-global", "codex-plugin"])
 def test_checkpoint_hooks_really_write_the_checkpoint(harness, sandbox):
     """#253: 'the PreCompact hook reports success, but no checkpoint appears'.
     Each checkpoint-writing hook, fired through its manifest command, must leave
