@@ -1278,6 +1278,12 @@ def test_scheduler_writers_run_cheap_gates_before_the_job_query(account_home, mo
     # because os.name is spoofed until teardown.)
     monkeypatch.setattr(measure.os, "name", "nt", raising=False)
     monkeypatch.setattr(measure, "_daemon_resurrection_blocked", lambda: "disabled")
+    # With os.name spoofed on a POSIX host, the real guard builds a
+    # WindowsPath, raises, and fails open BEFORE reaching the task reader, so
+    # recording only the reader could never see a misplaced guard here (the
+    # planted bug passed on macOS/Linux). Record the guard itself as well.
+    monkeypatch.setattr(measure, "_scheduler_job_points_elsewhere",
+                        lambda: queries.append("job guard") or "")
     assert measure._heal_windows_task_action() is False
     assert queries == [], queries
 

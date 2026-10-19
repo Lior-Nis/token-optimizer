@@ -20,8 +20,20 @@ bringing the bug back. Three layers now stop that:
 ## When you fix a bug
 
 - Add a test that fails without the fix.
-- Add the bug to `MUTATIONS` in `scripts/check_regression_guards.py`, so CI proves
-  the test keeps catching it.
+- Register the bug as a mutation so CI proves the test keeps catching it: add
+  it to a file in `scripts/mutations/` (one per area, e.g. `today.py`), which
+  exports `MUTATIONS = [(name, [test node ids], file_relpath, [(old, new), ...])]`.
+  `file_relpath` is any repo file. List the narrowest node ids that catch it:
+  only those run for that mutation.
+- Run `python3 scripts/check_regression_guards.py --only "<part of the name>"`
+  to see it caught. `--list` shows every mutation.
+
+The check fails, never skips, when a mutation's `old` text is no longer in the
+file (stale: nothing gets planted), when an entry or mutations file is
+malformed, when the guard tests already fail on clean code, and when pytest
+exits with anything but test failures (a collection error or "no tests ran"
+proves nothing). The harness guards itself the same way
+(`scripts/mutations/harness.py`).
 - If the fix changes a number on the dashboard, add that number to the golden
   user with its hand-worked value.
 
