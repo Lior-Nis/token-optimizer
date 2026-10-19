@@ -113,6 +113,59 @@ def test_packaged_hooks_json_is_the_plugin_one(tmp_path):
     assert not list(pkg.rglob("__pycache__"))
 
 
+def _git_repo_with_shipped_tree(tmp_path) -> Path:
+    repo = tmp_path / "repo"
+    for rel in ("hooks/run.py", "skills/token-optimizer/scripts/measure.py", "packaging/npm/README.md",
+                "LICENSE", "LICENSE-SMALL-BUSINESS.md", "PRIVACY.md"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("x\n", encoding="utf-8")
+    (repo / ".claude-plugin").mkdir()
+    (repo / ".claude-plugin" / "plugin.json").write_text('{"version": "1.2.3"}', encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(git[:3] + ["init", "-q"], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-qm", "init"], check=True)
+    return repo
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_pack_refuses_untracked_or_modified_shipped_files(tmp_path, monkeypatch, capsys):
+    """Review #11: --pack copied untracked, not-ignored files into the
+    immutable public tarball. It now refuses unless the shipped paths are
+    clean, and never needs npm to say so."""
+    import build
+
+    repo = _git_repo_with_shipped_tree(tmp_path)
+    monkeypatch.setattr(build, "REPO", repo)
+    monkeypatch.setattr(build, "pack", lambda *a, **k: (_ for _ in ()).throw(AssertionError("packed")))
+    assert build.dirty_paths(repo) == []
+
+    (repo / "skills" / "token-optimizer" / "scripts" / "scratch_notes.py").write_text("secret\n")
+    assert build.main(["--pack", "--out", str(tmp_path / "out")]) == 1
+    assert "scratch_notes.py" in capsys.readouterr().err
+    (repo / "skills" / "token-optimizer" / "scripts" / "scratch_notes.py").unlink()
+
+    (repo / "hooks" / "run.py").write_text("edited\n")
+    assert build.main(["--pack", "--out", str(tmp_path / "out")]) == 1
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "--", "hooks/run.py"], check=True)
+    assert build.dirty_paths(repo) == []
+    # Untracked files elsewhere in the repo do not block a pack.
+    (repo / "notes.txt").write_text("fine\n")
+    assert build.dirty_paths(repo) == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_pack_stages_tracked_files_only(tmp_path, monkeypatch):
+    import build
+
+    repo = _git_repo_with_shipped_tree(tmp_path)
+    monkeypatch.setattr(build, "REPO", repo)
+    monkeypatch.setattr(build, "HERE", REPO / "packaging" / "npm")
+    (repo / "hooks" / "new_untracked.py").write_text("y\n")
+    assert "hooks/new_untracked.py" in build.tracked_files("hooks")
+    assert "hooks/new_untracked.py" not in build.tracked_files("hooks", include_untracked=False)
+
+
 # ----------------------------------------------------------------- settings
 
 

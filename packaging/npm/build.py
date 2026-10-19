@@ -12,6 +12,13 @@ skills/token-optimizer/assets (screenshots, demo gif/mp4, svg art), except
 dashboard.html, which `measure.py dashboard` renders from. Bytecode and OS
 junk never ship, and nothing .gitignore
 excludes is copied. Separate from the private root package.json (the Pi build).
+
+``--pack`` builds the immutable public tarball, so it refuses unless every
+shipped path (hooks/, skills/, .claude-plugin/, packaging/npm/, the license
+files) is committed and clean, and it copies tracked files only: an untracked
+scratch file can never end up in a published version. Plain staging (tests,
+local trials) also takes new not-ignored files so work in progress can be
+tried before it is committed.
 """
 
 from __future__ import annotations
@@ -26,17 +33,33 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 KEEP_ASSETS = {"dashboard.html"}
+SHIPPED_ROOTS = ("hooks", "skills", ".claude-plugin")
+# Everything git must report clean before --pack (SHIPPED_ROOTS plus what
+# stage() copies from elsewhere).
+CLEAN_PATHS = SHIPPED_ROOTS + ("packaging/npm", "LICENSE", "LICENSE-SMALL-BUSINESS.md", "PRIVACY.md")
 
 
 def plugin_version() -> str:
     return json.loads((REPO / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
 
 
-def tracked_files(*roots: str) -> list:
-    """Tracked plus new not-ignored files: anything .gitignore excludes (internal
-    notes, caches) can never ship from a working checkout."""
-    out = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *roots],
-                         capture_output=True, check=True).stdout.decode("utf-8")
+def dirty_paths(repo: Path = None) -> list:
+    """`git status --porcelain` lines for the shipped paths (untracked
+    included). Empty means the tarball would be exactly the commit."""
+    repo = repo or REPO
+    out = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all",
+                          "--", *CLEAN_PATHS], capture_output=True, check=True).stdout.decode("utf-8")
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def tracked_files(*roots: str, include_untracked: bool = True) -> list:
+    """Tracked files (plus, unless ``include_untracked`` is False, new
+    not-ignored ones): anything .gitignore excludes (internal notes, caches)
+    can never ship from a working checkout."""
+    cmd = ["git", "-C", str(REPO), "ls-files", "-z", "--cached"]
+    if include_untracked:
+        cmd += ["--others", "--exclude-standard"]
+    out = subprocess.run(cmd + ["--", *roots], capture_output=True, check=True).stdout.decode("utf-8")
     files = []
     for rel in filter(None, out.split("\0")):
         parts = Path(rel).parts
@@ -49,7 +72,7 @@ def tracked_files(*roots: str) -> list:
     return files
 
 
-def stage(out: Path) -> Path:
+def stage(out: Path, include_untracked: bool = True) -> Path:
     pkg = out / "package"
     if pkg.exists():
         shutil.rmtree(pkg)
@@ -63,7 +86,7 @@ def stage(out: Path) -> Path:
     (pkg / "install-cloud.sh").chmod(0o755)
     for name in ("LICENSE", "LICENSE-SMALL-BUSINESS.md", "PRIVACY.md"):
         shutil.copy2(REPO / name, pkg / name)
-    for rel in tracked_files("hooks", "skills", ".claude-plugin"):
+    for rel in tracked_files(*SHIPPED_ROOTS, include_untracked=include_untracked):
         dest = pkg / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, dest)
@@ -90,7 +113,14 @@ def main(argv=None) -> int:
     ap.add_argument("--pack", action="store_true", help="run npm pack after staging")
     ap.add_argument("--dry-run", action="store_true", help="npm pack --dry-run (lists files)")
     args = ap.parse_args(argv)
-    pkg = stage(args.out)
+    if args.pack:
+        dirty = dirty_paths()
+        if dirty:
+            print("refusing to pack: the published tarball is immutable and must equal a commit, but "
+                  "these shipped paths are uncommitted or untracked:\n  " + "\n  ".join(dirty)
+                  + "\nCommit or remove them (git status), then run --pack again.", file=sys.stderr)
+            return 1
+    pkg = stage(args.out, include_untracked=not args.pack)
     print("staged %s (version %s)" % (pkg, plugin_version()))
     if args.pack or args.dry_run:
         print(pack(pkg, args.out, dry_run=args.dry_run))
