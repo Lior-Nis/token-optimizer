@@ -113,4 +113,9 @@ jobs:
             echo "skipped: $TAG predates scripts/check_npm_published.py"
             exit 0
           fi
-          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30
+          # --match-tree: the tarball must equal this tag's shipped files, not
+          # just exist (5.13.50 was on npm from an earlier commit than its git
+          # release). Older tags whose gate predates the flag run without it.
+          match=""
+          if grep -q -- '--match-tree' scripts/check_npm_published.py; then match="--match-tree"; fi
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30 $match

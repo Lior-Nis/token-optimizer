@@ -351,10 +351,12 @@ def test_unreadable_file_is_left_alone(measure):
     mod._maybe_self_heal_settings()  # snapshot
     settings.chmod(0o000)
 
+    # Must not raise. Called bare: a try/except here would let a heal that
+    # raises pass this test, which is the very thing it guards.
     try:
         mod._maybe_self_heal_settings()
-    except Exception:
-        pass  # must not raise
+    finally:
+        settings.chmod(0o644)
 
     # Restore permissions to verify the file is unchanged.
     settings.chmod(0o644)
@@ -367,10 +369,7 @@ def test_malformed_file_is_left_alone(measure):
     mod._maybe_self_heal_settings()  # snapshot
     settings.write_text("{ this is not json", encoding="utf-8")
 
-    try:
-        mod._maybe_self_heal_settings()
-    except Exception:
-        pass  # must not raise
+    mod._maybe_self_heal_settings()  # must not raise (called bare on purpose)
 
     assert settings.read_text(encoding="utf-8") == "{ this is not json"
 
