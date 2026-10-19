@@ -56,6 +56,90 @@ _child_proc: subprocess.Popen | None = None
 _CHILD_WAIT_TIMEOUT_S = 120
 
 
+_PYCACHE_PREFIX_ENV = "PYTHONPYCACHEPREFIX"
+
+
+def _remote_vm_env() -> bool:
+    """True in a hosted Claude Code VM (cloud or Cowork). Env-only, no imports:
+    this runs before anything from the plugin's scripts dir is imported."""
+    if os.environ.get("CLAUDE_CODE_REMOTE", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    if os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "").strip():
+        return True
+    if os.environ.get("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "").strip():
+        return True
+    return os.environ.get("TOKEN_OPTIMIZER_REMOTE_HOST", "").strip().lower() in ("cloud", "cowork")
+
+
+def _inside_git_work_tree(path: Path) -> bool:
+    """True when ``path`` or any ancestor holds a ``.git`` entry (dir or file).
+    A bounded walk of cheap stats; any error reads as False."""
+    try:
+        current = Path(path)
+        for _ in range(64):
+            if (current / ".git").exists():
+                return True
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def _bytecode_cache_dir() -> Path:
+    """Per-user bytecode cache: %LOCALAPPDATA% on Windows, $XDG_CACHE_HOME or
+    ~/.cache elsewhere, then token-optimizer/pycache."""
+    base = None
+    if os.name == "nt":
+        raw = os.environ.get("LOCALAPPDATA", "").strip()
+        if raw and os.path.isabs(raw):
+            base = Path(raw)
+    else:
+        raw = os.environ.get("XDG_CACHE_HOME", "").strip()
+        if raw and os.path.isabs(raw):
+            base = Path(raw)
+    if base is None:
+        base = Path.home() / ".cache"
+    return base / "token-optimizer" / "pycache"
+
+
+def _bytecode_prefix_for(plugin_root: Path) -> str | None:
+    """Where Python bytecode for the plugin should go, or None for "beside the
+    scripts" (the default, unchanged on a normal desktop install).
+
+    Bytecode is moved out of the plugin tree when the tree sits inside a git
+    work tree (a plugin vendored into a repo, a dev checkout) or when running
+    in a hosted VM. Otherwise every hook drops ``__pycache__`` dirs into the
+    user's repo: untracked files that Claude Code cloud's own Stop hook then
+    nags the model to commit. A cache PREFIX keeps the warm-start speedup
+    (module_runner's whole point); disabling bytecode would lose it. An
+    existing PYTHONPYCACHEPREFIX is the user's choice and is left alone.
+    """
+    try:
+        if os.environ.get(_PYCACHE_PREFIX_ENV, "").strip():
+            return None
+        if not (_remote_vm_env() or _inside_git_work_tree(plugin_root)):
+            return None
+        return str(_bytecode_cache_dir())
+    except Exception:
+        return None
+
+
+def _apply_bytecode_prefix(prefix: str | None, child_env: dict | None = None) -> None:
+    """Point this process (sys.pycache_prefix) and the hook child (env) at
+    ``prefix``. A no-op for None. Never raises."""
+    if not prefix:
+        return
+    try:
+        sys.pycache_prefix = prefix
+        if child_env is not None:
+            child_env[_PYCACHE_PREFIX_ENV] = prefix
+    except Exception:
+        pass
+
+
 def _reap(proc, posix_sig):
     """Reap the child process. Never raises.
 
@@ -464,6 +548,15 @@ def _cowork_copy_should_stand_down() -> bool:
 def main() -> int:
     if len(sys.argv) < 2:
         return 0
+    # Bytecode location first, before this process imports anything from the
+    # plugin's scripts dir (the consent check and runtime detection below do).
+    _pycache_prefix = None
+    try:
+        _pr = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+        _pycache_prefix = _bytecode_prefix_for(Path(_pr) if _pr else Path(__file__).resolve().parent.parent)
+        _apply_bytecode_prefix(_pycache_prefix)
+    except Exception:
+        _pycache_prefix = None
     if _plugin_disabled_by_host():
         return 0
     if _cowork_copy_should_stand_down():
@@ -552,6 +645,9 @@ def main() -> int:
     # never crash a hook with UnicodeDecode/EncodeError. PYTHONUTF8 also makes the
     # child's default open() encoding UTF-8; PYTHONIOENCODING covers its std streams.
     child_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    # The child (and every detached worker it spawns) inherits the bytecode
+    # prefix chosen at the top of main(), so no __pycache__ lands in a repo.
+    _apply_bytecode_prefix(_pycache_prefix, child_env)
 
     # Hot-path latency: resolve the runtime HERE and hand the
     # answer to the child via TOKEN_OPTIMIZER_RUNTIME, the override tier

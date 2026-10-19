@@ -99,6 +99,53 @@ try:
 except ImportError:  # pragma: no cover - Python < 3.11 fallback
     tomllib = None
 
+
+def _redirect_bytecode_out_of_repo():
+    """Keep ``__pycache__`` out of a repo when measure.py is run by hand.
+
+    Hooks get this from hooks/run.py (it exports PYTHONPYCACHEPREFIX to every
+    hook child). A direct ``python3 measure.py expand ...`` from the model's
+    Bash tool does not go through run.py, so the same rule is applied here,
+    BEFORE the sibling imports below would write bytecode beside this file:
+    in a hosted VM, or when the scripts dir sits inside a git work tree, send
+    bytecode to the per-user cache (same dir run.py uses). Never raises."""
+    try:
+        if getattr(sys, "pycache_prefix", None) or os.environ.get("PYTHONPYCACHEPREFIX", "").strip():
+            return
+        remote = (
+            os.environ.get("CLAUDE_CODE_REMOTE", "").strip().lower() in ("1", "true", "yes", "on")
+            or bool(os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "").strip())
+            or bool(os.environ.get("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "").strip())
+            or os.environ.get("TOKEN_OPTIMIZER_REMOTE_HOST", "").strip().lower() in ("cloud", "cowork")
+        )
+        if not remote:
+            here = Path(__file__).resolve().parent
+            for candidate in (here, *here.parents):
+                if (candidate / ".git").exists():
+                    remote = True
+                    break
+        if not remote:
+            return
+        base = None
+        raw = os.environ.get("LOCALAPPDATA" if os.name == "nt" else "XDG_CACHE_HOME", "").strip()
+        if raw and os.path.isabs(raw):
+            base = Path(raw)
+        if base is None:
+            base = Path.home() / ".cache"
+        prefix = str(base / "token-optimizer" / "pycache")
+        sys.pycache_prefix = prefix
+        os.environ["PYTHONPYCACHEPREFIX"] = prefix
+    except Exception:
+        pass
+
+
+# Only for a direct CLI run: an importing process (a hook runner, the test
+# suite) already chose its bytecode location, and must not have its
+# environment rewritten by an import. (Spelled as a tuple test: the plain
+# main-guard line must appear only once in this file, see below.)
+if __name__ in ("__main__",):
+    _redirect_bytecode_out_of_repo()
+
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from hook_runtime import (
     HookDeadline,
