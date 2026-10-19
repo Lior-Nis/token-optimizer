@@ -12351,7 +12351,8 @@ CREATE TABLE IF NOT EXISTS session_log (
     reported_input_tokens INTEGER,
     reported_output_tokens INTEGER,
     reported_model_usage_json TEXT,
-    daily_usage_json TEXT
+    daily_usage_json TEXT,
+    origin TEXT
 );
 
 -- Transcript copies of a session that lost dedupe to a more complete copy
@@ -12849,6 +12850,20 @@ class _SkipMigration(Exception):
     """Nothing to migrate; leave the step without touching the write lock."""
 
 
+def _origin_insert_parts(conn, table):
+    """(column SQL, placeholder SQL, values) that add ``origin`` to an INSERT
+    into ``table`` -- or three empties when the column is missing (a migration
+    that could not run yet), so the row still lands without it instead of the
+    whole event being lost to an "no such column" error."""
+    try:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        cols = set()
+    if "origin" in cols:
+        return ", origin", ", ?", (run_origin(),)
+    return "", "", ()
+
+
 def _init_trends_db():
     """Initialize the trends SQLite DB. Returns a connection.
     
@@ -12942,9 +12957,26 @@ def _init_trends_db():
         # its own requests and delegated work is not dropped (#200).
         if "daily_usage_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN daily_usage_json TEXT")
+        # Where the collecting process ran: 'local', 'cloud' (Claude Code cloud
+        # VM) or 'cowork'. NULL on rows collected before the column existed,
+        # which were all local. Groundwork for importing a cloud VM's rows or a
+        # teleported transcript without counting the session twice: the dedupe
+        # key stays session_uuid (the transcript's session id); origin records
+        # which side a row came from.
+        if "origin" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN origin TEXT")
         conn.commit()
     except sqlite3.Error as _e:
         _log_migration_error("session_log columns", _e)
+    # Same origin column on the per-event savings tables (NULL = legacy/local).
+    for _origin_table in ("savings_events", "compression_events"):
+        try:
+            _ocols = {r[1] for r in conn.execute(f"PRAGMA table_info({_origin_table})").fetchall()}
+            if _ocols and "origin" not in _ocols:
+                conn.execute(f"ALTER TABLE {_origin_table} ADD COLUMN origin TEXT")
+                conn.commit()
+        except sqlite3.Error as _e:
+            _log_migration_error(f"{_origin_table} origin column", _e)
     # Backfill session_uuid from jsonl_path basename stem for existing rows,
     # then create an index so joins are O(log n) instead of full-table LIKE scans.
     # Done in Python (not a single SQL UPDATE) because SQLite lacks a basename
@@ -13506,12 +13538,13 @@ def _log_savings_event(event_type, tokens_saved, session_id=None, detail=None, m
 
         conn = _init_trends_db()
         try:
+            o_col, o_mark, o_val = _origin_insert_parts(conn, "savings_events")
             conn.execute(
                 "INSERT INTO savings_events "
-                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable"
+                + o_col + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?" + o_mark + ")",
                 (datetime.now().isoformat(), event_type, tokens_saved, cost_saved,
-                 session_id, session_uuid, detail, normalized, 1 if unjoinable else 0),
+                 session_id, session_uuid, detail, normalized, 1 if unjoinable else 0) + o_val,
             )
             conn.commit()
         finally:
@@ -13589,16 +13622,17 @@ def _log_compression_event(feature, original_text="", compressed_text="",
 
         conn = _init_trends_db()
         try:
+            o_col, o_mark, o_val = _origin_insert_parts(conn, "compression_events")
             conn.execute(
                 "INSERT INTO compression_events "
                 "(timestamp, session_id, session_uuid, feature, command_pattern, original_tokens, "
-                "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier"
+                + o_col + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?" + o_mark + ")",
                 (datetime.now().isoformat(), session_id, session_uuid, feature, command_pattern,
                  original_tokens, compressed_tokens, ratio,
                  1 if quality_preserved else 0,
                  1 if verified else 0,
-                 detail, resolved_model, tier),
+                 detail, resolved_model, tier) + o_val,
             )
             conn.commit()
         finally:
@@ -25127,12 +25161,24 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # another path (worktree dir, sandboxed-config mirror), keep whichever
         # copy is more complete instead of counting the session twice.
         session_uuid = _canonical_session_uuid(filepath)
+        # Origin of this row. A session first collected in a cloud VM keeps
+        # 'cloud' when a more complete copy (a teleported transcript) replaces
+        # it, so the one surviving row still says where the session ran.
+        row_origin = run_origin()
         if session_uuid:
             other = conn.execute(
                 "SELECT id, message_count, input_tokens, output_tokens FROM session_log "
                 "WHERE session_uuid = ? AND jsonl_path != ?",
                 (session_uuid, str(filepath)),
             ).fetchall()
+            try:
+                if conn.execute(
+                    "SELECT 1 FROM session_log WHERE session_uuid = ? AND origin = 'cloud' LIMIT 1",
+                    (session_uuid,),
+                ).fetchone():
+                    row_origin = "cloud"
+            except sqlite3.Error:
+                pass
             mine = _session_rank(parsed.get("message_count"), parsed.get("total_input_tokens"),
                                  parsed.get("total_output_tokens"))
             # A tie keeps the stored copy, matching _dedupe_session_rows.
@@ -25247,6 +25293,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 session_platform,
                 session_uuid,
                 json.dumps(daily_usage),
+                row_origin,
             ),
         )
         if cur.rowcount != 1:

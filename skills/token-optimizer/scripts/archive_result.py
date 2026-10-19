@@ -644,11 +644,29 @@ def _log_savings_event(event_type: str, tokens_saved: int, session_id: str | Non
         conn.executescript(_SAVINGS_SCHEMA)
         cost_per_mtok = _estimate_savings_cost_per_mtok()
         cost_saved = tokens_saved * cost_per_mtok / 1_000_000
-        conn.execute(
-            "INSERT INTO savings_events (timestamp, event_type, tokens_saved, cost_saved_usd, session_id, detail) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(), event_type, tokens_saved, cost_saved, session_id, detail),
-        )
+        # origin (local / cloud / cowork): added in place on an older table;
+        # if that cannot happen right now the event is kept without it.
+        has_origin = False
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(savings_events)").fetchall()}
+            if "origin" not in cols:
+                conn.execute("ALTER TABLE savings_events ADD COLUMN origin TEXT")
+            has_origin = True
+        except sqlite3.Error:
+            has_origin = False
+        if has_origin:
+            conn.execute(
+                "INSERT INTO savings_events (timestamp, event_type, tokens_saved, cost_saved_usd, session_id, detail, origin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), event_type, tokens_saved, cost_saved, session_id, detail,
+                 _run_origin()),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO savings_events (timestamp, event_type, tokens_saved, cost_saved_usd, session_id, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), event_type, tokens_saved, cost_saved, session_id, detail),
+            )
         conn.commit()
         for suffix in ("", "-wal", "-shm"):
             _chmod_private_file(Path(str(TRENDS_DB) + suffix))
@@ -660,6 +678,15 @@ def _log_savings_event(event_type: str, tokens_saved: int, session_id: str | Non
                 conn.close()
             except Exception:
                 pass
+
+
+def _run_origin() -> str:
+    """runtime_env.run_origin(), or 'local' if it cannot be imported."""
+    try:
+        from runtime_env import run_origin
+        return run_origin()
+    except Exception:
+        return "local"
 
 
 def _estimate_savings_cost_per_mtok() -> float:

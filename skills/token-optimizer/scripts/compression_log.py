@@ -39,6 +39,16 @@ except Exception:  # pragma: no cover - fail-open if shared estimator missing
         return len(text.encode("utf-8", errors="replace")) // 4
 
 SNAPSHOT_DIR = resolve_snapshot_dir()
+
+
+def _run_origin() -> str:
+    """runtime_env.run_origin(), or 'local' if it cannot be imported."""
+    try:
+        from runtime_env import run_origin
+        return run_origin()
+    except Exception:
+        return "local"
+
 TRENDS_DB = SNAPSHOT_DIR / "trends.db"
 
 _DB_TIMEOUT_SECONDS = 0.05
@@ -181,16 +191,31 @@ def log_compression_event(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(compression_events)").fetchall()}
         if "tier" not in cols:
             conn.execute("ALTER TABLE compression_events ADD COLUMN tier TEXT")
+        # origin: local / cloud / cowork (runtime_env.run_origin). If the column
+        # cannot be added right now the event is kept without it.
+        has_origin = "origin" in cols
+        if not has_origin:
+            try:
+                conn.execute("ALTER TABLE compression_events ADD COLUMN origin TEXT")
+                has_origin = True
+            except sqlite3.Error:
+                has_origin = False
+        origin_cols = ", origin" if has_origin else ""
+        origin_mark = ", ?" if has_origin else ""
+        values = (datetime.now().isoformat(), session_id, session_uuid, feature, command_pattern,
+                  original_tokens, compressed_tokens, ratio,
+                  1 if quality_preserved else 0,
+                  1 if verified else 0,
+                  detail, resolved_model, safe_tier)
+        if has_origin:
+            values = values + (_run_origin(),)
         conn.execute(
             "INSERT INTO compression_events "
             "(timestamp, session_id, session_uuid, feature, command_pattern, original_tokens, "
-            "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(), session_id, session_uuid, feature, command_pattern,
-             original_tokens, compressed_tokens, ratio,
-             1 if quality_preserved else 0,
-             1 if verified else 0,
-             detail, resolved_model, safe_tier),
+            "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier"
+            + origin_cols + ") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?" + origin_mark + ")",
+            values,
         )
         conn.commit()
         for suffix in ("", "-wal", "-shm"):

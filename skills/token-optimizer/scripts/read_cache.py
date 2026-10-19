@@ -804,7 +804,11 @@ def _ensure_savings_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE savings_events ADD COLUMN session_uuid TEXT")
         if "unjoinable" not in cols:
             conn.execute("ALTER TABLE savings_events ADD COLUMN unjoinable INTEGER DEFAULT 0")
-        # All three columns now exist (present already or just ALTER'd, which
+        # origin: local / cloud / cowork (runtime_env.run_origin). NULL on rows
+        # written before the column existed.
+        if "origin" not in cols:
+            conn.execute("ALTER TABLE savings_events ADD COLUMN origin TEXT")
+        # All columns now exist (present already or just ALTER'd, which
         # auto-commits), so future introspection in this process is redundant.
         _savings_columns_verified = True
     except Exception:
@@ -844,13 +848,25 @@ def _log_savings_event(event_type: str, tokens_saved: int, session_id: str, deta
         except Exception:
             pass
         cost_saved = tokens_saved * cost_per_mtok / 1_000_000
-        conn.execute(
-            "INSERT INTO savings_events "
-            "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(), event_type, tokens_saved, cost_saved,
-             session_id, session_uuid, detail, model, 1 if unjoinable else 0),
-        )
+        if _savings_columns_verified:
+            conn.execute(
+                "INSERT INTO savings_events "
+                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable, origin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), event_type, tokens_saved, cost_saved,
+                 session_id, session_uuid, detail, model, 1 if unjoinable else 0,
+                 run_origin()),
+            )
+        else:
+            # Column migration did not complete (locked DB): keep the event,
+            # without origin, rather than lose it.
+            conn.execute(
+                "INSERT INTO savings_events "
+                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), event_type, tokens_saved, cost_saved,
+                 session_id, session_uuid, detail, model, 1 if unjoinable else 0),
+            )
         conn.commit()
     except Exception:
         pass
@@ -2302,6 +2318,7 @@ def _is_read_cache_disabled() -> bool:
     if env_val == "0":
         return True
     if env_val is None:
+        user_set = False
         for config_dir in [SNAPSHOT_DIR, CACHE_DIR]:
             config_path = config_dir / "config.json"
             if config_path.exists():
