@@ -144,7 +144,7 @@ def test_mirror_timeouts_match_the_root():
     every OTHER timeout must equal the root. Any other drift is a bug."""
     from _codex_mirror_norm import guard_from_resolver
     root = {
-        (e, m, c): h.get("timeout") for e, m, c, h in _flatten(HOOKS_JSON)
+        (e, m, guard_from_resolver(c)): h.get("timeout") for e, m, c, h in _flatten(HOOKS_JSON)
     }
     # Normalize the Codex mirror's resolver rewrite back to the guard so commands
     # (the dict keys) line up with the root; only timeout drift is under test here.

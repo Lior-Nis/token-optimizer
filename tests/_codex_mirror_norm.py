@@ -11,6 +11,9 @@ Tests that assert "the mirror equals the root except for the sanctioned
 transforms" use `guard_from_resolver` to undo the resolver rewrite before
 comparing, so they still catch any *other* drift.
 
+Since 5.13.51 the root hooks.json ships the same resolver (a Claude Code
+session's root can be deleted under it too), so callers normalize BOTH sides.
+
 Keep _RESOLVER / _GUARD byte-identical to the sync script.
 """
 

@@ -31949,6 +31949,14 @@ def _hook_command_identity(cmd):
     if not cmd:
         return ""
 
+    # The plugin's version resolver (D="$(ls -d ... | sort -V | tail -n1)") is
+    # plumbing, not identity: drop that one flat $(...) so a resolver command
+    # keeps the identity of its handler instead of collapsing to "run.py" for
+    # every hook (which would make setup_all_hooks/dedup treat all of an event's
+    # hooks as one).
+    if 'D="$(ls -d ' in cmd:
+        cmd = re.sub(r'D="\$\(ls -d [^()]*\)"', 'D=""', cmd)
+
     # Subshell fallback: commands with $(...) or backticks confuse shlex —
     # shell noise (2>/dev/null, |, sort, -V) leaks into identity tokens.
     # Extract .py name via regex and find subcommand/flags after the closing ).
