@@ -559,6 +559,69 @@ def test_compaction_scan_cursor_is_incremental(tmp_path):
     assert read_cache._scan_for_compaction(None, transcript) is False
 
 
+def test_compaction_cursor_survives_alternating_transcripts(tmp_path):
+    """Review #7: subagent hooks carry a different transcript_path. With one
+    cursor slot each alternation reset the offset, rescanned from 0, re-found
+    the OLD boundary and cleared file_reads again: dedup was off for any
+    session using subagents. Each path keeps its offset, and a boundary acted
+    on once never counts again, even after a rescan from 0."""
+    import read_cache
+
+    class _Store:
+        def __init__(self):
+            self.meta = {}
+
+        def get_meta(self, key):
+            return self.meta.get(key)
+
+        def set_meta(self, key, value):
+            self.meta[key] = value
+
+    store = _Store()
+    main = tmp_path / "main.jsonl"
+    sub = tmp_path / "subagents" / "agent-1.jsonl"
+    sub.parent.mkdir()
+    _append(main, {"type": "user", "message": {"content": "a"}})
+    _append(main, {"type": "system", "subtype": "compact_boundary", "uuid": "b-1"})
+    _append(sub, {"type": "user", "message": {"content": "sub"}})
+    assert read_cache._scan_for_compaction(store, main) is True
+    for _ in range(3):
+        _append(sub, {"type": "assistant", "message": {"content": "x"}})
+        assert read_cache._scan_for_compaction(store, sub) is False
+        _append(main, {"type": "assistant", "message": {"content": "y"}})
+        assert read_cache._scan_for_compaction(store, main) is False, "old boundary re-fired"
+    # A rewrite that forces a rescan from 0 still remembers boundary b-1.
+    text = main.read_text(encoding="utf-8")
+    main.write_text(text.splitlines(True)[0] + text.splitlines(True)[1], encoding="utf-8")
+    assert read_cache._scan_for_compaction(store, main) is False
+    # A genuinely new boundary still fires.
+    _append(main, {"type": "system", "subtype": "compact_boundary", "uuid": "b-2"})
+    assert read_cache._scan_for_compaction(store, main) is True
+    # Legacy single-slot cursor is read, not discarded.
+    legacy = _Store()
+    legacy.meta[read_cache._COMPACT_SCAN_META_KEY] = json.dumps({"path": str(main), "offset": main.stat().st_size})
+    assert read_cache._scan_for_compaction(legacy, main) is False
+
+
+def test_compaction_cursor_map_is_bounded(tmp_path):
+    import read_cache
+
+    class _Store(dict):
+        get_meta = dict.get
+
+        def set_meta(self, key, value):
+            self[key] = value
+
+    store = _Store()
+    for i in range(read_cache._COMPACT_SCAN_MAX_PATHS + 10):
+        t = tmp_path / ("t%d.jsonl" % i)
+        _append(t, {"type": "user", "message": {"content": i}})
+        read_cache._scan_for_compaction(store, t)
+    cur = json.loads(store[read_cache._COMPACT_SCAN_META_KEY])
+    assert len(cur["paths"]) == read_cache._COMPACT_SCAN_MAX_PATHS
+    assert str(tmp_path / "t0.jsonl") not in cur["paths"]
+
+
 # --------------------------------------------------------------------------- #
 # 6. Repo-scoped config layer
 # --------------------------------------------------------------------------- #
