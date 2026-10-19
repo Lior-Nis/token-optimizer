@@ -10,7 +10,9 @@ window cuts - with a chunk size small enough to force window growth, and
 assert identical records.
 
 ``_capture_git_state`` went from two ``git rev-parse`` spawns to one; the
-tests pin the single spawn and the unchanged (branch, short_sha) result.
+tests pin the single spawn, the unchanged branch, and a 7-char sha label
+(git's own --short auto-lengthens past 7 in large repos, so the label is the
+first 7 chars of HEAD, not whatever --short would print).
 """
 from __future__ import annotations
 
@@ -153,12 +155,12 @@ def test_capture_git_state_single_spawn(monkeypatch):
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True, text=True, cwd=str(REPO),
     ).stdout.strip()
-    expected_sha = real_run(
-        ["git", "rev-parse", "--short", "HEAD"],
+    full_sha = real_run(
+        ["git", "rev-parse", "HEAD"],
         capture_output=True, text=True, cwd=str(REPO),
     ).stdout.strip()
     assert branch == expected_branch
-    assert sha == expected_sha
+    assert sha == full_sha[:7]
 
 
 def test_capture_git_state_outside_repo(tmp_path):
