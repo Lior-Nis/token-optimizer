@@ -96,4 +96,55 @@ MUTATIONS = [
        '            subprocess.run(["tasklist", "/v", "/fo", "csv", "/nh"],\n'
        "                           capture_output=True, text=True, timeout=10)\n"
        "        # SAFETY gates run EVERY turn")]),
+
+    # ---- Escaped Windows bugs, re-planted (2026-10-19 audit) ----------------
+    ("#144 dashboard writer calls os.fchmod unguarded (absent on Windows)",
+     ["tests/test_windows_fchmod_guard.py::test_dashboard_generation_survives_missing_fchmod"],
+     MEASURE,
+     [('            try:\n                if hasattr(os, "fchmod"):  # POSIX only (os.fchmod is absent on Windows)\n'
+       '                    os.fchmod(tmp_fd, 0o600)\n                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:\n'
+       '                    f.write(injected)',
+       '            try:\n                os.fchmod(tmp_fd, 0o600)\n'
+       '                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:\n                    f.write(injected)')]),
+    ("#104/#107 run.py starts the hook child without DETACHED_PROCESS",
+     ["tests/test_windows_spawn_no_window.py::test_run_py_spawn_nt_uses_detached_process"],
+     "hooks/run.py",
+     [('_flags = getattr(subprocess, "DETACHED_PROCESS", 0)', "_flags = 0")]),
+    ("#104/#107 spawn_detached drops DETACHED_PROCESS",
+     ["tests/test_windows_spawn_no_window.py::test_spawn_detached_nt_passes_creationflags"],
+     "skills/token-optimizer/scripts/spawn_utils.py",
+     [('for _name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP",',
+       'for _name in ("CREATE_NEW_PROCESS_GROUP",')]),
+    ("#105 UTF-8 re-exec child gets no explicit std handles (stdout lost)",
+     ["tests/test_windows_spawn_no_window.py::test_utf8_io_reexec_nt_passes_std_handles"],
+     "skills/token-optimizer/scripts/utf8_io.py",
+     [("                    _popen_kwargs[_name] = _s\n", "                    pass\n")]),
+    ("#118 Windows SessionEnd hook uses a cmd NUL redirect under Git Bash",
+     ["tests/test_windows_hook_launcher.py::test_claude_windows_hook_command_constant_is_bash_safe"],
+     MEASURE,
+     [('        f" >/dev/null 2>&1"\n    )\nelse:', '        f" >NUL 2>&1"\n    )\nelse:')]),
+    ("#118 Windows SessionEnd hook keeps backslash paths",
+     ["tests/test_windows_hook_launcher.py::test_claude_windows_hook_command_constant_is_bash_safe"],
+     MEASURE,
+     [('    _py = shlex.quote(str(sys.executable).replace("\\\\", "/"))\n'
+       '    _mp = shlex.quote(str(MEASURE_PY_PATH).replace("\\\\", "/"))',
+       "    _py = shlex.quote(str(sys.executable))\n    _mp = shlex.quote(str(MEASURE_PY_PATH))")]),
+    ("#143 WindowsApps probe lets a live pythonw twin vouch for a dead candidate",
+     ["tests/test_windowsapps_twin_cannot_vouch.py"],
+     "hooks/python-launcher.sh",
+     [('        timeout --kill-after=1s 2s "$binpath" -c \\\n',
+       '        timeout --kill-after=1s 2s "${binpath%/*}/pythonw.exe" -c \\\n')]),
+    ("#188 Windows launcher runs the newest version dir without opening its run.py",
+     ["tests/test_windows_hook_launcher.py::test_windows_version_resolver_skips_incomplete_newest_upgrade"],
+     "hooks/windows-launcher.py",
+     [('            try:\n                with open(run_py, "rb") as fh:\n                    if not fh.read(1):\n'
+       "                        continue  # zero-byte/truncated: would run nothing rc 0\n"
+       "            except OSError:\n                continue  # missing, incomplete upgrade, or ACL-denied\n"
+       "            root = candidate",
+       "            root = candidate")]),
+    ("#253 PreCompact checkpoint back under the 2.5 s Stop budget",
+     ["tests/test_hook_entry_budgets.py::test_every_in_scope_hooks_json_entry_has_the_expected_budget"],
+     "skills/token-optimizer/scripts/hook_runtime.py",
+     [('("measure", _trigger("compact-capture", "auto"), BUDGET_PRECOMPACT_CAPTURE,',
+       '("measure", _trigger("compact-capture", "auto"), BUDGET_STOP,')]),
 ]
