@@ -83,18 +83,6 @@ test('a /compact Claude Code refuses says why instead of "Cleaned up."', async (
   expect(await has(ui, 'Cleaned up.')).toBe(false)
 })
 
-test('a /compact that prints "Compacted" counts as cleaned up', async ($, on) => {
-  const w = stub(on, { compact: 'said-compacted' })
-  await $.session.start(START)
-  await w.clock.settle() // the status read runs just after the start
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-
-  await ui.press({ key: 'card-quality-clean' })
-  await w.clock.settle()
-  expect(w.toasts).toEqual([])
-  expect(await has(ui, 'Cleaned up.')).toBe(true)
-})
-
 test('a compaction that hangs past the timeout no longer says "Cleaning up."', async ($, on) => {
   const w = stub(on, { compact: 'hang' })
   await $.session.start(START)

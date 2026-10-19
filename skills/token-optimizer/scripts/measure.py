@@ -4947,10 +4947,12 @@ def doctor(as_json=False):
     # 4. SessionEnd hook (plugin hooks.json auto-installs these, so check for plugin too)
     total += 1
     settings, _ = _read_settings_json()
-    if _is_hook_installed(settings):
+    # The label names where the hook really comes from: _is_hook_installed alone
+    # also counts the plugin's hooks.json, which is not settings.json.
+    if _is_hook_installed(settings, settings_only=True):
         checks.append(("OK", "SessionEnd hook", "active (settings.json)"))
         score += 1
-    elif _is_plugin_installed():
+    elif _is_plugin_installed() or _is_hook_installed(settings):
         checks.append(("OK", "SessionEnd hook", "active (plugin hooks.json)"))
         score += 1
     else:
@@ -29049,12 +29051,13 @@ def _is_compaction_runner(cmd, event):
     return bool(re.search(r"(?:^|[\s\"'/\\])" + name + r"\.py(?:$|[\s\"';])", cmd))
 
 
-def _is_hook_installed(settings=None):
+def _is_hook_installed(settings=None, settings_only=False):
     """Check if the SessionEnd measure.py collect hook is installed.
 
     Returns True if any SessionEnd hook command contains 'measure.py collect'.
     Recognizes both old (collect-only) and new (collect + dashboard) hook commands.
-    Also checks plugin cache hooks (auto-installed via marketplace plugin).
+    Also checks plugin cache hooks (auto-installed via marketplace plugin), unless
+    ``settings_only`` asks only whether settings.json carries it (doctor's label).
     """
     # Check user settings.json
     if settings is None:
@@ -29078,6 +29081,9 @@ def _is_hook_installed(settings=None):
                     _TO_SESSION_END_CMD_RE.search(cmd) or _is_compaction_runner(cmd, "SessionEnd")
                 ):
                     return True
+
+    if settings_only:
+        return False
 
     # Check plugin cache hooks (marketplace plugin auto-install)
     plugin_cache = CLAUDE_DIR / "plugins" / "cache"
@@ -35826,6 +35832,12 @@ _PROGRESSIVE_BANDS = [20, 35, 50, 65, 80]
 _PROGRESSIVE_ENABLED = os.environ.get("TOKEN_OPTIMIZER_PROGRESSIVE_CHECKPOINTS", "1") not in ("0", "false", "no", "off")
 _QUALITY_CHECKPOINT_THRESHOLDS = [80, 70, 50, 40]
 _CHECKPOINT_COOLDOWN_SECONDS = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_COOLDOWN_SECONDS", 90)
+# A post-compact restore treats the session's newest PreCompact ("auto") checkpoint
+# as the moment of the compaction it is restoring for, when it is this recent.
+# Compaction (PreCompact capture -> summary request -> SessionStart(compact)) runs
+# in minutes; an older one belongs to an earlier compaction whose own PreCompact
+# capture is all this one has to go on (e.g. #253: the capture was cut off).
+_COMPACT_RESTORE_ANCHOR_MAX_AGE_S = 1800
 _EDIT_BATCH_WRITE_THRESHOLD = _int_env("TOKEN_OPTIMIZER_EDIT_BATCH_WRITE_THRESHOLD", 4)
 _EDIT_BATCH_FILE_THRESHOLD = _int_env("TOKEN_OPTIMIZER_EDIT_BATCH_FILE_THRESHOLD", 3)
 _CHECKPOINT_TELEMETRY_ENABLED = os.environ.get("TOKEN_OPTIMIZER_CHECKPOINT_TELEMETRY", "0").lower() in ("1", "true", "yes", "on")
@@ -41100,6 +41112,18 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
             trigger = cp.get("trigger", "auto")
             rank = _checkpoint_restore_rank(trigger)
             session_checkpoints.append((rank, cp))
+
+        # Only what was saved before this compaction can restore what it replaced.
+        # SessionStart(compact) and PostCompact refresh the quality cache, which can
+        # capture a progressive band from the post-compact transcript: its "task" is
+        # the compaction summary, and it would outrank the PreCompact capture taken
+        # just before (progressive beats auto). Anything newer than this
+        # compaction's PreCompact checkpoint is dropped from the choice.
+        precompact = [cp["created"] for _, cp in session_checkpoints if cp.get("trigger", "auto") == "auto"]
+        if precompact:
+            anchor = max(precompact)
+            if (now - anchor).total_seconds() <= _COMPACT_RESTORE_ANCHOR_MAX_AGE_S:
+                session_checkpoints = [(r, cp) for r, cp in session_checkpoints if cp["created"] <= anchor]
 
         if session_checkpoints:
             # Sort by rank (lowest = best progressive), then by recency for ties

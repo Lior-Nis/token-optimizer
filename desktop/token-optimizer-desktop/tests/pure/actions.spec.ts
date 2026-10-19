@@ -27,7 +27,10 @@ import {
   checkpointPathFrom,
   initialUi,
   isArmed,
+  CLEAN_UNCONFIRMED,
+  cleanUpOutcome,
   lifetimeFromUsage,
+  liveTokens,
   noteNow,
   prepareHandoff,
   requestContextTokens,
@@ -279,4 +282,34 @@ test('the dashboard status shows while it opens and for the note\'s lifetime aft
   assert.equal(dashboardStatus(null, 'Cleaned up.'), null)
   assert.equal(noteNow(withNote(initialUi(), DASHBOARD_FAILED, T), T + NOTE_MS - 1), DASHBOARD_FAILED)
   assert.equal(noteNow(withNote(initialUi(), DASHBOARD_FAILED, T), T + NOTE_MS), null)
+})
+
+// #207: Clean up said "Cleaned up." when /compact was refused or answered with no text.
+// Success needs evidence a compaction happened; the reply's words only name a refusal.
+test('Clean up succeeds only on evidence: a compaction watched landing, or the live window reset', () => {
+  const quiet = { landed: false, tokensBefore: 620_000, tokensAfter: 620_000, said: '' }
+  assert.deepEqual(cleanUpOutcome({ ...quiet, landed: true }), { ok: true })
+  // Claude Code leaves context.tokens absent "until the first response of the live window: ... one just compacted".
+  assert.deepEqual(cleanUpOutcome({ ...quiet, tokensAfter: null }), { ok: true })
+  // Any reply text, any language, rides along without deciding.
+  assert.deepEqual(cleanUpOutcome({ ...quiet, tokensAfter: null, said: 'Conversation compactée.' }), { ok: true })
+})
+
+test('a refused or silent /compact never reads as cleaned up, whatever the reply says', () => {
+  const quiet = { landed: false, tokensBefore: 620_000, tokensAfter: 620_000, said: '' }
+  assert.deepEqual(cleanUpOutcome({ ...quiet, said: 'Not enough messages to compact.' }), { ok: false, line: 'Clean up skipped: Not enough messages to compact.' })
+  assert.deepEqual(cleanUpOutcome({ ...quiet, said: 'Pas assez de messages à compacter.\nsecond line' }), { ok: false, line: 'Clean up skipped: Pas assez de messages à compacter.' })
+  assert.deepEqual(cleanUpOutcome(quiet), { ok: false, line: CLEAN_UNCONFIRMED })
+  assert.deepEqual(cleanUpOutcome({ ...quiet, said: '   \n' }), { ok: false, line: CLEAN_UNCONFIRMED })
+  // "Compacted" with nothing behind it is a claim, not evidence.
+  assert.equal(cleanUpOutcome({ ...quiet, said: 'Compacted (ctrl+o to see full summary)' }).ok, false)
+  // No reading before the press (fresh or just-compacted window): an absent one after proves nothing.
+  assert.equal(cleanUpOutcome({ ...quiet, tokensBefore: null, tokensAfter: null }).ok, false)
+})
+
+test('the live window is read from session.usage, null when the engine has no reading', () => {
+  assert.equal(liveTokens({ context: { window: 1_000_000, tokens: 620_000, percent: 62 } }), 620_000)
+  assert.equal(liveTokens({ context: { window: 1_000_000 } }), null)
+  assert.equal(liveTokens(null), null)
+  assert.equal(liveTokens({ context: { tokens: Number.NaN } }), null)
 })
