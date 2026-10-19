@@ -46981,12 +46981,16 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False, force=F
       install        -> clears "quality_bar_disabled" (explicit opt-in)
       --uninstall    -> sets   "quality_bar_disabled" (sticky opt-out)
     """
-    # Claude Code cloud has no status line, and in a cloud VM TO's hooks come
-    # from the repo's .claude/settings.json: a silent self-heal that adds our
-    # statusLine + cache hook to ~/.claude/settings.json (which the VM does
-    # read) would double-register the hook. Only the automatic (quiet) callers
-    # are skipped; an explicit `setup-quality-bar` still runs.
-    if quiet and not (dry_run or uninstall or status_only) and _remote_lean_profile():
+    # Claude Code cloud has no status line, and in a cloud VM TO's hooks are
+    # the cloud kit's, which its setup script merges into the VM's
+    # ~/.claude/settings.json: a silent self-heal that adds our statusLine +
+    # cache hook to that same file would double-register the hook. This holds
+    # with the lean profile switched off (TOKEN_OPTIMIZER_REMOTE_LEAN=0) too:
+    # turning lean off brings back daemon/keep-warm work, never a second copy
+    # of the hooks. Only the automatic (quiet) callers are skipped; an
+    # explicit `setup-quality-bar` still runs.
+    if quiet and not (dry_run or uninstall or status_only) and (
+            _remote_lean_profile() or is_claude_code_cloud() or _cloud_kit_owns_hooks()):
         return
     # This function WRITES `settings` back. The old
     # `_read_settings_json()` collapsed a malformed / unreadable / missing file

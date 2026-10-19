@@ -258,6 +258,25 @@ def test_lean_quiet_quality_bar_never_touches_settings(lean, monkeypatch):
     assert measure.setup_quality_bar(quiet=True) is None
 
 
+def test_lean_off_in_cloud_still_never_adds_quality_bar_hooks(monkeypatch, tmp_path):
+    """Interaction gap from review 1: TOKEN_OPTIMIZER_REMOTE_LEAN=0 in a cloud
+    VM (or on any machine whose hooks the cloud kit owns) let the quiet
+    quality-bar self-heal add statusLine + the cache hook to the same
+    ~/.claude/settings.json the kit wired, so the hook ran twice."""
+    def _boom(*a, **k):
+        raise AssertionError("auto quality-bar install touched settings.json under the kit")
+
+    monkeypatch.setenv("TOKEN_OPTIMIZER_REMOTE_LEAN", "0")
+    monkeypatch.setattr(measure, "is_claude_code_cloud", lambda: True)
+    monkeypatch.setattr(measure, "_read_settings_for_write", _boom)
+    assert measure._remote_lean_profile() is False
+    assert measure.setup_quality_bar(quiet=True) is None
+    # Desktop where the kit's runner is in settings.json (=force install).
+    monkeypatch.setattr(measure, "is_claude_code_cloud", lambda: False)
+    monkeypatch.setattr(measure, "_cloud_kit_owns_hooks", lambda: True)
+    assert measure.setup_quality_bar(quiet=True) is None
+
+
 def _record_ensure_health(monkeypatch):
     calls = []
 
