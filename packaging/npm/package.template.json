@@ -1,0 +1,31 @@
+{
+  "name": "@alexgreensh/token-optimizer",
+  "version": "0.0.0",
+  "description": "Token Optimizer for Claude Code cloud sessions: the real plugin, installed by your cloud environment's setup script.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "Alex Greenshpun (https://linkedin.com/in/alexgreensh)",
+  "homepage": "https://github.com/alexgreensh/token-optimizer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexgreensh/token-optimizer.git"
+  },
+  "keywords": [
+    "claude-code",
+    "token-optimizer",
+    "context",
+    "tokens"
+  ],
+  "files": [
+    "install-cloud.sh",
+    "hooks/",
+    "skills/",
+    ".claude-plugin/",
+    "LICENSE",
+    "LICENSE-SMALL-BUSINESS.md",
+    "PRIVACY.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

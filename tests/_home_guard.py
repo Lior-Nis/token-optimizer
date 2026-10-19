@@ -100,6 +100,9 @@ ALLOWLIST: list[tuple[str, str, str]] = [
     # resolved binary to find the host CLI. Existence probe of an executable,
     # not user data; STAT only, so any open/list/write there still fails.
     ("STAT", r"^\.local/share/(claude|devin)(/|$)", "host CLI binary discovery"),
+    # npm discovery for the cloud-kit packaging test (shutil.which("npm") stats
+    # the node version manager's bin dir). STAT only, same reasoning as above.
+    ("STAT", r"^\.(nvm|volta|fnm|asdf)(/|$)", "npm binary discovery"),
 ]
 
 

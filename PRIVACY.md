@@ -175,6 +175,14 @@ Manual deletion: remove the following directories:
 - For Cursor: `~/.cursor/token-optimizer/`
 - For Antigravity: `~/.gemini/token-optimizer/` (and, to also remove the hook wiring, `~/.gemini/config/plugins/token-optimizer/`)
 
+## Claude Code Cloud Sessions
+
+The cloud setup script (`measure.py cloud-setup-script`) runs inside your cloud environment's VM, not on your machine. It makes one download, the `@alexgreensh/token-optimizer` package from registry.npmjs.org, and checks its sha512 before running anything in it. No product data is sent, then or later.
+
+- **Where data lives**: Token Optimizer itself goes to `~/.cache/token-optimizer-cloud/` in the VM, and its hooks are merged into the VM's `~/.claude/settings.json`. Session data (trends, archives, checkpoints) goes to the usual `~/.claude` paths in the VM.
+- **Nothing in your repository**: nothing is written to the working tree, including Python bytecode (redirected to the cache directory).
+- **Nothing persists**: all of it is deleted with the VM. Nothing is carried to the next session or to your machine.
+
 ## Cross-Platform
 
 Locally installed extensions (see `docs/local-extensions.md`) may run inside the session-end flush worker; Token Optimizer ships none by default.

@@ -8,6 +8,8 @@ Usage:
     python3 measure.py quick              # Quick scan: overhead + degradation risk + top offenders
     python3 measure.py quick --json       # Machine-readable quick scan
     python3 measure.py doctor             # Health check: verify all components
+    python3 measure.py cloud-setup-script # Claude Code cloud: print the environment setup script (see --help)
+    python3 measure.py cloud-doctor       # Claude Code cloud: check the in-VM install
     python3 measure.py drift              # Drift report: compare against last snapshot
     python3 measure.py report             # Full standalone report
     python3 measure.py snapshot before    # Save pre-optimization snapshot
@@ -31883,6 +31885,39 @@ def _cleanup_duplicate_plugin_hooks_from_settings(dry_run=False):
     return {"removed": removed, "reason": "success", "dry_run": False}
 
 
+# Hook commands written by the Claude Code cloud kit (cloud_kit.py, run by the
+# npm package's install-cloud.sh) all run this runner.
+_CLOUD_KIT_RUNNER_MARKER = "/token-optimizer-cloud-run.sh"
+
+
+def _cloud_kit_owns_hooks():
+    """True when the Claude Code cloud kit wired this machine's hooks.
+
+    In a cloud VM the kit's run.sh launches the real hooks with
+    CLAUDE_PLUGIN_ROOT pointing at the npm package, and nothing marks that as a
+    plugin install. Without this check the SessionStart self-heal sees "script
+    install with missing hooks" and adds its canonical set next to the kit's,
+    so every hook fires twice. The kit owns the hook map (generated from
+    hooks.json and refreshed on every install), so self-heal stands down.
+    Signals: the env var run.sh exports, or a kit runner in settings.json.
+    """
+    if os.environ.get("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION"):
+        return True
+    try:
+        current, _ok = _read_settings_for_write()
+        hooks = (current or {}).get("hooks") or {}
+        if not isinstance(hooks, dict):
+            return False
+        for groups in hooks.values():
+            for group in groups if isinstance(groups, list) else []:
+                for h in (group.get("hooks") or []) if isinstance(group, dict) else []:
+                    if isinstance(h, dict) and _CLOUD_KIT_RUNNER_MARKER in str(h.get("command", "")):
+                        return True
+    except Exception:
+        return False
+    return False
+
+
 def setup_all_hooks(dry_run=False, verbose=False):
     """Merge the plugin's hooks.json into the user's settings.json.
 
@@ -31901,6 +31936,10 @@ def setup_all_hooks(dry_run=False, verbose=False):
     - Refuses to write if settings.json appears corrupted (non-empty file but parses to {})
     - Rejects plugin_root containing shell metacharacters
     """
+    if _cloud_kit_owns_hooks():
+        if verbose:
+            print("  [setup-all-hooks] hooks are managed by the Claude Code cloud kit; nothing to do")
+        return {"added": 0, "skipped": 0, "plugin_root": None, "reason": "cloud_kit"}
     hooks_json_path = _find_plugin_hooks_json()
     if not hooks_json_path:
         if verbose:
@@ -55905,6 +55944,12 @@ if __name__ == "__main__":
         quick_scan(as_json=output_json)
     elif args[0] == "route":
         _cmd_route(args)
+    elif args[0] == "cloud-setup-script":
+        import cloud_kit
+        sys.exit(cloud_kit.main_setup_script(args[1:]))
+    elif args[0] == "cloud-doctor":
+        import cloud_kit
+        sys.exit(cloud_kit.main_doctor(args[1:]))
     elif args[0] == "doctor":
         output_json = "--json" in args
         if detect_runtime() == "codex":
