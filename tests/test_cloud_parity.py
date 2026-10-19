@@ -496,6 +496,32 @@ def test_desktop_hook_outside_git_keeps_bytecode_beside_scripts(tmp_path):
     assert _pycache_dirs(plugin), "desktop bytecode location changed unexpectedly"
 
 
+def test_host_dontwritebytecode_in_git_repo_still_keeps_repo_clean(tmp_path):
+    """PR #259 composes with the repo redirect: a host-set
+    PYTHONDONTWRITEBYTECODE=1 no longer disables the hook's bytecode cache, and
+    inside a git work tree that cache still lands in the per-user prefix."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    plugin = _fake_plugin(repo / ".claude" / "to-cloud" / "token-optimizer")
+    res = _run_fake_hook(plugin, tmp_path, {"PYTHONDONTWRITEBYTECODE": "1"})
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == "42", (res.stdout, res.stderr)
+    assert _pycache_dirs(repo) == [], "bytecode was written into the user's repo"
+    cached = [p.name for p in
+              (tmp_path / "cache" / "token-optimizer" / "pycache").rglob("*.pyc")]
+    assert any(n.startswith("cloud_probe.") for n in cached), cached
+
+
+def test_host_dontwritebytecode_on_desktop_keeps_bytecode_beside_scripts(tmp_path):
+    """The Windows desktop app case from PR #259, through the real run.py ->
+    module_runner chain: the hook module's .pyc is still written and reused."""
+    plugin = _fake_plugin(tmp_path / "plain" / "token-optimizer")
+    res = _run_fake_hook(plugin, tmp_path, {"PYTHONDONTWRITEBYTECODE": "1"})
+    assert res.returncode == 0, res.stderr
+    scripts = plugin / "skills" / "token-optimizer" / "scripts"
+    assert list((scripts / "__pycache__").glob("cloud_probe.*.pyc"))
+
+
 def test_measure_cli_bytecode_redirect(tmp_path, host, monkeypatch):
     monkeypatch.setattr(sys, "pycache_prefix", None)
     # Record the (absent) original so the os.environ write below is undone;
