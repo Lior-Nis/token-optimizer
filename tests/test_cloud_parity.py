@@ -1141,30 +1141,99 @@ def test_config_dir_outside_home_keeps_scheduler_and_uninstall(account_home, mon
     assert measure._scheduler_install_refused() is False
 
 
-@pytest.mark.parametrize("platform", ["Darwin", "Linux", "Windows"])
-def test_job_of_another_install_blocks_writes_not_uninstall(account_home, monkeypatch, platform):
-    """Real HOME, but the account's job was installed by a different install
-    (a scratch CLAUDE_CONFIG_DIR e2e run would otherwise re-point it): install,
-    restart and revive refuse; uninstall and status stay allowed."""
+def _foreign_job(account_home, monkeypatch, platform, exists=True):
+    """Register a job for this account that belongs to another install."""
     monkeypatch.setattr(measure, "_normalized_platform", lambda: platform)
     foreign = account_home["tmp"] / "someone-else" / ".claude" / "token-optimizer"
+    if exists:
+        foreign.mkdir(parents=True)
+        for name in ("dashboard-server.py", "dashboard-launcher.sh", "dashboard-launcher.cmd"):
+            (foreign / name).write_text("# other install\n", encoding="utf-8")
     if platform == "Darwin":
         _write_plist(account_home["plist"], foreign / "dashboard-server.py", foreign / "out.log")
     elif platform == "Linux":
         unit = measure._systemd_user_unit_path()
-        unit.parent.mkdir(parents=True)
+        unit.parent.mkdir(parents=True, exist_ok=True)
         unit.write_text('[Service]\nExecStart="%s"\nStandardOutput=append:%s/stdout.log\n'
                         % (foreign / "dashboard-launcher.sh", foreign), encoding="utf-8")
     else:
         monkeypatch.setattr(measure, "_windows_task_job_paths",
                             lambda: [str(foreign / "dashboard-launcher.cmd")])
+    return foreign
+
+
+@pytest.mark.parametrize("platform", ["Darwin", "Linux", "Windows"])
+def test_job_of_another_install_blocks_writes_not_uninstall(account_home, monkeypatch, platform):
+    """Real HOME, but the account's job was installed by a different install
+    that still exists (a scratch CLAUDE_CONFIG_DIR e2e run would otherwise
+    re-point it): the writers refuse; uninstall and status stay allowed."""
+    foreign = _foreign_job(account_home, monkeypatch, platform)
     assert str(foreign) in measure._scheduler_job_points_elsewhere()
     assert measure._scheduler_install_refused() is True
     assert measure._daemon_snapshot_sandboxed() is False  # uninstall/status allowed
     assert measure._ensure_dashboard_daemon(force=True) == "noop-sandbox"
-    assert measure._daemon_resurrection_blocked() == "sandbox"
+    assert measure._restart_dashboard_daemon(platform) == "noop-sandbox"
     monkeypatch.setenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "1")
     assert measure._scheduler_install_refused() is False
+
+
+@pytest.mark.parametrize("platform", ["Darwin", "Linux", "Windows"])
+def test_stale_job_whose_paths_are_gone_is_repaired_not_protected(account_home, monkeypatch, platform):
+    """Review 2 MED-2: a job pointing only at paths that no longer exist
+    (account renamed by Migration Assistant, CLAUDE_CONFIG_DIR moved) used to
+    count as "another install" and blocked every repair forever. A job is
+    another install's only while at least one of its paths exists."""
+    _foreign_job(account_home, monkeypatch, platform, exists=False)
+    assert measure._scheduler_job_points_elsewhere() == ""
+    assert measure._scheduler_install_refused() is False
+
+
+def test_hot_hook_paths_never_query_the_scheduler(account_home, monkeypatch):
+    """Review 2 MED-1: the per-prompt pulse, the shared resurrection gate and
+    the SessionStart revive used the full guard, which on Windows runs
+    `schtasks /Query` (up to 10 s) on every UserPromptSubmit. They now read
+    only the frozen sandbox flag; the writers keep the full check."""
+    calls = []
+
+    def _recording(*a, **k):
+        calls.append("scheduler-query")
+        return ["C:\\elsewhere\\dashboard-launcher.cmd"]
+
+    monkeypatch.setattr(measure, "_normalized_platform", lambda: "Windows")
+    monkeypatch.setattr(measure, "_windows_task_job_paths", _recording)
+    monkeypatch.setattr(measure, "_scheduler_job_points_elsewhere",
+                        lambda: calls.append("guard") or "")
+    monkeypatch.setattr(measure, "spawn_detached", lambda *a, **k: None)
+    monkeypatch.setattr(measure, "_remote_lean_profile", lambda: False)
+    measure._daemon_midsession_pulse()
+    measure._daemon_resurrection_blocked()
+    measure._ensure_health_daemon_revive_first()
+    assert calls == [], calls
+    # Lean (cloud) answers before any guard at all.
+    monkeypatch.setattr(measure, "_remote_lean_profile", lambda: True)
+    monkeypatch.setattr(measure, "_daemon_snapshot_sandboxed",
+                        lambda: pytest.fail("guard consulted before the lean check"))
+    assert measure._daemon_midsession_pulse() == "noop-remote"
+    assert measure._ensure_health_daemon_revive_first() == "noop-remote"
+
+
+def test_doctor_and_cli_name_the_other_install(account_home, monkeypatch, capsys):
+    """Review 2 MED-2: with another install's job in place, doctor said
+    "disabled by user (opt-out honored)" and scored it, and `setup-daemon`
+    printed nothing. Both now name the job and the way out."""
+    foreign = _foreign_job(account_home, monkeypatch, "Darwin")
+    monkeypatch.setattr(measure, "_daemon_install_failed_marker_present", lambda: False)
+    monkeypatch.setattr(measure, "_daemon_resurrection_blocked", lambda: None)
+    report = measure.doctor(as_json=True)
+    daemon = next(c for c in report["checks"] if c["name"] == "Dashboard daemon")
+    assert daemon["status"] == "!!"
+    assert "owned by another install" in daemon["detail"] and str(foreign) in daemon["detail"]
+    assert "disabled by user" not in daemon["detail"]
+
+    capsys.readouterr()
+    assert measure._setup_daemon_cli(["setup-daemon"]) == 1
+    out = capsys.readouterr().out
+    assert "refused" in out and str(foreign) in out
 
 
 def test_windows_task_reader_parses_command_and_arguments(monkeypatch):
