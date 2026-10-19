@@ -46,6 +46,8 @@ _HOST_ENV = (
     "CLAUDE_CODE_REMOTE",
     "CLAUDE_CODE_REMOTE_SESSION_ID",
     "CLAUDE_CODE_CONTAINER_ID",
+    "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE",
+    "CLAUDE_CODE_ENTRYPOINT",
     "TOKEN_OPTIMIZER_REMOTE_HOST",
     "TOKEN_OPTIMIZER_REMOTE_LEAN",
     "CLAUDE_PLUGIN_ROOT",
@@ -101,21 +103,35 @@ def _cloud(host):
         ({}, ""),
         ({"CLAUDE_CODE_REMOTE": "true", "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"}, "cloud"),
         ({"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"}, "cloud"),
-        ({"CLAUDE_CODE_REMOTE": "true"}, "cloud"),
-        ({"CLAUDE_CODE_CONTAINER_ID": "abc"}, "cowork"),
-        ({"CLAUDE_CODE_REMOTE": "true", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "cowork"),
-        # The most specific cloud marker wins over a container id.
+        # A bare CLAUDE_CODE_REMOTE says "hosted VM", not which one: no cloud
+        # lean profile, no Cowork caveats (review #4).
+        ({"CLAUDE_CODE_REMOTE": "true"}, "remote"),
+        # The cloud VM sets CLAUDE_CODE_CONTAINER_ID too: it is no host signal.
+        ({"CLAUDE_CODE_CONTAINER_ID": "abc"}, ""),
+        ({"CLAUDE_CODE_REMOTE": "true", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "remote"),
         ({"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "cloud"),
+        # Synced plugin root: Cowork only without cloud evidence (the cloud VM
+        # has plugins/synced/ too; account plugin sync will deliver there).
         ({"CLAUDE_PLUGIN_ROOT": "/root/.claude/plugins/synced/acct/token-optimizer"}, "cowork"),
+        ({"CLAUDE_PLUGIN_ROOT": "/root/.claude/plugins/synced/acct/token-optimizer",
+          "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"}, "cloud"),
         ({"CLAUDE_CODE_REMOTE": "false"}, ""),
+        # The environment type is the most specific host marker.
+        ({"CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default"}, "cloud"),
+        ({"CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cowork_local",
+          "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"}, "cowork"),
+        ({"CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "something_new", "CLAUDE_CODE_REMOTE": "true"}, "remote"),
+        ({"CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default",
+          "CLAUDE_PLUGIN_ROOT": "/root/.claude/plugins/synced/acct/token-optimizer"}, "cloud"),
         # The cloud kit's runner marks its own VM.
         ({"TOKEN_OPTIMIZER_CLOUD_KIT_VERSION": "0.1.0"}, "cloud"),
         ({"TOKEN_OPTIMIZER_CLOUD_KIT_VERSION": "0.1.0", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "cloud"),
         ({"AI_AGENT": "claude-code_2.1.258_harness"}, ""),
         # Explicit pin beats everything.
         ({"TOKEN_OPTIMIZER_REMOTE_HOST": "cowork", "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"}, "cowork"),
+        ({"TOKEN_OPTIMIZER_REMOTE_HOST": "cowork", "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default"}, "cowork"),
         ({"TOKEN_OPTIMIZER_REMOTE_HOST": "local", "CLAUDE_CODE_REMOTE": "true"}, ""),
-        ({"TOKEN_OPTIMIZER_REMOTE_HOST": "bogus", "CLAUDE_CODE_REMOTE": "true"}, "cloud"),
+        ({"TOKEN_OPTIMIZER_REMOTE_HOST": "bogus", "CLAUDE_CODE_REMOTE": "true"}, "remote"),
     ],
 )
 def test_remote_host_resolution(host, env, expected):
@@ -126,12 +142,66 @@ def test_remote_host_resolution(host, env, expected):
     assert runtime_env.run_origin() == (expected or "local")
 
 
+# The exact host env of an Anthropic-hosted cloud VM started by a routine
+# (live probes cse_01Au8fmq3iUyLMULzXTMuy5o and cse_01DWjCoVWnRSY5yNapeGTV7z,
+# 2026-10-19), plus a plugin root under the VM's own plugins/synced/ dir, which
+# is where account plugin sync will deliver Token Optimizer.
+LIVE_CLOUD_ENV = {
+    "CLAUDE_CODE_REMOTE": "true",
+    "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01Au8fmq3iUyLMULzXTMuy5o",
+    "CLAUDE_CODE_CONTAINER_ID": "container_01ABCDEF",
+    "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default",
+    "CLAUDE_CODE_ENTRYPOINT": "remote_trigger",
+    "CLAUDE_PLUGIN_ROOT": "/root/.claude/plugins/synced/org-uuid_account-uuid/token-optimizer",
+}
+
+
+def test_live_cloud_vm_env_is_cloud_not_cowork(host, monkeypatch):
+    host(**LIVE_CLOUD_ENV)
+    assert runtime_env.remote_host() == "cloud"
+    assert runtime_env.is_claude_code_cloud() is True
+    assert runtime_env.is_cowork() is False
+    assert runtime_env.run_origin() == "cloud"
+    monkeypatch.setattr(measure, "is_claude_code_cloud", runtime_env.is_claude_code_cloud)
+    assert measure._remote_lean_profile() is True
+    # Each cloud marker alone (with the synced root and container id that the
+    # cloud VM also carries) still says cloud.
+    for only in ("CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE"):
+        env = {k: (v if k in (only, "CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_CONTAINER_ID", "CLAUDE_CODE_REMOTE") else None)
+               for k, v in LIVE_CLOUD_ENV.items()}
+        host(**env)
+        assert runtime_env.remote_host() == "cloud", only
+
+
+def test_bare_remote_flag_gets_no_lean_profile(host, monkeypatch):
+    """Review #4: CLAUDE_CODE_REMOTE=true alone (a self-hosted runner, a
+    desktop with the variable exported, remote control) must not switch off
+    the daemon, status line and settings self-heal."""
+    monkeypatch.setattr(measure, "is_claude_code_cloud", runtime_env.is_claude_code_cloud)
+    monkeypatch.delenv("TOKEN_OPTIMIZER_REMOTE_LEAN", raising=False)
+    host(CLAUDE_CODE_REMOTE="true")
+    assert measure._remote_lean_profile() is False
+    host(CLAUDE_CODE_REMOTE="true", CLAUDE_CODE_CONTAINER_ID="abc")
+    assert measure._remote_lean_profile() is False
+    for positive in ({"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"},
+                     {"TOKEN_OPTIMIZER_CLOUD_KIT_VERSION": "5.13.50"},
+                     {"TOKEN_OPTIMIZER_REMOTE_HOST": "cloud"},
+                     {"CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default"}):
+        host(CLAUDE_CODE_REMOTE="true", CLAUDE_CODE_CONTAINER_ID=None, **positive)
+        assert measure._remote_lean_profile() is True, positive
+        for key in positive:
+            host(**{key: None})
+
+
 def test_cloud_label_is_not_cowork(host, monkeypatch):
     monkeypatch.setenv("TOKEN_OPTIMIZER_RUNTIME", "claude")
     _cloud(host)
     assert runtime_env.runtime_name_for_humans() == "Claude Code (cloud)"
-    host(CLAUDE_CODE_REMOTE=None, CLAUDE_CODE_REMOTE_SESSION_ID=None, CLAUDE_CODE_CONTAINER_ID="abc")
+    host(CLAUDE_CODE_REMOTE=None, CLAUDE_CODE_REMOTE_SESSION_ID=None,
+         CLAUDE_PLUGIN_ROOT="/home/u/.claude/plugins/synced/acct/token-optimizer-cowork")
     assert runtime_env.runtime_name_for_humans() == "Claude Code (Cowork)"
+    host(CLAUDE_PLUGIN_ROOT=None, CLAUDE_CODE_REMOTE="true")
+    assert runtime_env.runtime_name_for_humans() == "Claude Code"
 
 
 def test_cloud_keeps_claude_only_features(host, monkeypatch):
@@ -141,7 +211,8 @@ def test_cloud_keeps_claude_only_features(host, monkeypatch):
     _cloud(host)
     monkeypatch.setattr(measure, "is_cowork", runtime_env.is_cowork)
     assert measure._subagent_cache_claude_only() is True
-    host(CLAUDE_CODE_REMOTE=None, CLAUDE_CODE_REMOTE_SESSION_ID=None, CLAUDE_CODE_CONTAINER_ID="abc")
+    host(CLAUDE_CODE_REMOTE=None, CLAUDE_CODE_REMOTE_SESSION_ID=None,
+         CLAUDE_PLUGIN_ROOT="/home/u/.claude/plugins/synced/acct/token-optimizer-cowork")
     assert measure._subagent_cache_claude_only() is False
 
 
