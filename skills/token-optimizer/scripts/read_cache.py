@@ -33,7 +33,7 @@ from typing import Any, Optional
 
 from hook_io import read_stdin_hook_input
 from plugin_env import is_v5_flag_enabled, resolve_snapshot_dir
-from runtime_env import runtime_home
+from runtime_env import project_config_value, run_origin, runtime_home
 
 try:
     from session_store import SessionStore, cleanup_old_stores
@@ -2309,8 +2309,13 @@ def _is_read_cache_disabled() -> bool:
                     config = json.loads(config_path.read_text(encoding="utf-8"))
                     if config.get("read_cache_enabled") is False:
                         return True
-                except (json.JSONDecodeError, OSError, ValueError):
+                    if "read_cache_enabled" in config:
+                        user_set = True
+                except (json.JSONDecodeError, OSError, ValueError, AttributeError):
                     pass
+        # Repo-scoped layer, below the user's own config (runtime_env.project_config).
+        if not user_set and project_config_value("read_cache_enabled") is False:
+            return True
     return False
 
 

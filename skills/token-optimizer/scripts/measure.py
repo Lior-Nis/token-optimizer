@@ -165,6 +165,7 @@ from plugin_env import (
 from utf8_io import enforce_utf8_io, reexec_in_utf8_mode
 from runtime_env import (
     _safe_home, claude_home, consume_runtime_flag, detect_runtime, hint_python, is_cowork,
+    is_claude_code_cloud, project_config_value, run_origin,
     runtime_home, runtime_name_for_humans, shell_path, _windows_hints,
 )
 
@@ -1354,15 +1355,13 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
 def _load_pricing_tier():
-    """Load pricing tier preference from config. Defaults to 'anthropic'."""
+    """Load pricing tier preference from config (user, then the project
+    layer via _read_config_flag). Defaults to 'anthropic'."""
     try:
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            tier = cfg.get("pricing_tier", "anthropic")
-            if tier in PRICING_TIERS:
-                return tier
-    except (json.JSONDecodeError, OSError):
+        tier = _read_config_flag("pricing_tier", "anthropic")
+        if isinstance(tier, str) and tier in PRICING_TIERS:
+            return tier
+    except Exception:
         pass
     return "anthropic"
 
@@ -45931,14 +45930,25 @@ def _ensure_vscode_extension():
 
 
 def _read_config_flag(key, default=False):
-    """Read a single flag from config.json. Returns default on any error."""
+    """Read a single flag from config.json. Returns default on any error.
+
+    A key the user's config.json does not set falls back to the repo-scoped
+    project layer ($CLAUDE_PROJECT_DIR/.claude/token-optimizer.json, allowlisted
+    non-secret keys only; see runtime_env.project_config), so a Claude Code
+    cloud session whose home is fresh every time still sees the team's
+    committed opt-outs. The user's own value always wins."""
     try:
-        if not CONFIG_PATH.exists():
-            return default
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if isinstance(cfg, dict) and key in cfg:
-            return cfg[key]
+        if CONFIG_PATH.exists():
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(cfg, dict) and key in cfg:
+                return cfg[key]
     except (json.JSONDecodeError, OSError):
+        pass
+    try:
+        value = project_config_value(key)
+        if value is not None:
+            return value
+    except Exception:
         pass
     return default
 
@@ -54978,7 +54988,8 @@ def run_ensure_health():
         pass
     # Auto-install / auto-restore quality bar on SessionStart.
     # Claude Code only: reads/writes ~/.claude/settings.json for statusLine and hooks.
-    if not _is_codex:
+    # Not in a cloud VM: there is no status line to show it in.
+    if not _is_codex and not _lean:
         try:
             _eh_qb_disabled = _read_config_flag("quality_bar_disabled", False)
             _eh_is_plugin = _is_running_from_plugin_cache() or _is_plugin_installed()
@@ -57185,10 +57196,7 @@ if __name__ == "__main__":
             # foreign-status-line advisory on every prompt.
             _is_plugin = _is_running_from_plugin_cache() or _is_plugin_installed()
             try:
-                _qb_disabled = False
-                if CONFIG_PATH.exists():
-                    _qb_cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-                    _qb_disabled = _qb_cfg.get("quality_bar_disabled", False)
+                _qb_disabled = _read_config_flag("quality_bar_disabled", False)
                 if not _is_plugin and not _qb_disabled and _is_regular_file(SETTINGS_PATH):
                     _sh_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
                     _sh_hooks = _sh_settings.get("hooks", {}).get("UserPromptSubmit", [])
