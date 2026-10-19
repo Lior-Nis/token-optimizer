@@ -141,6 +141,11 @@ def install_sandbox() -> Path | None:
     if os.name == "nt":
         # Cursor, Copilot and Cowork read %APPDATA% before falling back to HOME.
         os.environ["APPDATA"] = str(home / "AppData" / "Roaming")
+        # hooks/run.py and measure.py put bytecode under %LOCALAPPDATA% (the
+        # Windows twin of XDG_CACHE_HOME). Left real, an in-process run.main()
+        # set sys.pycache_prefix to the runner's real profile and every later
+        # import read/wrote .pyc there (~3800 guard errors, Windows CI 5.13.50).
+        os.environ["LOCALAPPDATA"] = str(home / "AppData" / "Local")
     _install_scheduler_shims(root)
     SANDBOX = root
     atexit.register(shutil.rmtree, str(root), True)
@@ -190,6 +195,14 @@ _EXEMPT_PREFIXES: tuple[str, ...] = ()
 _PATH_DIRS: tuple[str, ...] = ()
 _REPO_ANCESTORS: tuple[str, ...] = tuple(
     str(p) for p in REPO.parents if str(p).startswith(REAL_HOME))
+# Ancestors of the system temp dir under the real home (Windows only:
+# AppData\Local\Temp). pytest's tmp_path lives there, so a product walk up
+# from a tmp_path (run.py's ``.git`` work-tree probe) stats
+# ``~/AppData/Local/.git``, ``~/AppData/.git``, ``~/.git``: existence probes
+# of the temp dir's parents, the same thing the repo-ancestor rule allows.
+_TEMP_ANCESTORS: tuple[str, ...] = tuple(
+    str(p) for p in Path(os.path.realpath(tempfile.gettempdir())).parents
+    if str(p) == REAL_HOME or str(p).startswith(REAL_HOME + os.sep))
 HITS: list[tuple[str, str, str, str]] = []  # (nodeid, event, kind, path)
 _current: dict[str, str] = {"id": ""}
 _installed = False
@@ -231,11 +244,15 @@ def _compute_path_dirs() -> tuple[str, ...]:
 def _stat_exempt(full: str) -> bool:
     """Existence probes that are not reads of user data (kind STAT only):
     executable lookup along PATH, and the cwd-upward walk for CLAUDE.md that
-    probes ``<ancestor-of-repo>/CLAUDE.md`` and ``<ancestor>/.claude/CLAUDE.md``."""
+    probes ``<ancestor-of-repo>/CLAUDE.md`` and ``<ancestor>/.claude/CLAUDE.md``,
+    and ``<temp-dir ancestor>/.git`` (an upward work-tree walk from a tmp_path;
+    only ``.git``, so ``~/.claude`` and other real dirs still count)."""
     for ex in _PATH_DIRS:
         if full == ex or full.startswith(ex + os.sep) or ex.startswith(full + os.sep):
             return True
     parent = os.path.dirname(full)
+    if parent in _TEMP_ANCESTORS and os.path.basename(full) == ".git":
+        return True
     for anc in _REPO_ANCESTORS:
         if parent == anc or (os.path.basename(parent) == ".claude"
                              and os.path.dirname(parent) == anc):

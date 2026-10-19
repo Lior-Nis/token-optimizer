@@ -271,7 +271,11 @@ def _real_home_guard(request):
     """
     nodeid = request.node.nodeid
     _home_guard.set_current(nodeid)
+    # hooks/run.py main() sets sys.pycache_prefix for its own process; a test
+    # that calls it in-process must not move bytecode for the rest of the run.
+    pycache_prefix = sys.pycache_prefix
     yield
+    sys.pycache_prefix = pycache_prefix
     _home_guard.set_current("")
     hits = _home_guard.take_hits(nodeid)
     if hits:
