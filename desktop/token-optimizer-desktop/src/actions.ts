@@ -232,6 +232,17 @@ export type HandoffPort = {
 export type HandoffResult = { ok: true; handoff: Handoff } | { ok: false; reason: string }
 
 /**
+ * Why Start fresh stopped when no launcher was a real Python 3 (#261): on
+ * Windows that is usually the Store's python shortcuts standing in for one.
+ */
+export const NO_PYTHON_REASON = 'no working Python 3 was found (the Microsoft Store python shortcuts are not one; install Python 3 from python.org)'
+
+/** The host's runner rejects with an error of this name when no Python 3 starts. */
+function isNoPython(error: unknown): boolean {
+  return error instanceof Error && error.name === 'PythonNotFoundError'
+}
+
+/**
  * Start fresh up to the clear: save a checkpoint, check it is real,
  * build the lean resume text. Any failure returns a one-line reason and
  * nothing is cleared.
@@ -246,8 +257,8 @@ export async function prepareHandoff(
   let captured: { exitCode: number; stdout: string }
   try {
     captured = await port.run(['compact-capture', '--trigger', 'start-fresh', '--budget-seconds', String(CAPTURE_BUDGET_SECONDS)], stdin)
-  } catch {
-    return fail('the checkpoint could not be saved')
+  } catch (error) {
+    return fail(isNoPython(error) ? NO_PYTHON_REASON : 'the checkpoint could not be saved')
   }
   if (captured.exitCode !== 0) return fail('the checkpoint could not be saved')
   const path = checkpointPathFrom(captured.stdout)

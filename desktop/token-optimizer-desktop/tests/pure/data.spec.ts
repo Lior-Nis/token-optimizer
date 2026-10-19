@@ -12,11 +12,16 @@ import {
   mergeStored,
   readQuality,
   readStatusBar,
+  PYTHON_PROBE,
+  PYTHON_PROBE_TIMEOUT_MS,
+  PYTHON_PROOF,
+  PythonNotFoundError,
   resetLauncher,
   runMeasure,
   shouldReset,
   type DataIo,
 } from '../../hooks/data.ts'
+import { NO_PYTHON_REASON, prepareHandoff } from '../../src/actions.ts'
 
 const HOME = '/home/me'
 const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
@@ -470,88 +475,160 @@ const STORE_MISSING = 'Python was not found; run without arguments to install fr
 // The same notice on a German Windows (#247): the alias speaks the user's language.
 const STORE_MISSING_DE = 'Python wurde nicht gefunden; ohne Argumente ausführen, um aus dem Microsoft Store zu installieren, oder deaktivieren Sie diese Verknüpfung unter "Einstellungen > Apps > Erweiterte App-Einstellungen > App-Ausführungsaliase".'
 
-for (const exitCode of [9009, 49]) {
-  test(`Windows missing-Python result ${exitCode} falls back and remembers the working launcher`, async () => {
+// On a Windows install (#261) every launcher must prove it is a live Python 3
+// before it runs measure.py: `py -3` first, then `python`, then `python3`. The
+// proof is the probe's printed answer, never an exit code or a message, so a
+// WindowsApps Store alias stub is skipped in any language and with any exit.
+type Answer = { exitCode: number; stdout: string; stderr?: string } | 'enoent' | 'timeout'
+const PROVEN: Answer = { exitCode: 0, stdout: `${PYTHON_PROOF}\r\n` }
+const ALIAS_9009: Answer = { exitCode: 9009, stdout: '', stderr: STORE_MISSING }
+
+const isProbe = (argv: readonly string[]) => argv.includes(PYTHON_PROBE)
+
+/** A Windows host: each launcher answers the probe, then measure.py. */
+function windowsIo(w: World, launchers: Record<string, { probe: Answer; measure?: Answer }>): DataIo {
+  const io = fakeIo(w)
+  io.run = async (argv, init) => {
+    w.runs.push({ argv, timeoutMs: init.timeoutMs })
+    const host = launchers[argv[0] ?? '']
+    const answer = host === undefined ? 'enoent' : isProbe(argv) ? host.probe : (host.measure ?? { exitCode: 0, stdout: STATUS })
+    if (answer === 'enoent') throw new Error(`spawn ${argv[0]} ENOENT`)
+    if (answer === 'timeout') throw new Error('process.run: timed out')
+    return answer
+  }
+  return io
+}
+
+const tried = (w: World) => w.runs.map(r => `${r.argv[0]}${isProbe(r.argv) ? ' probe' : ''}`)
+const WINDOWS_ROOT = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
+
+test('on Windows py -3 goes first, is proven once, then runs measure.py without another probe', async () => {
+  resetLauncher()
+  const w = world()
+  const io = windowsIo(w, { py: { probe: PROVEN }, python: { probe: ALIAS_9009 }, python3: { probe: ALIAS_9009 } })
+  assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+  assert.deepEqual(tried(w), ['py probe', 'py'])
+  assert.deepEqual(w.runs[0]?.argv, ['py', '-3', '-I', '-c', PYTHON_PROBE])
+  assert.equal(w.runs[0]?.timeoutMs, PYTHON_PROBE_TIMEOUT_MS)
+  assert.deepEqual(w.runs[1]?.argv.slice(0, 3), ['py', '-3', `${WINDOWS_SCRIPTS}/measure.py`])
+  w.runs = []
+  await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })
+  assert.deepEqual(tried(w), ['py'])
+  resetLauncher()
+})
+
+// The Store alias stub as the reporter met it: python and python3 resolve to
+// WindowsApps, whatever exit code arrives and wherever its notice goes.
+for (const [name, stub] of [
+  ['exit 9009, English notice on stderr', ALIAS_9009],
+  ['exit 49 (low byte), German notice', { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE }],
+  ['exit 49, notice to the console only', { exitCode: 49, stdout: '' }],
+  ['notice printed to stdout', { exitCode: 9009, stdout: STORE_MISSING }],
+  ['exit 0 with the notice on stdout', { exitCode: 0, stdout: STORE_MISSING }],
+  ['an unknown exit code with nothing printed', { exitCode: 1, stdout: '' }],
+] as const) {
+  test(`a Store alias stub (${name}) is skipped and the real interpreter is remembered`, async () => {
     resetLauncher()
     const w = world()
-    const io = fakeIo(w)
-    io.run = async (argv, init) => {
-      w.runs.push({ argv, timeoutMs: init.timeoutMs })
-      return argv[0] === 'python3'
-        ? { exitCode, stdout: '', stderr: STORE_MISSING }
-        : { exitCode: 0, stdout: STATUS }
-    }
-    const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
-    assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
-    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
+    const io = windowsIo(w, { python: { probe: stub }, python3: { probe: PROVEN } })
+    assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+    assert.deepEqual(tried(w), ['py probe', 'python probe', 'python3 probe', 'python3'])
     w.runs = []
-    await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })
-    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python'])
+    await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })
+    assert.deepEqual(tried(w), ['python3'])
     resetLauncher()
   })
 }
 
-// The alias is told apart by exit code, empty stdout, a Windows install and the
-// alias names alone, never by its notice: the notice is localized (#247), and
-// on some hosts it goes straight to the console, so stderr is empty.
-for (const scenario of [
-  { name: 'a localized (German) notice', stderr: STORE_MISSING_DE },
-  { name: 'a notice that went to the console, not stderr', stderr: '' },
-  { name: 'no stderr at all', stderr: undefined },
-  { name: 'the English notice', stderr: STORE_MISSING },
-]) {
-  test(`exit 49 with ${scenario.name} falls through to the next launcher and remembers it`, async () => {
-    resetLauncher()
-    const w = world()
-    const io = fakeIo(w)
-    io.run = async (argv, init) => {
-      w.runs.push({ argv, timeoutMs: init.timeoutMs })
-      return argv[0] === 'python3'
-        ? { exitCode: 49, stdout: '', ...(scenario.stderr === undefined ? {} : { stderr: scenario.stderr }) }
-        : { exitCode: 0, stdout: STATUS }
-    }
-    const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
-    assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
-    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
-    w.runs = []
-    await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })
-    assert.deepEqual(w.runs.map(r => r.argv[0]), ['python'])
-    resetLauncher()
-  })
-}
+test('a real Store-installed Python (it passes the probe) is used like any other', async () => {
+  resetLauncher()
+  const w = world()
+  const io = windowsIo(w, { python: { probe: PROVEN } })
+  assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+  assert.deepEqual(tried(w), ['py probe', 'python probe', 'python'])
+  resetLauncher()
+})
+
+test('py -3 with no Python 3 behind it moves on instead of failing Start fresh', async () => {
+  resetLauncher()
+  const w = world()
+  const io = windowsIo(w, { py: { probe: { exitCode: 103, stdout: '', stderr: 'No suitable Python runtime found' } }, python: { probe: PROVEN } })
+  assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+  assert.deepEqual(tried(w), ['py probe', 'python probe', 'python'])
+  resetLauncher()
+})
+
+test('only Store alias stubs and no py launcher rejects as PythonNotFoundError, and the band says Python is needed', async () => {
+  resetLauncher()
+  const w = world()
+  const io = windowsIo(w, { python: { probe: ALIAS_9009 }, python3: { probe: { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE } } })
+  await assert.rejects(runMeasure(io, WINDOWS_ROOT, ['compact-capture'], { timeoutMs: 1000 }), (error: unknown) => error instanceof PythonNotFoundError && error.name === 'PythonNotFoundError')
+  assert.deepEqual(tried(w), ['py probe', 'python probe', 'python3 probe'])
+  assert.equal(w.runs.some(r => r.argv.includes('compact-capture')), false)
+  w.runs = []
+  assert.equal(await readStatusBar(io, WINDOWS_ROOT, 'sess-1'), 'nopython')
+  resetLauncher()
+})
+
+test('Start fresh on a Windows box with only Store alias stubs says Python 3 is missing', async () => {
+  resetLauncher()
+  const w = world()
+  const io = windowsIo(w, { python: { probe: ALIAS_9009 }, python3: { probe: ALIAS_9009 } })
+  const r = await prepareHandoff(
+    { run: (args, stdin) => runMeasure(io, WINDOWS_ROOT, args, { timeoutMs: 1000, ...(stdin === undefined ? {} : { stdin }) }), read: io.read },
+    { sessionId: 'sess-1', transcriptPath: null, cwd: '/work/project', now: NOW_MS },
+  )
+  assert.deepEqual(r, { ok: false, reason: NO_PYTHON_REASON })
+  resetLauncher()
+})
 
 test('the status bar reads through a localized Store alias', async () => {
   resetLauncher()
   const w = world()
-  const io = fakeIo(w)
-  io.run = async (argv, init) => {
-    w.runs.push({ argv, timeoutMs: init.timeoutMs })
-    return argv[0] === 'python3' ? { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE } : { exitCode: 0, stdout: STATUS }
-  }
-  const bar = await readStatusBar(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, 'sess-1')
+  const io = windowsIo(w, { python: { probe: { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE } }, python3: { probe: PROVEN } })
+  const bar = await readStatusBar(io, WINDOWS_ROOT, 'sess-1')
   assert.ok(bar !== null && bar !== 'outdated' && bar !== 'nopython', `status bar read: ${String(bar)}`)
   assert.equal(bar.savings?.sessionTokens, 41_000)
-  assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python'])
   resetLauncher()
 })
 
-test('only localized Store aliases and no py launcher reports that Python is needed', async () => {
+test('a timed-out probe is not retried with another launcher', async () => {
   resetLauncher()
   const w = world()
-  const io = fakeIo(w)
-  io.run = async (argv, init) => {
-    w.runs.push({ argv, timeoutMs: init.timeoutMs })
-    if (argv[0] === 'py') throw new Error('spawn py ENOENT')
-    return { exitCode: 49, stdout: '', stderr: STORE_MISSING_DE }
-  }
-  assert.equal(await readStatusBar(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, 'sess-1'), 'nopython')
-  assert.deepEqual(w.runs.map(r => r.argv[0]), ['python3', 'python', 'py'])
+  const io = windowsIo(w, { py: { probe: 'timeout' }, python: { probe: PROVEN } })
+  await assert.rejects(runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 }), /timed out/)
+  assert.deepEqual(tried(w), ['py probe'])
   resetLauncher()
 })
 
+test('macOS and Linux keep python3 first and are never probed', async () => {
+  resetLauncher()
+  const w = withTokenOptimizer(world())
+  await gather(fakeIo(w), null, { savings: true })
+  assert.equal(w.runs.some(r => isProbe(r.argv)), false)
+  assert.equal(w.runs.find(r => r.argv.includes('status-bar'))?.argv[0], 'python3')
+  resetLauncher()
+})
+
+// Second line of defence: a proven launcher whose measure.py run still comes
+// back as the alias (exit 9009, or 49 with nothing printed) moves on.
+for (const exitCode of [9009, 49]) {
+  test(`after a proof, a measure.py run that exits ${exitCode} with nothing printed still falls through`, async () => {
+    resetLauncher()
+    const w = world()
+    const io = windowsIo(w, {
+      python: { probe: PROVEN, measure: { exitCode, stdout: '', stderr: STORE_MISSING } },
+      python3: { probe: PROVEN },
+    })
+    assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
+    assert.deepEqual(tried(w), ['py probe', 'python probe', 'python', 'python3 probe', 'python3'])
+    resetLauncher()
+  })
+}
+
 for (const scenario of [
-  { name: 'POSIX root', scriptsDir: SCRIPTS, stdout: '', stderr: STORE_MISSING },
-  { name: 'command already produced output', scriptsDir: WINDOWS_SCRIPTS, stdout: STATUS, stderr: STORE_MISSING },
+  { name: 'POSIX root', scriptsDir: SCRIPTS, stdout: '', stderr: STORE_MISSING, runs: 1 },
+  { name: 'command already produced output', scriptsDir: WINDOWS_SCRIPTS, stdout: STATUS, stderr: STORE_MISSING, runs: 2 },
 ]) {
   test(`exit 49 is not retried for ${scenario.name}`, async () => {
     resetLauncher()
@@ -559,10 +636,10 @@ for (const scenario of [
     const io = fakeIo(w)
     io.run = async (argv, init) => {
       w.runs.push({ argv, timeoutMs: init.timeoutMs })
-      return { exitCode: 49, stdout: scenario.stdout, stderr: scenario.stderr }
+      return isProbe(argv) ? PROVEN as { exitCode: number; stdout: string } : { exitCode: 49, stdout: scenario.stdout, stderr: scenario.stderr }
     }
     assert.equal((await runMeasure(io, { scriptsDir: scenario.scriptsDir, runner: null }, ['status-bar'], { timeoutMs: 1000 })).exitCode, 49)
-    assert.equal(w.runs.length, 1)
+    assert.equal(w.runs.length, scenario.runs)
     resetLauncher()
   })
 }
@@ -570,36 +647,17 @@ for (const scenario of [
 test('a real script exit 305 is not treated as a low-byte missing-Python result', async () => {
   resetLauncher()
   const w = world()
-  const io = fakeIo(w)
-  io.run = async (argv, init) => {
-    w.runs.push({ argv, timeoutMs: init.timeoutMs })
-    return { exitCode: 305, stdout: '', stderr: STORE_MISSING }
-  }
-  assert.equal((await runMeasure(io, { scriptsDir: WINDOWS_SCRIPTS, runner: null }, ['status-bar'], { timeoutMs: 1000 })).exitCode, 305)
-  assert.equal(w.runs.length, 1)
+  const io = windowsIo(w, { py: { probe: PROVEN, measure: { exitCode: 305, stdout: '', stderr: STORE_MISSING } } })
+  assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 305)
+  assert.deepEqual(tried(w), ['py probe', 'py'])
   resetLauncher()
 })
 
-test('both Store aliases exit 49 before py -3 works, without treating py itself as an alias', async () => {
+test('py is never treated as an alias: its exit 49 is a real answer', async () => {
   resetLauncher()
   const w = world()
-  const io = fakeIo(w)
-  io.run = async (argv, init) => {
-    w.runs.push({ argv, timeoutMs: init.timeoutMs })
-    return argv[0] === 'py' ? { exitCode: 0, stdout: STATUS }
-      : { exitCode: 49, stdout: '', stderr: STORE_MISSING }
-  }
-  const root = { scriptsDir: WINDOWS_SCRIPTS, runner: null }
-  assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 0)
-  assert.deepEqual(w.runs.map(r => r.argv.slice(0, 2)), [
-    ['python3', `${WINDOWS_SCRIPTS}/measure.py`], ['python', `${WINDOWS_SCRIPTS}/measure.py`], ['py', '-3'],
-  ])
-  w.runs = []
-  io.run = async (argv, init) => {
-    w.runs.push({ argv, timeoutMs: init.timeoutMs })
-    return { exitCode: 49, stdout: '', stderr: STORE_MISSING }
-  }
-  assert.equal((await runMeasure(io, root, ['status-bar'], { timeoutMs: 1000 })).exitCode, 49)
-  assert.deepEqual(w.runs.map(r => r.argv[0]), ['py'])
+  const io = windowsIo(w, { py: { probe: PROVEN, measure: { exitCode: 49, stdout: '' } }, python: { probe: PROVEN } })
+  assert.equal((await runMeasure(io, WINDOWS_ROOT, ['status-bar'], { timeoutMs: 1000 })).exitCode, 49)
+  assert.deepEqual(tried(w), ['py probe', 'py'])
   resetLauncher()
 })

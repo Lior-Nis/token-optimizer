@@ -43,12 +43,29 @@ export const NO_PYTHON = 'Token Optimizer needs Python 3 to measure savings.'
 export const OUTDATED = 'Update Token Optimizer to see savings.'
 
 /**
- * Python launchers in the order tried. The mod cannot see the host's OS, so a
- * launcher that cannot start (or Windows' Store stub, exit 9009) moves on to
- * the next: python3 on macOS and Linux, python or the `py -3` launcher on
- * Windows. The first that starts is remembered for the module's life.
+ * Python launchers in the order tried on macOS and Linux. A launcher that
+ * cannot start (or Windows' Store stub, exit 9009) moves on to the next. The
+ * first that starts is remembered for the module's life.
  */
 export const PYTHON_LAUNCHERS: readonly (readonly string[])[] = [['python3'], ['python'], ['py', '-3']]
+
+/**
+ * The order on a Windows install (#261). `py -3` is the python.org launcher in
+ * C:\\Windows and is never a Store alias, so it goes first; `python` and
+ * `python3` are often the WindowsApps "app execution alias" stubs, which are
+ * not an interpreter at all.
+ */
+export const WINDOWS_PYTHON_LAUNCHERS: readonly (readonly string[])[] = [['py', '-3'], ['python'], ['python3']]
+
+/**
+ * What a live Python 3 prints for the proof-of-life probe. The probe holds no
+ * spaces or double quotes, so it reaches Python intact through any Windows
+ * command-line quoting (and through `py`, which re-quotes for the child).
+ */
+export const PYTHON_PROOF = 'token-optimizer-python-ok'
+export const PYTHON_PROBE = `print(('','${PYTHON_PROOF}')[__import__('sys').version_info[0]>=3])`
+/** A cold interpreter start on Windows (Defender scanning it) can take seconds. */
+export const PYTHON_PROBE_TIMEOUT_MS = 8_000
 
 /** Windows' "app execution alias" stub for a missing python exits with this. */
 const WINDOWS_NOT_FOUND = 9009
@@ -64,11 +81,29 @@ function isStoreAliasName(launcher: readonly string[] | undefined): boolean {
   return launcher?.[0] === 'python3' || launcher?.[0] === 'python'
 }
 
+/** A drive-letter or UNC scripts folder: the install is on Windows. */
+function isWindowsRoot(scriptsDir: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(scriptsDir) || scriptsDir.startsWith('\\\\')
+}
+
 let launcherIndex = 0
+let windowsLauncherIndex = 0
+/** The Windows launcher index whose proof-of-life probe passed, or -1. */
+let windowsProven = -1
 
 /** Forgets which launcher worked (tests, and nothing else). */
 export function resetLauncher(): void {
   launcherIndex = 0
+  windowsLauncherIndex = 0
+  windowsProven = -1
+}
+
+/** No Python 3 interpreter could be found: every launcher was tried. */
+export class PythonNotFoundError extends Error {
+  constructor() {
+    super('python launcher not found')
+    this.name = 'PythonNotFoundError'
+  }
 }
 
 /**
@@ -251,9 +286,25 @@ function noLauncher(error: unknown): boolean {
 }
 
 /**
- * Runs `measure.py <args>` with the first Python launcher that starts. A
- * timeout is the command's own answer and is never retried, so a slow read
- * costs one timeout, not three. Rejects as the last attempt did.
+ * Windows only: does this launcher start a real Python 3? The answer is the
+ * probe's printed proof, never an exit code or a message, so a Store alias
+ * stub fails it in any language and however its exit code arrives, while a
+ * real Store-installed Python (also under WindowsApps) passes. Rejects on a
+ * spawn failure or a timeout, like any run.
+ */
+async function provesPython(io: DataIo, launcher: readonly string[]): Promise<boolean> {
+  const probe = await io.run([...launcher, '-I', '-c', PYTHON_PROBE], { timeoutMs: PYTHON_PROBE_TIMEOUT_MS })
+
+  return probe.exitCode === 0 && probe.stdout.split(/\r?\n/).some(line => line.trim() === PYTHON_PROOF)
+}
+
+/**
+ * Runs `measure.py <args>` with the first Python launcher that starts. On a
+ * Windows install each launcher must first pass a proof-of-life probe (once,
+ * then remembered), the same rule the hook launcher applies to WindowsApps
+ * candidates. A timeout is the command's own answer and is never retried, so
+ * a slow read costs one timeout, not three. Rejects as the last attempt did,
+ * or with PythonNotFoundError when no launcher was a Python 3.
  */
 export async function runMeasure(
   io: DataIo,
@@ -261,13 +312,23 @@ export async function runMeasure(
   args: readonly string[],
   init: { timeoutMs: number; stdin?: string },
 ): Promise<{ exitCode: number; stdout: string; stderr?: string }> {
-  let lastError: unknown = new Error('no python launcher')
+  const windowsRoot = isWindowsRoot(root.scriptsDir)
+  const launchers = windowsRoot ? WINDOWS_PYTHON_LAUNCHERS : PYTHON_LAUNCHERS
+  let lastError: unknown = new PythonNotFoundError()
 
-  for (let i = launcherIndex; i < PYTHON_LAUNCHERS.length; i++) {
+  for (let i = windowsRoot ? windowsLauncherIndex : launcherIndex; i < launchers.length; i++) {
+    const launcher = launchers[i]
     try {
-      const result = await io.run(measureArgv(root, args, PYTHON_LAUNCHERS[i]), init)
+      if (windowsRoot && windowsProven !== i) {
+        if (!(await provesPython(io, launcher ?? []))) {
+          lastError = new PythonNotFoundError()
+          continue
+        }
+        windowsProven = i
+      }
 
-      const windowsRoot = /^[A-Za-z]:[\\/]/.test(root.scriptsDir) || root.scriptsDir.startsWith('\\\\')
+      const result = await io.run(measureArgv(root, args, launcher), init)
+
       // The Store alias (AppInstallerPythonRedirector) exits 9009, seen as 49
       // where the runtime keeps the low byte, prints nothing to stdout, and
       // writes its notice in the user's language, or straight to the console
@@ -276,17 +337,20 @@ export async function runMeasure(
       // python name is the alias. measure.py never exits 49 of its own, so the
       // one thing this can mistake is a script failure that also printed
       // nothing, and that costs one more launcher attempt, not a wrong answer.
+      // The probe above already keeps the alias out on Windows; this stays as
+      // the second line of defence.
       const storeAliasMissing = result.exitCode === WINDOWS_NOT_FOUND_LOW_BYTE
         && windowsRoot
-        && isStoreAliasName(PYTHON_LAUNCHERS[i])
+        && isStoreAliasName(launcher)
         && result.stdout.trim() === ''
 
-      if ((result.exitCode === WINDOWS_NOT_FOUND || storeAliasMissing) && i < PYTHON_LAUNCHERS.length - 1) {
-        lastError = new Error('python launcher not found')
+      if ((result.exitCode === WINDOWS_NOT_FOUND || storeAliasMissing) && i < launchers.length - 1) {
+        lastError = new PythonNotFoundError()
         continue
       }
 
-      launcherIndex = i
+      if (windowsRoot) windowsLauncherIndex = i
+      else launcherIndex = i
       return result
     } catch (error) {
       if (isTimeout(error)) {
@@ -297,7 +361,7 @@ export async function runMeasure(
     }
   }
 
-  throw lastError
+  throw noLauncher(lastError) ? new PythonNotFoundError() : lastError
 }
 
 /**
