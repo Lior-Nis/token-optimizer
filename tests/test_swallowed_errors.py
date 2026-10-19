@@ -40,18 +40,17 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
-MONITOR_DIR = Path(__file__).resolve().parent / "fixtures" / "raise_monitor"
-HOOKS_JSON = REPO / "hooks" / "hooks.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _hook_harness import (  # noqa: E402
+    REPO, consented_home as _consented_home, hook_entries as _hook_entries,
+    payload as _payload, read_log, run_hook, transcript as _transcript)
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="hooks.json commands are POSIX sh; Windows runs them through Git Bash, covered by the wire tests")
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="drives the hooks.json command through /bin/sh, which native Windows lacks")
 
 # Exceptions that are always a bug in our own code, never a world condition.
 _PROGRAMMING_ERRORS = ("NameError",)  # UnboundLocalError is a NameError subclass
@@ -67,8 +66,6 @@ _BUG_MESSAGES = (
     # introspection asking, answered by a module __getattr__: not a bug.
     ("AttributeError", re.compile(r"^module '[^']+' has no attribute '(?!__)")),
 )
-
-SESSION_ID = "0f6e3c1a-5b2d-4e8f-9a1b-246246246246"
 
 
 # A first-party module that cannot be imported from a first-party file is a
@@ -92,146 +89,6 @@ def is_programming_error(rec: dict) -> bool:
         if name in rec.get("mro", []) and pattern.search(rec.get("msg", "")):
             return True
     return False
-
-
-def _hook_entries():
-    data = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
-    out = []
-    for event, groups in data["hooks"].items():
-        for gi, group in enumerate(groups):
-            for hi, hook in enumerate(group["hooks"]):
-                if hook.get("type") != "command":
-                    continue
-                cmd = hook["command"]
-                m = re.search(r'run\.py\\?"? ([^;]+?);', cmd)
-                label = m.group(1).strip() if m else f"{gi}.{hi}"
-                out.append(pytest.param(event, group.get("matcher"), cmd,
-                                        id=f"{event}[{group.get('matcher') or '*'}]:{label}"))
-    return out
-
-
-def _transcript(project: Path, home: Path) -> Path:
-    """A short but realistic Claude Code transcript: usage, a tool round-trip,
-    a file read, enough for quality scoring and checkpoint capture to run."""
-    read_target = project / "app.py"
-    read_target.write_text("def main():\n    return 42\n", encoding="utf-8")
-    ts = "2026-10-19T09:00:%02d.000Z"
-    usage = {"input_tokens": 1200, "cache_creation_input_tokens": 4000,
-             "cache_read_input_tokens": 60000, "output_tokens": 350}
-    recs = [
-        {"type": "user", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 0,
-         "uuid": "u1", "message": {"role": "user", "content": "Please refactor the parser in app.py and add tests."}},
-        {"type": "assistant", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 1,
-         "uuid": "a1", "parentUuid": "u1",
-         "message": {"id": "msg_1", "model": "claude-opus-4-6", "role": "assistant", "usage": usage,
-                     "content": [{"type": "text", "text": "Reading the file first."},
-                                 {"type": "tool_use", "id": "toolu_01", "name": "Read",
-                                  "input": {"file_path": str(read_target)}}]}},
-        {"type": "user", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 2,
-         "uuid": "u2", "parentUuid": "a1",
-         "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01",
-                                                  "content": "1\tdef main():\n2\t    return 42\n"}]}},
-        {"type": "assistant", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 3,
-         "uuid": "a2", "parentUuid": "u2",
-         "message": {"id": "msg_2", "model": "claude-opus-4-6", "role": "assistant", "usage": usage,
-                     "content": [{"type": "tool_use", "id": "toolu_02", "name": "Bash",
-                                  "input": {"command": "git status"}}]}},
-        {"type": "user", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 4,
-         "uuid": "u3", "parentUuid": "a2",
-         "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_02",
-                                                  "content": "On branch main\nnothing to commit"}]}},
-        {"type": "assistant", "sessionId": SESSION_ID, "cwd": str(project), "timestamp": ts % 5,
-         "uuid": "a3", "parentUuid": "u3",
-         "message": {"id": "msg_3", "model": "claude-opus-4-6", "role": "assistant", "usage": usage,
-                     "content": [{"type": "text", "text": "Decided to split the parser into tokenize() and parse()."}]}},
-    ]
-    slug = "-" + str(project).strip("/").replace("/", "-").replace(".", "-")
-    path = home / ".claude" / "projects" / slug / f"{SESSION_ID}.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
-    return path
-
-
-def _payload(event: str, matcher: str | None, transcript: Path, project: Path) -> dict:
-    base = {"session_id": SESSION_ID, "transcript_path": str(transcript), "cwd": str(project),
-            "hook_event_name": event, "permission_mode": "default"}
-    tool = (matcher or "").split("|")[0]
-    if tool.startswith("mcp__"):
-        tool = "mcp__github__get_file_contents"
-    if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
-        tool = tool or "Bash"
-        inputs = {
-            "Read": {"file_path": str(project / "app.py")},
-            "Bash": {"command": "git log --oneline -5"},
-            "Agent": {"description": "survey", "prompt": "Survey the parser", "subagent_type": "general-purpose"},
-        }
-        base["tool_name"] = tool
-        base["tool_input"] = inputs.get(tool, {"owner": "a", "repo": "b", "path": "README.md"})
-        base["tool_use_id"] = "toolu_09"
-        if event == "PostToolUse":
-            base["tool_response"] = {"stdout": "abc123 first\n" * 40, "stderr": "", "interrupted": False}
-        if event == "PostToolUseFailure":
-            base["error"] = "Exit code 1\nfatal: not a git repository"
-    elif event == "UserPromptSubmit":
-        base["prompt"] = "now add tests for tokenize()"
-    elif event == "SessionStart":
-        base["source"] = "startup"
-        base["model"] = "claude-opus-4-6"
-    elif event in ("PreCompact", "PostCompact"):
-        base["trigger"] = "auto"
-        base["custom_instructions"] = ""
-    elif event == "SessionEnd":
-        base["reason"] = "other"
-    elif event == "StopFailure":
-        base["error"] = "rate_limit"
-    elif event == "CwdChanged":
-        base["old_cwd"] = str(project)
-        base["new_cwd"] = str(project)
-    elif event == "Stop":
-        base["stop_hook_active"] = False
-    return base
-
-
-def _consented_home(root: Path) -> Path:
-    home = root / "home"
-    cfg = home / ".claude" / "token-optimizer" / "config.json"
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(json.dumps({"v5_welcome_shown": True, "enterprise_consent_shown": True}), encoding="utf-8")
-    return home
-
-
-def run_hook(command: str, plugin_root: Path, payload: dict, home: Path, log: Path,
-             timeout: float = 90.0) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_", "TOKEN_OPTIMIZER_", "CODEX_", "TO_TEST_"))}
-    env.update({
-        "HOME": str(home), "USERPROFILE": str(home),
-        "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
-        "XDG_DATA_HOME": str(home / ".local" / "share"), "XDG_STATE_HOME": str(home / ".local" / "state"),
-        "CLAUDE_PLUGIN_ROOT": str(plugin_root),
-        "CLAUDE_PROJECT_DIR": payload["cwd"],
-        "TOKEN_OPTIMIZER_NO_PROC_SCAN": "1",
-        "PYTHONPATH": str(MONITOR_DIR),
-        "TO_TEST_RAISE_LOG": str(log),
-        "TO_TEST_RAISE_ROOT": str(plugin_root),
-    })
-    return subprocess.run(["/bin/sh", "-c", command], input=json.dumps(payload), cwd=payload["cwd"],
-                          env=env, capture_output=True, text=True, timeout=timeout)
-
-
-def read_log(log: Path, settle: float = 0.0) -> list[dict]:
-    """Records from every process, waiting briefly for async/detached workers."""
-    deadline = time.monotonic() + settle
-    last = -1
-    while True:
-        size = log.stat().st_size if log.exists() else 0
-        if time.monotonic() >= deadline or (size == last and settle and time.monotonic() > deadline - settle + 1.5):
-            break
-        last = size
-        time.sleep(0.5)
-    if not log.exists():
-        return []
-    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _fmt(recs):
@@ -307,3 +164,50 @@ def test_monitor_catches_planted_swallowed_name_error(tmp_path):
     bugs = [r for r in read_log(log, settle=2.0) if is_programming_error(r)]
     assert any(r["type"] == "NameError" and "_resolve_feature_env_defined_later" in r["msg"]
                and r["file"].replace("\\", "/") == _PLANT_TARGET for r in bugs), _fmt(bugs) or "monitor saw nothing"
+
+
+# --------------------------------------------------------------------------- #
+# The user-facing CLI: the same check for the commands people run by hand.
+# --------------------------------------------------------------------------- #
+
+# Read-only or sandbox-only commands a user runs from the skill or a terminal.
+# Installers, schedulers and destructive commands are left out on purpose.
+_CLI_COMMANDS = [
+    ["collect"], ["report"], ["quick"], ["doctor"], ["cloud-doctor"], ["health"],
+    ["version"], ["drift"], ["trends"], ["savings"], ["compression-stats"],
+    ["cache-report"], ["list-checkpoints"], ["checkpoint-stats"], ["read-cache-stats"],
+    ["recommendations"], ["quality", "current"], ["status-bar"], ["runway-json"],
+    ["pricing-tier"], ["daemon-status"], ["check-hook"], ["coach"], ["compact-advice"],
+    ["cohorts"], ["git-context"], ["security-report"], ["dashboard"],
+]
+
+
+def _no_op_openers(root: Path) -> Path:
+    shims = root / "openers"
+    shims.mkdir()
+    for name in ("open", "xdg-open"):
+        p = shims / name
+        p.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        p.chmod(0o755)
+    return shims
+
+
+@pytest.mark.parametrize("argv", _CLI_COMMANDS, ids=lambda a: " ".join(a))
+def test_cli_command_raises_no_programming_error(tmp_path, argv):
+    home = _consented_home(tmp_path)
+    project = tmp_path / "proj"
+    project.mkdir()
+    _transcript(project, home)
+    log = tmp_path / "raises.jsonl"
+    shims = _no_op_openers(tmp_path)
+    script = REPO / "skills" / "token-optimizer" / "scripts" / "measure.py"
+    command = f'PATH="{shims}:$PATH" exec "{sys.executable}" "{script}" ' + " ".join(argv)
+    proc = run_hook(command, REPO, {"cwd": str(project)}, home, log, timeout=180)
+    recs = read_log(log, settle=2.0)
+    if os.environ.get("TO_TEST_RAISE_DUMP"):
+        with open(os.environ["TO_TEST_RAISE_DUMP"], "a", encoding="utf-8") as fh:
+            for r in recs:
+                fh.write(json.dumps({"event": "cli " + " ".join(argv), **r}) + "\n")
+    bugs = [r for r in recs if is_programming_error(r)]
+    assert not bugs, f"measure.py {' '.join(argv)} raised (and swallowed):\n{_fmt(bugs)}"
+    assert "Traceback (most recent call last)" not in proc.stderr, proc.stderr[-3000:]
