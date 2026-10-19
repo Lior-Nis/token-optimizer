@@ -133,11 +133,12 @@ _RECORDER_SITECUSTOMIZE = textwrap.dedent(r'''
     if _LOG:
         import subprocess as _sp
 
-        def _w(kind, argv):
+        def _w(kind, argv, **extra):
             try:
+                row = {"pid": _os.getpid(), "kind": kind, "argv": argv}
+                row.update(extra)
                 with open(_LOG, "a", encoding="utf-8") as _fh:
-                    _fh.write(_json.dumps({"pid": _os.getpid(), "kind": kind,
-                                           "argv": argv}) + "\n")
+                    _fh.write(_json.dumps(row) + "\n")
             except Exception:
                 pass
 
@@ -155,13 +156,27 @@ _RECORDER_SITECUSTOMIZE = textwrap.dedent(r'''
                 argv = _norm(args)
                 dispatch = any(str(x).replace("\\", "/").endswith("hooks/module_runner.py")
                                for x in argv[:2])
-                _w("dispatch" if dispatch else "popen", argv)
+                flags = kw.get("creationflags", 0) or 0
                 if not dispatch:
-                    # Recorded, never run: nothing escapes the sandbox.
+                    # Recorded, never run: nothing escapes the sandbox. The
+                    # stand-in is started with the caller's own kwargs
+                    # (creationflags included), so CreateProcess accepts or
+                    # refuses it exactly as it would the real child.
                     args = [_sys.executable, "-c", ""]
                     kw.pop("executable", None)
                     kw["shell"] = False
-                super().__init__(args, *a, **kw)
+                # A process exists only once Popen returns. spawn_detached on
+                # Windows retries ONCE without CREATE_BREAKAWAY_FROM_JOB when
+                # the parent's job object refuses breakaway (the GitHub runner
+                # does); the refused attempt starts nothing and must not count.
+                try:
+                    super().__init__(args, *a, **kw)
+                except BaseException as exc:
+                    _w("failed", argv, dispatch=dispatch, flags=flags,
+                       error=type(exc).__name__)
+                    raise
+                _w("dispatch" if dispatch else "popen", argv, flags=flags,
+                   child=self.pid)
 
         _sp.Popen = _RecPopen
 
@@ -250,6 +265,7 @@ def test_real_dispatch_starts_no_scheduler_or_process_table_tool(real_dispatch_r
     bad = []
     for event, _m, tail, _proc, rows in real_dispatch_runs.values():
         for r in rows:
+            # Attempts count here even when CreateProcess refused them.
             if r["kind"] not in ("boot", "dispatch") and _exe_name(r["argv"]) in FORBIDDEN_ON_HOT_PATH:
                 bad.append((event, tail[0], r["argv"][:4]))
     assert not bad, f"hook events started scheduler/process-table tools: {bad}"
@@ -259,10 +275,45 @@ def test_real_dispatch_extra_processes_within_budget(real_dispatch_runs):
     """Per entry: processes started beyond run.py's dispatch child."""
     over = []
     for event, _m, tail, _proc, rows in real_dispatch_runs.values():
-        extra = [r["argv"][:4] for r in rows if r["kind"] not in ("boot", "dispatch")]
+        # Processes that actually started (a refused CreateProcess is not one).
+        extra = [r["argv"][:4] for r in rows if r["kind"] not in ("boot", "dispatch", "failed")]
         if len(extra) > EXTRA_PROCESS_BUDGET.get(event, 0):
-            over.append((event, tail[0], len(extra), extra))
+            refused = [(r["argv"][:3], r.get("error"), r.get("flags")) for r in rows
+                       if r["kind"] == "failed"]
+            over.append((event, tail[0], len(extra), extra, {"refused_attempts": refused}))
     assert not over, f"hook entries over their process budget: {over}"
+
+
+def test_recorder_counts_started_processes_not_refused_attempts(tmp_path):
+    """Windows CI 5.13.51: Stop/SessionEnd showed two identical flush-worker
+    records. _defer_session_end_flush calls spawn_detached once, and
+    spawn_detached's only second Popen is its retry without
+    CREATE_BREAKAWAY_FROM_JOB after the runner's job object refuses breakaway:
+    one process, two attempts. This pins the recorder's rule on every OS with
+    a real refusal (a missing cwd makes CreateProcess/exec fail): a refused
+    attempt then a successful retry is ONE started process, while two
+    successful starts stay two."""
+    rec_dir = tmp_path / "rec"
+    rec_dir.mkdir()
+    (rec_dir / "sitecustomize.py").write_text(_RECORDER_SITECUSTOMIZE, encoding="utf-8")
+    log = tmp_path / "spawns.jsonl"
+    script = textwrap.dedent(f'''
+        import subprocess, sys
+        try:
+            subprocess.Popen(["schtasks-stand-in", "/x"], cwd={str(tmp_path / "missing")!r}).wait()
+        except OSError:
+            subprocess.Popen(["schtasks-stand-in", "/x"]).wait()   # the retry
+        subprocess.Popen(["second-real-start"]).wait()
+    ''')
+    env = dict(os.environ, TO_SPAWN_LOG=str(log), PYTHONPATH=str(rec_dir))
+    proc = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
+                          text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    kinds = [(r["kind"], Path(r["argv"][0]).name if r["argv"] else "") for r in rows
+             if r["kind"] != "boot"]
+    assert kinds == [("failed", "schtasks-stand-in"), ("popen", "schtasks-stand-in"),
+                     ("popen", "second-real-start")], kinds
 
 
 @pytest.mark.parametrize("hooks_json", SHIPPED_HOOKS_JSON,

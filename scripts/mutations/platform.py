@@ -147,4 +147,27 @@ MUTATIONS = [
      "skills/token-optimizer/scripts/hook_runtime.py",
      [('("measure", _trigger("compact-capture", "auto"), BUDGET_PRECOMPACT_CAPTURE,',
        '("measure", _trigger("compact-capture", "auto"), BUDGET_STOP,')]),
+
+    # A real double start of the session-end flush worker per Stop (the shape
+    # Windows CI first suggested in 5.13.51; there it was the breakaway retry,
+    # one process). The recorder counts started processes, so a genuine second
+    # start must still trip the budget.
+    ("Stop starts the session-end flush worker twice",
+     [BUDGET + "::test_real_dispatch_extra_processes_within_budget"],
+     MEASURE,
+     [("            close_fds=True,\n        )\n        if _proc is None:\n"
+       '            _log_spawn_failure("session-end flush spawn failed")',
+       "            close_fds=True,\n        )\n"
+       "        spawn_detached(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
+       "                       stderr=subprocess.DEVNULL, cwd=str(Path.cwd()), env=env)\n"
+       "        if _proc is None:\n"
+       '            _log_spawn_failure("session-end flush spawn failed")')]),
+    # The recorder itself: logging an attempt before CreateProcess answers
+    # counted spawn_detached's refused breakaway attempt as a second process.
+    ("budget recorder counts refused CreateProcess attempts as processes",
+     [BUDGET + "::test_recorder_counts_started_processes_not_refused_attempts"],
+     BUDGET,
+     [("                try:\n                    super().__init__(args, *a, **kw)\n",
+       '                _w("popen", argv)\n'
+       "                try:\n                    super().__init__(args, *a, **kw)\n")]),
 ]
