@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.13.50] - 2026-10-19
+
+- Token Optimizer now runs in Claude Code cloud sessions with the same savings as on your desktop: paste one setup script into your cloud environment and every session, in every repo, gets the full plugin. `measure.py cloud-setup-script` prints it; `measure.py cloud-doctor` checks it.
+- Claude Code cloud sessions are recognised as cloud, not Cowork, so reports show the right labels and advice.
+- In the cloud, background work that can't help there (dashboard service, keep-warm, status bar setup) is skipped and stats are saved before the session ends.
+- Re-reading a file after the conversation was compacted now returns the file instead of "already in context".
+- A warning that could slip into Claude's context and break file-read hooks now goes to the log.
+
 ## [5.13.49] - 2026-10-17
 
 - Hooks finish sooner on macOS and Linux: the hook runner now wakes the moment a hook is done instead of polling for it. In our tests each hook, on every tool call and prompt, finished 25-80 ms faster.
