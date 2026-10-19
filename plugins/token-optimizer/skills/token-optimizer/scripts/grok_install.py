@@ -75,6 +75,9 @@ _PAYLOAD_MODULES = (
     # hook_runtime supplies lease_lock (tally RMW + stop throttle).
     "hook_runtime.py",
     "utf8_io.py",
+    # credential_patterns: bash_compress's credential-preservation patterns
+    # (the inline fallback misses e.g. ghp_/github_pat_ tokens, #171).
+    "credential_patterns.py",
 )
 
 # One-line locator written next to the bridge, naming the canonical measure.py
