@@ -240,7 +240,12 @@ def _fake_root(tmp_path) -> Path:
     root = tmp_path / "root"
     (root / "hooks").mkdir(parents=True, exist_ok=True)
     (root / "hooks" / "python-launcher.sh").write_text(
-        '#!/bin/sh\necho "RAN root=$CLAUDE_PLUGIN_ROOT pyc=$PYTHONPYCACHEPREFIX args=$*"\n', encoding="utf-8")
+        '#!/bin/sh\necho "RAN root=$CLAUDE_PLUGIN_ROOT pyc=$PYTHONPYCACHEPREFIX '
+        'kit=${TOKEN_OPTIMIZER_CLOUD_KIT_VERSION:-} args=$*"\n', encoding="utf-8")
+    # run.sh asks the package's own cloud_kit.py to confirm a plugin stand-down.
+    scripts = root / "skills" / "token-optimizer" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SCRIPTS / "cloud_kit.py", scripts / "cloud_kit.py")
     return root
 
 
@@ -268,7 +273,7 @@ def test_run_sh_is_silent_off_cloud(tmp_path):
 def test_run_sh_execs_real_launcher_in_cloud(tmp_path):
     r = _run_sh(tmp_path, {"CLAUDE_CODE_REMOTE": "true"})
     assert r.returncode == 0
-    assert r.stdout.strip() == "RAN root=%s pyc=%s args=%s hooks/stop_runner.py --quiet" % (
+    assert r.stdout.strip() == "RAN root=%s pyc=%s kit=9.9.9 args=%s hooks/stop_runner.py --quiet" % (
         tmp_path / "root", tmp_path / "pyc", tmp_path / "root" / "hooks" / "run.py")
 
 
@@ -303,6 +308,64 @@ def test_run_sh_ignores_other_plugins_and_honours_off(tmp_path):
     assert cloud_kit.plugin_loaded(home / ".claude") == ""
     off = _run_sh(tmp_path, {"CLAUDE_CODE_REMOTE": "true", "TOKEN_OPTIMIZER_CLOUD_KIT": "off"}, home=home)
     assert (off.returncode, off.stdout) == (0, "")
+
+
+@needs_posix
+def test_forced_kit_on_desktop_does_not_claim_a_cloud_vm(tmp_path):
+    """Review #14: TOKEN_OPTIMIZER_CLOUD_KIT=force off-cloud must run the hooks
+    without exporting the kit version, which Token Optimizer reads as cloud-VM
+    evidence (lean profile: no daemon, status line, settings self-heal)."""
+    forced = _run_sh(tmp_path, {"TOKEN_OPTIMIZER_CLOUD_KIT": "force"})
+    assert forced.stdout.startswith("RAN ") and " kit= " in forced.stdout, forced.stdout
+    in_vm = _run_sh(tmp_path, {"TOKEN_OPTIMIZER_CLOUD_KIT": "force", "CLAUDE_CODE_REMOTE": "true"})
+    assert " kit=9.9.9 " in in_vm.stdout
+
+
+def _registry(home, entries, settings=None):
+    plugins = home / ".claude" / "plugins"
+    plugins.mkdir(parents=True, exist_ok=True)
+    (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": entries}))
+    if settings is not None:
+        (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+
+
+@needs_posix
+def test_run_sh_stand_down_needs_a_plugin_that_loads_here(tmp_path):
+    """Review #14: a disabled Token Optimizer entry, or one scoped to another
+    project, does not load in this session, so it must not silence the kit."""
+    home = tmp_path / "home"
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    key = "token-optimizer@alexgreensh-token-optimizer"
+    env = {"CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(proj)}
+
+    _registry(home, {key: [{"scope": "user"}]}, {"enabledPlugins": {key: False}})
+    assert _run_sh(tmp_path, env, home=home).stdout.startswith("RAN "), "disabled plugin"
+    _registry(home, {key: [{"scope": "project", "projectPath": str(tmp_path / "other")}]}, {})
+    assert _run_sh(tmp_path, env, home=home).stdout.startswith("RAN "), "other project's plugin"
+
+    _registry(home, {key: [{"scope": "project", "projectPath": str(proj)}]}, {})
+    assert _run_sh(tmp_path, env, home=home).stdout == "", "this project's plugin loads"
+    # Project settings beat user settings for enabledPlugins.
+    (proj / ".claude").mkdir()
+    (proj / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {key: False}}))
+    assert _run_sh(tmp_path, env, home=home).stdout.startswith("RAN ")
+    (proj / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {key: True}}))
+    _registry(home, {key: [{"scope": "user"}]}, {"enabledPlugins": {key: False}})
+    assert _run_sh(tmp_path, env, home=home).stdout == ""
+    # A registry we cannot parse but that names Token Optimizer: stand down.
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text('{"token-optimizer@x": [')
+    assert _run_sh(tmp_path, env, home=home).stdout == ""
+
+
+def test_plugin_loaded_ignores_an_empty_synced_dir(tmp_path):
+    """The cloud VM ships ~/.claude/plugins/synced/<org>_<account>/ empty
+    (live probe 2026-10-19); only a Token Optimizer copy inside it counts."""
+    claude = tmp_path / ".claude"
+    (claude / "plugins" / "synced" / "org_acct").mkdir(parents=True)
+    (claude / "plugins" / "synced" / "org_acct" / "some-other-plugin" / "hooks").mkdir(parents=True)
+    (claude / "plugins" / "synced" / "org_acct" / "some-other-plugin" / "hooks" / "hooks.json").write_text("{}")
+    assert cloud_kit.plugin_loaded(claude, project=str(tmp_path)) == ""
 
 
 @needs_posix

@@ -289,25 +289,35 @@ RUN_SH = """#!/bin/sh
 # real Token Optimizer hook and stays silent itself.
 # Off outside Claude Code cloud VMs; TOKEN_OPTIMIZER_CLOUD_KIT=off disables it,
 # =force runs it anyway (skips both checks below).
+R={root}
+L="$R/hooks/python-launcher.sh"
+[ -r "$L" ] || exit 0
 case "${{TOKEN_OPTIMIZER_CLOUD_KIT:-}}" in
   off|0|false) exit 0 ;;
   force) ;;
   *)
     [ "$CLAUDE_CODE_REMOTE" = true ] || exit 0
-    # Stand down when the real plugin is loaded too (plugin install or an
-    # account-synced copy), so no hook ever runs twice.
+    # Stand down when the real plugin is loaded too (an enabled plugin install
+    # that applies here, or an account-synced copy), so no hook runs twice.
+    # The grep is a cheap pre-filter; cloud_kit.py decides on the parsed file
+    # (scope, project path, enabledPlugins).
     P="${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/plugins"
-    if [ -f "$P/installed_plugins.json" ] && grep -Eq '"token-optimizer[^"@]*@' "$P/installed_plugins.json" 2>/dev/null; then exit 0; fi
+    if [ -f "$P/installed_plugins.json" ] && grep -Eq '"token-optimizer[^"@]*@' "$P/installed_plugins.json" 2>/dev/null; then
+      python3 -I "$R/skills/token-optimizer/scripts/cloud_kit.py" plugin-active >/dev/null 2>&1 && exit 0
+    fi
     for f in "$P"/synced/*/token-optimizer*/hooks/hooks.json; do [ -f "$f" ] && exit 0; done
     ;;
 esac
-R={root}
-L="$R/hooks/python-launcher.sh"
-[ -r "$L" ] || exit 0
 CLAUDE_PLUGIN_ROOT="$R"
 PYTHONPYCACHEPREFIX={pycache}
-TOKEN_OPTIMIZER_CLOUD_KIT_VERSION={version}
-export CLAUDE_PLUGIN_ROOT PYTHONPYCACHEPREFIX TOKEN_OPTIMIZER_CLOUD_KIT_VERSION
+export CLAUDE_PLUGIN_ROOT PYTHONPYCACHEPREFIX
+# The kit version doubles as Token Optimizer's "this is a cloud VM" evidence
+# (lean profile), so it is exported only inside one: =force on a desktop must
+# not switch the desktop to the cloud profile.
+if [ "$CLAUDE_CODE_REMOTE" = true ]; then
+  TOKEN_OPTIMIZER_CLOUD_KIT_VERSION={version}
+  export TOKEN_OPTIMIZER_CLOUD_KIT_VERSION
+fi
 exec bash "$L" "$R/hooks/run.py" "$@"
 """
 
@@ -494,15 +504,85 @@ def render_setup_script_latest(registry: str = REGISTRY) -> str:
 # --------------------------------------------------------------------- doctor
 
 
-def plugin_loaded(claude=None) -> str:
-    """Mirror of run.sh's stand-down check. Returns the reason, '' when clear."""
-    plugins = (Path(claude) if claude else claude_dir()) / "plugins"
+_TO_KEY_RE = re.compile(r"^token-optimizer[^@]*@")
+
+
+def _same_dir(a, b) -> bool:
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return False
+
+
+def _enabled_flag(path: Path, key: str):
+    """enabledPlugins[key] from one settings file: True / False / None (unset)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    flags = data.get("enabledPlugins") if isinstance(data, dict) else None
+    value = flags.get(key) if isinstance(flags, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def _registry_entry_active(key: str, records, claude: Path, project) -> bool:
+    """True when one installed_plugins.json entry is a Token Optimizer install
+    that Claude Code loads for THIS session: a user-scope install, or a
+    project/local-scope one whose projectPath is this project, and not turned
+    off in enabledPlugins (project settings beat user settings)."""
+    applies = False
+    for rec in records if isinstance(records, list) else []:
+        if not isinstance(rec, dict):
+            continue
+        scope = rec.get("scope") or "user"
+        if scope in ("user", "managed"):
+            applies = True
+        elif scope in ("project", "local") and project and _same_dir(rec.get("projectPath") or "", project):
+            applies = True
+    if not applies:
+        return False
+    layers = []
+    if project:
+        layers += [Path(project) / ".claude" / "settings.local.json", Path(project) / ".claude" / "settings.json"]
+    layers.append(claude / "settings.json")
+    for layer in layers:
+        flag = _enabled_flag(layer, key)
+        if flag is not None:
+            return flag
+    return True
+
+
+def plugin_loaded(claude=None, project=None) -> str:
+    """Mirror of run.sh's stand-down check. Returns the reason, '' when clear.
+
+    Stands down only for a Token Optimizer plugin Claude Code actually loads
+    here: an enabled install whose scope covers this project, or an
+    account-synced copy (when account plugin sync reaches cloud VMs, the synced
+    plugin runs and the kit must step aside). A disabled entry, or one scoped
+    to another project, no longer silences the kit. An unreadable registry that
+    names Token Optimizer still stands down: two copies of every hook is the
+    worse failure."""
+    claude = Path(claude) if claude else claude_dir()
+    if project is None:
+        project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    plugins = claude / "plugins"
     reg = plugins / "installed_plugins.json"
     try:
-        if re.search(r'"token-optimizer[^"@]*@', reg.read_text(encoding="utf-8", errors="replace")):
-            return "plugin listed in %s" % reg
+        text = reg.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        pass
+        text = ""
+    if text and re.search(r'"token-optimizer[^"@]*@', text):
+        try:
+            data = json.loads(text)
+            entries = data.get("plugins") if isinstance(data, dict) else None
+            if not isinstance(entries, dict):
+                raise ValueError("no plugins map")
+        except ValueError:
+            return "plugin named in an unreadable %s" % reg
+        for key, records in sorted(entries.items()):
+            if isinstance(key, str) and _TO_KEY_RE.match(key) and \
+                    _registry_entry_active(key, records, claude, project):
+                return "plugin %s listed in %s" % (key, reg)
     for f in sorted(plugins.glob("synced/*/token-optimizer*/hooks/hooks.json")):
         if f.is_file():
             return "account-synced plugin at %s" % f.parents[1]
@@ -636,8 +716,11 @@ def main(argv) -> int:
             report = uninstall(opts.get("--cache"), opts.get("--claude-dir"))
         elif cmd == "doctor":
             return main_doctor(args)
+        elif cmd == "plugin-active":
+            # run.sh's stand-down: exit 0 = a loaded plugin owns the hooks.
+            return 0 if plugin_loaded() else 1
         else:
-            print("usage: cloud_kit.py install|uninstall|doctor [--source DIR] [--cache DIR] "
+            print("usage: cloud_kit.py install|uninstall|doctor|plugin-active [--source DIR] [--cache DIR] "
                   "[--claude-dir DIR]", file=sys.stderr)
             return 2
     except (KitError, OSError) as exc:
