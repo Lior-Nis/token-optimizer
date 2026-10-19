@@ -156,6 +156,29 @@ def test_update_replaces_only_our_entries(tmp_path):
     assert data["hooks"]["Stop"][1:] == _map()["Stop"]
 
 
+def test_user_hook_added_inside_our_group_survives_update_and_uninstall(tmp_path):
+    """Review #8: someone adds their own hook to one of our groups (same
+    matcher). Update and uninstall must remove only our command, never the
+    user's hook that shares the group."""
+    path = tmp_path / "settings.json"
+    cloud_kit.write_settings_hooks(path, _map())
+    data = json.loads(path.read_text(encoding="utf-8"))
+    user_hook = {"type": "command", "command": "echo user-audit"}
+    group = data["hooks"]["PreToolUse"][0]
+    group["hooks"].append(user_hook)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    cloud_kit.write_settings_hooks(path, _map())  # update
+    after = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    survivors = [g for g in after if user_hook in g["hooks"]]
+    assert survivors == [{"matcher": group["matcher"], "hooks": [user_hook]}]
+    assert [g for g in after if cloud_kit._is_ours(g)] == _map()["PreToolUse"]
+
+    cloud_kit.write_settings_hooks(path, None)  # uninstall
+    left = json.loads(path.read_text(encoding="utf-8"))
+    assert left == {"hooks": {"PreToolUse": [{"matcher": group["matcher"], "hooks": [user_hook]}]}}
+
+
 @pytest.mark.parametrize("text", [
     '{\n  // comment\n  "a": 1\n}\n',
     '{"a": 1,}\n',
@@ -205,6 +228,8 @@ def staged(tmp_path):
 def test_install_copies_writes_runner_and_prunes(tmp_path, staged):
     cache, claude = tmp_path / "cache", tmp_path / "claude"
     (cache / "1.0.0" / "hooks").mkdir(parents=True)
+    (cache / "1.0.0" / "hooks" / "run.py").write_text("")
+    (cache / "1.0.0" / "package.json").write_text(json.dumps({"name": cloud_kit.PACKAGE, "version": "1.0.0"}))
     (cache / "keep-me.txt").parent.mkdir(parents=True, exist_ok=True)
     (cache / "keep-me.txt").write_text("x")
     report = cloud_kit.install(staged, cache, claude, precompile=False)
@@ -225,6 +250,27 @@ def test_install_copies_writes_runner_and_prunes(tmp_path, staged):
     assert (cache / "keep-me.txt").exists(), "files we did not write stay"
     assert not (cache / version).exists() and not (cache / cloud_kit.RUNNER_NAME).exists()
     assert json.loads((claude / "settings.json").read_text(encoding="utf-8")) == {}
+
+
+def test_user_set_cloud_home_never_loses_unrelated_version_dirs(tmp_path, staged):
+    """Review #14: TOKEN_OPTIMIZER_CLOUD_HOME may point at a shared dir. Prune
+    and uninstall touch only version dirs that are our package, and the
+    pycache/stage dirs only where our marker says we installed."""
+    cache, claude = tmp_path / "shared", tmp_path / "claude"
+    for name in ("2.0.0", "3.1.4"):
+        (cache / name).mkdir(parents=True)
+        (cache / name / "data.bin").write_text("someone else's")
+    (cache / "pycache").mkdir()
+    (cache / "pycache" / "x").write_text("theirs")
+    cloud_kit.uninstall(cache, claude)  # nothing of ours here yet
+    assert (cache / "pycache" / "x").exists() and (cache / "2.0.0").is_dir()
+
+    report = cloud_kit.install(staged, cache, claude, precompile=False)
+    assert report["pruned"] == []
+    assert (cache / "2.0.0" / "data.bin").exists() and (cache / "3.1.4" / "data.bin").exists()
+    cloud_kit.uninstall(cache, claude)
+    assert (cache / "2.0.0" / "data.bin").exists() and (cache / "3.1.4" / "data.bin").exists()
+    assert not (cache / report["version"]).exists()
 
 
 def test_install_refuses_incomplete_package(tmp_path):

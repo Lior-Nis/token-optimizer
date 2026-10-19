@@ -186,9 +186,43 @@ def load_settings(path: Path):
     return data, text
 
 
+def _is_our_hook(hook) -> bool:
+    return isinstance(hook, dict) and MARKER in str(hook.get("command", ""))
+
+
 def _is_ours(group) -> bool:
+    """True when a group carries at least one of our hook commands."""
     return isinstance(group, dict) and isinstance(group.get("hooks"), list) and any(
-        isinstance(h, dict) and MARKER in str(h.get("command", "")) for h in group["hooks"])
+        _is_our_hook(h) for h in group["hooks"])
+
+
+def _without_ours(groups: list) -> list:
+    """The groups with our hook commands taken out, hook by hook. A group that
+    also holds the user's own hooks (someone added one next to ours) keeps
+    them, with its matcher and other keys; only a group left with no hooks at
+    all is dropped. Groups without any of ours are returned untouched."""
+    kept = []
+    for group in groups:
+        if not _is_ours(group):
+            kept.append(group)
+            continue
+        rest = [h for h in group["hooks"] if not _is_our_hook(h)]
+        if rest:
+            g = dict(group)
+            g["hooks"] = rest
+            kept.append(g)
+    return kept
+
+
+def _only_ours(groups: list) -> list:
+    """The inverse view, for the doctor: each group cut down to our hooks."""
+    out = []
+    for group in groups:
+        if _is_ours(group):
+            g = dict(group)
+            g["hooks"] = [h for h in group["hooks"] if _is_our_hook(h)]
+            out.append(g)
+    return out
 
 
 def merge_settings(settings: dict, hook_map: dict) -> dict:
@@ -201,7 +235,7 @@ def merge_settings(settings: dict, hook_map: dict) -> dict:
         groups = hooks[event]
         if not isinstance(groups, list):
             raise KitError("hooks.%s in settings.json is not a list; nothing was changed" % event)
-        kept = [g for g in groups if not _is_ours(g)]
+        kept = _without_ours(groups)
         if kept or event in hook_map or not groups:
             hooks[event] = kept
         else:
@@ -222,7 +256,7 @@ def strip_settings(settings: dict) -> dict:
         if not isinstance(groups, list):
             new_hooks[event] = groups
             continue
-        kept = [g for g in groups if not _is_ours(g)]
+        kept = _without_ours(groups)
         if kept or not groups:
             new_hooks[event] = kept
     if new_hooks or not hooks:
@@ -336,6 +370,27 @@ _REQUIRED = ("hooks/hooks.json", "hooks/python-launcher.sh", "hooks/run.py",
              "skills/token-optimizer/scripts/measure.py")
 
 
+# Written into the cache dir on install. Uninstall only removes the shared
+# names (pycache, .stage-*, the runner, install.log) where it finds this, and
+# prune/uninstall only remove version dirs that hold our package: the cache
+# dir can be user-set (TOKEN_OPTIMIZER_CLOUD_HOME) and shared with other tools.
+CACHE_MARKER = ".token-optimizer-cloud-kit"
+
+
+def _is_our_version_dir(child: Path) -> bool:
+    if not child.is_dir() or child.is_symlink() or not _VERSION_RE.match(child.name):
+        return False
+    if not (child / "hooks" / "run.py").is_file():
+        return False
+    for rel, want in (("package.json", PACKAGE), (".claude-plugin/plugin.json", "token-optimizer")):
+        try:
+            if json.loads((child / rel).read_text(encoding="utf-8")).get("name") == want:
+                return True
+        except (OSError, ValueError, AttributeError):
+            continue
+    return False
+
+
 def _validate_tree(root: Path) -> None:
     missing = [r for r in _REQUIRED if not (root / r).is_file()]
     if missing:
@@ -382,6 +437,7 @@ def install(source: Path, cache=None, claude=None, precompile=True) -> dict:
 
     pycache = cache / "pycache"
     runner = cache / RUNNER_NAME
+    _atomic_write(cache / CACHE_MARKER, b"Token Optimizer cloud kit cache. Safe to delete with the dir.\n", 0o644)
     _atomic_write(runner, render_run_sh(target, pycache, version).encode("utf-8"), 0o755)
 
     hook_map = generate_hook_map(load_hooks_json(target), runner)
@@ -395,9 +451,8 @@ def install(source: Path, cache=None, claude=None, precompile=True) -> dict:
             pass
 
     pruned = []
-    for child in cache.iterdir():
-        if child.is_dir() and _VERSION_RE.match(child.name) and child.name != version \
-                and not child.is_symlink():
+    for child in sorted(cache.iterdir()):
+        if child.name != version and _is_our_version_dir(child):
             shutil.rmtree(str(child), ignore_errors=True)
             pruned.append(child.name)
 
@@ -412,13 +467,13 @@ def uninstall(cache=None, claude=None) -> dict:
     changed = write_settings_hooks(claude / "settings.json", None)
     removed = []
     if cache.is_dir():
+        ours = (cache / CACHE_MARKER).is_file()
         for child in cache.iterdir():
-            if child.is_dir() and not child.is_symlink() and (
-                    _VERSION_RE.match(child.name) or child.name in ("pycache",)
-                    or child.name.startswith(".stage-")):
+            if _is_our_version_dir(child) or (ours and child.is_dir() and not child.is_symlink() and (
+                    child.name == "pycache" or child.name.startswith(".stage-"))):
                 shutil.rmtree(str(child), ignore_errors=True)
                 removed.append(child.name)
-        for name in (RUNNER_NAME, "install.log"):
+        for name in ((RUNNER_NAME, "install.log", CACHE_MARKER) if ours else (RUNNER_NAME,)):
             p = cache / name
             if p.is_file():
                 p.unlink()
@@ -601,8 +656,8 @@ def doctor(cache=None, claude=None) -> dict:
     add(True, "Cloud session", "CLAUDE_CODE_REMOTE=%s" % (remote or "(unset)"))
     runner = cache / RUNNER_NAME
     add(runner.is_file(), "Runner", str(runner) if runner.is_file() else "missing: run the setup script")
-    versions = sorted(c.name for c in cache.iterdir() if c.is_dir() and _VERSION_RE.match(c.name)) \
-        if cache.is_dir() else []
+    versions = sorted((c.name for c in cache.iterdir() if _is_our_version_dir(c)),
+                      key=lambda v: tuple(int(x) for x in v.split("."))) if cache.is_dir() else []
     root = cache / versions[-1] if versions else None
     add(bool(versions), "Installed version", ", ".join(versions) or "none")
     expected = None
@@ -614,7 +669,7 @@ def doctor(cache=None, claude=None) -> dict:
     try:
         data, _ = load_settings(claude / "settings.json")
         hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
-        ours = {e: [g for g in gs if _is_ours(g)] for e, gs in hooks.items() if isinstance(gs, list)}
+        ours = {e: _only_ours(gs) for e, gs in hooks.items() if isinstance(gs, list)}
         ours = {e: gs for e, gs in ours.items() if gs}
         if expected is None:
             add(bool(ours), "Settings hooks", "%d events wired" % len(ours))
