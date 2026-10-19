@@ -558,64 +558,302 @@ else:
     _CONFIG_BASE = None  # resolved below after constants
 
 
-def _real_account_home():
-    """The OS account's own home directory (pwd entry for this uid), or None
-    where that cannot be known (Windows, no pwd entry)."""
+def _windows_profile_dir():
+    """The Windows account's profile dir as the OS records it, independent of
+    the USERPROFILE / HOME environment variables (Path.home() reads those):
+    SHGetKnownFolderPath(FOLDERID_Profile). None off Windows or on any failure,
+    never a guess such as %SystemDrive%\\Users\\%USERNAME% (profiles can live
+    on another drive, and a wrong guess would refuse a real user's scheduler)."""
+    if os.name != "nt":
+        return None
     try:
-        import pwd  # POSIX only
-        raw = pwd.getpwuid(os.getuid()).pw_dir
-        return Path(raw).resolve() if raw else None
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                        ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+        raw = uuid.UUID("{5E6C858F-0E22-4760-9AFE-EA3317B67173}").bytes_le  # FOLDERID_Profile
+        guid = _GUID.from_buffer_copy(raw)
+        out = ctypes.c_wchar_p()
+        shell32 = ctypes.windll.shell32
+        hr = shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out))
+        try:
+            value = out.value if hr == 0 else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(out)
+        return Path(value) if value else None
     except Exception:
         return None
 
 
-def _is_under(child, parent):
+_ACCOUNT_HOME_IS_WINDOWS = os.name == "nt"  # module attr so tests can drive both branches
+
+
+def _real_account_home():
+    """The OS account's own home directory, never read from HOME/USERPROFILE:
+    the pwd entry for this uid on POSIX, the profile folder the OS records on
+    Windows. None where it cannot be known (no pwd entry, API failure)."""
+    if _ACCOUNT_HOME_IS_WINDOWS:
+        return _windows_profile_dir()
     try:
-        Path(child).resolve().relative_to(parent)
-        return True
-    except (ValueError, OSError, RuntimeError):
+        import pwd  # POSIX only
+        raw = pwd.getpwuid(os.getuid()).pw_dir
+        return Path(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _same_path(a, b):
+    """True when two paths name the same directory: equal as typed (case-folded
+    on Windows), equal once symlinks resolve, or the same inode. HPC/NFS homes
+    often reach one directory through an automount symlink and a real mount
+    path, so no single comparison is enough on its own."""
+    try:
+        if os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b))):
+            return True
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        if Path(a).resolve() == Path(b).resolve():
+            return True
+    except (OSError, RuntimeError, ValueError):
+        pass
+    try:
+        return os.path.samefile(str(a), str(b))
+    except (OSError, ValueError, TypeError):
         return False
 
 
+def _is_under(child, parent):
+    """``child`` is ``parent`` or inside it, compared resolved and as typed."""
+    try:
+        Path(child).resolve().relative_to(Path(parent).resolve())
+        return True
+    except (ValueError, OSError, RuntimeError):
+        pass
+    try:
+        Path(os.path.normcase(os.path.abspath(str(child)))).relative_to(
+            os.path.normcase(os.path.abspath(str(parent))))
+        return True
+    except (ValueError, OSError, RuntimeError, TypeError):
+        return False
+
+
+_FOREIGN_HOME_OVERRIDE_ENV = "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER"
+
+
+def _foreign_home_override():
+    return os.environ.get(_FOREIGN_HOME_OVERRIDE_ENV, "").strip() == "1"
+
+
 def _compute_home_redirected():
-    """True when HOME, or the resolved Claude home, is not the account's real
-    home: a test sandbox, a scratch e2e run, a second HOME on one account.
+    """True when the home this process derives its paths from (HOME on POSIX,
+    USERPROFILE on Windows, via Path.home()) is not the account's own home: a
+    test sandbox, a scratch e2e run, a second HOME on one account.
 
     launchd / systemd --user / Task Scheduler jobs are per ACCOUNT, not per
     HOME, and TO's labels are fixed (com.token-optimizer.dashboard, ...). A
     redirected-HOME run that installs or restarts one of them re-points the
     user's LIVE job at the throwaway home (seen 2026-10-19: an e2e run's
     SessionStart re-bootstrapped the real dashboard agent to a scratch dir).
+
+    The Claude home is NOT compared: Claude Code supports CLAUDE_CONFIG_DIR
+    anywhere (claude_home()), and a real user with HOME at home and the config
+    on /opt or a volume must keep their dashboard, keep-warm, restart and
+    uninstall. The case that guard used to cover (real HOME, scratch
+    CLAUDE_CONFIG_DIR) is caught instead by _scheduler_job_points_elsewhere():
+    refuse only when an existing job belongs to a different install.
+
     TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 is the explicit escape hatch
     for a setup that really does run the daemon from a relocated home."""
-    if os.environ.get("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "").strip() == "1":
+    if _foreign_home_override():
         return False
     real = _real_account_home()
     if real is None:
         return False
     try:
-        if Path(HOME).resolve() != real:
-            return True
-    except (OSError, RuntimeError):
+        return not _same_path(HOME, real)
+    except Exception:
         return False
-    return not _is_under(CLAUDE_DIR, real)
 
 
 # Frozen at import, like _SNAPSHOT_DIR_OVERRIDE, so later env drift cannot
 # separate the guard from the paths it protects.
 _HOME_REDIRECTED = _compute_home_redirected()
 
-
 def _daemon_snapshot_sandboxed():
-    """True when session data was explicitly redirected for tests/sandboxes,
-    or when HOME / the Claude home is not the account's real home.
+    """True when this process must not touch the per-account scheduler jobs
+    (dashboard daemon, keep-warm agent) AT ALL, uninstall included:
 
-    A sandbox must never mutate the machine-wide daemon or scheduler identity:
-    every install / uninstall / restart / revive path checks this first.
-    Both inputs are frozen at import so later environment drift cannot
-    separate the guard from the paths it protects.
+      * an explicit TOKEN_OPTIMIZER_SNAPSHOT_DIR override (tests, sandboxes);
+      * HOME / USERPROFILE is not the account's real home (see
+        _compute_home_redirected). Removal goes by fixed label
+        (``launchctl bootout gui/<uid>/<label>``, ``schtasks /Delete /TN``,
+        ``systemctl --user disable``), so a scratch-HOME "uninstall" would kill
+        the user's live job just as surely as an install re-points it.
+
+    Uninstall and status paths check only this. Every path that writes,
+    reloads or restarts a job checks _scheduler_install_refused(), which adds
+    the existing-job check. Both inputs are frozen at import so later env
+    drift cannot separate the guard from the paths it protects.
     """
     return bool(_SNAPSHOT_DIR_OVERRIDE) or _HOME_REDIRECTED
+
+
+def _scheduler_install_refused():
+    """True when an install / restart / revive / repair must not run: the
+    process is sandboxed (above), or, from the account's real home, a job
+    already registered for this account points at a different install than
+    this process (another CLAUDE_CONFIG_DIR or data dir), so writing ours would
+    re-point it. A CLAUDE_CONFIG_DIR outside the home is fine on its own: with
+    no job, or with a job that is this install's, nothing is refused.
+    TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 lifts the job check."""
+    if _daemon_snapshot_sandboxed():
+        return True
+    if _foreign_home_override():
+        return False
+    return bool(_scheduler_job_points_elsewhere())
+
+
+_SCHEDULER_REFUSAL = (
+    "refused: HOME is redirected away from this account's real home, or this "
+    "account's existing Token Optimizer job belongs to a different install "
+    "(another CLAUDE_CONFIG_DIR or data dir); scheduler jobs are per account. "
+    "Run `setup-daemon --uninstall` from the install that owns it first, or set "
+    "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override"
+)
+
+# Windows only: the task is read with a `schtasks /Query` (~0.1 s), and several
+# SessionStart paths consult the guard, so its answer is reused for a short
+# while. Keyed on the reader itself so a test that swaps it is never served a
+# stale answer. File-based jobs (plist, systemd unit) are re-read every time.
+_WINDOWS_TASK_PATHS_CACHE = {}
+_WINDOWS_TASK_PATHS_TTL_S = 30.0
+
+
+def _reset_job_guard_cache():
+    _WINDOWS_TASK_PATHS_CACHE.clear()
+
+
+def _windows_task_job_paths_cached():
+    key = (_windows_task_job_paths, WINDOWS_TASK_NAME)
+    hit = _WINDOWS_TASK_PATHS_CACHE.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _WINDOWS_TASK_PATHS_TTL_S:
+        return hit[1]
+    paths = _windows_task_job_paths()
+    _WINDOWS_TASK_PATHS_CACHE.clear()
+    _WINDOWS_TASK_PATHS_CACHE[key] = (now, paths)
+    return paths
+
+
+def _this_install_roots():
+    roots = []
+    for value in (CLAUDE_DIR, RUNTIME_DIR, SNAPSHOT_DIR, _RESOLVED_PLUGIN_DATA,
+                  Path(__file__).resolve().parents[3]):
+        if value:
+            roots.append(Path(value))
+    return roots
+
+
+def _plist_job_paths(path):
+    import plistlib
+    try:
+        with open(path, "rb") as fh:
+            data = plistlib.load(fh)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = [a for a in (data.get("ProgramArguments") or [])[1:] if isinstance(a, str)]
+    out += [data.get(k) for k in ("StandardOutPath", "StandardErrorPath", "WorkingDirectory")
+            if isinstance(data.get(k), str)]
+    return out
+
+
+def _systemd_unit_job_paths(path):
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in ("ExecStart", "WorkingDirectory"):
+            out.append(value.strip('"').split('" ', 1)[0].strip('"'))
+        elif key in ("StandardOutput", "StandardError") and value.startswith(("append:", "file:")):
+            out.append(value.split(":", 1)[1])
+    return out
+
+
+def _windows_task_job_paths():
+    """<Command> (when it is not just an interpreter), <Arguments> tokens and
+    <WorkingDirectory> of this runtime's registered task. Read-only query."""
+    try:
+        query = subprocess.run(
+            ["schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML", "ONE"],
+            capture_output=True, text=True, errors="replace", timeout=10,
+            creationflags=_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError, NameError):
+        return []
+    if query.returncode != 0:
+        return []
+    raw = (query.stdout or "").replace("\x00", "")
+    out = []
+    for tag in ("Command", "Arguments", "WorkingDirectory"):
+        m = re.search(r"<%s>(.*?)</%s>" % (tag, tag), raw, re.S | re.I)
+        if not m:
+            continue
+        value = m.group(1).strip()
+        if tag == "Command" and re.split(r"[\\/]", value.strip('"'))[-1].lower().startswith("python"):
+            continue
+        out += [t.strip('"') for t in re.findall(r'"[^"]*"|\S+', value)] if tag == "Arguments" \
+            else [value.strip('"')]
+    return [p for p in out if re.match(r"^([A-Za-z]:[\\/]|[\\/])", p)]
+
+
+def _scheduler_job_paths():
+    """{artifact: [absolute paths it runs or writes]} for every per-account job
+    this process could touch, read from where this process would write them."""
+    jobs = {}
+    system = _normalized_platform()
+    if system == "Darwin":
+        for plist in (PLIST_PATH, _keepwarm_scheduler_plist_path()):
+            if plist.is_file():
+                jobs[str(plist)] = _plist_job_paths(plist)
+    elif system == "Linux":
+        unit = _systemd_user_unit_path()
+        if unit.is_file():
+            jobs[str(unit)] = _systemd_unit_job_paths(unit)
+    elif system == "Windows":
+        paths = _windows_task_job_paths_cached()
+        if paths:
+            jobs["task:" + WINDOWS_TASK_NAME] = paths
+    return jobs
+
+
+def _scheduler_job_points_elsewhere():
+    """The first per-account job that belongs to a different install (none of
+    its paths sit under this process's Claude home, runtime home, data dirs or
+    plugin root), as ``"<artifact> -> <path>"``; '' when there is none, when no
+    job exists, or when it cannot be read (fail open: an unreadable job is no
+    evidence of another install)."""
+    answer = ""
+    try:
+        roots = _this_install_roots()
+        for artifact, paths in _scheduler_job_paths().items():
+            paths = [p for p in paths if p]
+            if paths and not any(_is_under(p, r) for p in paths for r in roots):
+                answer = "%s -> %s" % (artifact, paths[0])
+                break
+    except Exception:
+        answer = ""
+    return answer
 
 
 # Cowork dual-write: the per-session state dirs -- QUALITY_CACHE_DIR
@@ -16289,8 +16527,8 @@ def _keepwarm_scheduler_install_macos(quiet=False):
     """
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
-    if _daemon_snapshot_sandboxed():
-        return (False, "refused: HOME or the Claude home is redirected away from this account's real home; the scheduler job is per account (set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override)")
+    if _scheduler_install_refused():
+        return (False, _SCHEDULER_REFUSAL)
     plist_path = _keepwarm_scheduler_plist_path()
     try:
         LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -16392,7 +16630,7 @@ def keepwarm_scheduler_uninstall(quiet=False):
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
     if _daemon_snapshot_sandboxed():
-        return (False, "refused: HOME or the Claude home is redirected away from this account's real home; the scheduler job is per account (set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override)")
+        return (False, _SCHEDULER_REFUSAL)
     plist_path = _keepwarm_scheduler_plist_path()
     removed = []
     system = _normalized_platform()
@@ -32414,7 +32652,7 @@ def _install_launchd_daemon(dry_run=False, soft_fail=False, effective_host=None)
     overwrites the plist idempotently and bootouts any existing instance
     first so we never fight a stale PID.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, hint=None):
@@ -33180,7 +33418,7 @@ def _install_task_scheduler_daemon(dry_run=False, soft_fail=False, effective_hos
     Windows user to run this is the de facto smoke test. Full rollback
     is one command: `measure.py setup-daemon --uninstall`.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, *extra, permanent_reason=None):
@@ -33617,7 +33855,7 @@ def _install_systemd_user_daemon(dry_run=False, soft_fail=False, effective_host=
     and kill the calling Claude Code session. Returns True on success. CLI
     callers keep the default False for the hard-failure + actionable-hint UX.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, *extra):
@@ -33923,7 +34161,7 @@ def setup_daemon(dry_run=False, uninstall=False, this_install_only=False, latch_
     clean only the resolved identity, for a user intentionally running
     side-by-side installs who only wants this one gone.
     """
-    if _daemon_snapshot_sandboxed():
+    if (_daemon_snapshot_sandboxed() if uninstall else _scheduler_install_refused()):
         return "noop-sandbox"
     system = _normalized_platform()
     if uninstall:
@@ -34418,7 +34656,7 @@ def _ensure_dashboard_daemon(force=False):
     """
     # An explicit snapshot override is an isolation boundary, including when a
     # detached daemon-revive child calls this with force=True.
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return "noop-sandbox"
     # Claude Code cloud VM: no browser to open the URL in, and no systemd user
     # bus to install a unit on (the install path fails in containers).
@@ -34612,7 +34850,7 @@ def _daemon_midsession_pulse():
     installer. Returns a short status string. Never raises, never blocks.
     """
     try:
-        if _daemon_snapshot_sandboxed():
+        if _scheduler_install_refused():
             return "noop-sandbox"
         if _remote_lean_profile():
             return "noop-remote"
@@ -34863,7 +35101,7 @@ def _daemon_resurrection_blocked():
     stat fails open (matching ``_daemon_install_failed_marker_present``: an
     unreadable state dir is not evidence of intent). Never raises.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return "sandbox"
     try:
         if os.path.exists(str(DAEMON_THRASH_BREADCRUMB)):
@@ -34919,7 +35157,7 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
     """
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
     try:
         if os.name != "nt":
@@ -35168,7 +35406,7 @@ def _restart_dashboard_daemon(system):
     would SIGTERM session A's freshly-bound correct daemon, causing a restart
     flap. Checking the served version first makes the whole restart idempotent.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return "noop-sandbox"
     try:
         # Already current (a sibling session fixed it)? Do not reap/restart.
@@ -45762,7 +46000,7 @@ def _heal_keepwarm_plist_path():
     """
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
     if not _is_running_from_plugin_cache():
         return False
@@ -54796,7 +55034,7 @@ def run_ensure_health():
     try:
         current_marker = f'TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"'
         legacy_dir = RUNTIME_DIR / "_backups" / "token-optimizer"
-        candidate_paths = set() if (_daemon_snapshot_sandboxed() or _lean) else {
+        candidate_paths = set() if (_scheduler_install_refused() or _lean) else {
             SNAPSHOT_DIR / "dashboard-server.py", legacy_dir / "dashboard-server.py"}
         # The auto-update refresh writes dashboard-server.py (not the LaunchAgent
         # plist) and reloads via `launchctl kickstart`, which restarts the process
@@ -55369,7 +55607,7 @@ def _ensure_health_daemon_revive_first():
     pulse provides a second, session-independent recovery path. Idempotent +
     fail-open: a spawn failure is swallowed, never raised into the hook.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return "noop-sandbox"
     if _remote_lean_profile():
         return "noop-remote"

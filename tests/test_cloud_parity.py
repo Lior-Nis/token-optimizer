@@ -833,18 +833,160 @@ def test_home_redirect_detection(tmp_path, monkeypatch):
     monkeypatch.setattr(measure, "CLAUDE_DIR", other / ".claude")
     assert measure._compute_home_redirected() is True
 
-    # Real HOME, but the Claude home relocated outside it.
+    # Real HOME with the Claude home outside it is a supported setup
+    # (CLAUDE_CONFIG_DIR anywhere), not a redirect (review #2).
     monkeypatch.setattr(measure, "HOME", real)
     monkeypatch.setattr(measure, "CLAUDE_DIR", other / ".claude")
-    assert measure._compute_home_redirected() is True
+    assert measure._compute_home_redirected() is False
 
+    monkeypatch.setattr(measure, "HOME", other)
     monkeypatch.setenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "1")
     assert measure._compute_home_redirected() is False
 
-    # Unknown account home (Windows): no refusal from this check.
+    # Unknown account home: no refusal from this check.
     monkeypatch.delenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER")
     monkeypatch.setattr(measure, "_real_account_home", lambda: None)
     assert measure._compute_home_redirected() is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_home_redirect_tolerates_symlinked_and_automounted_homes(tmp_path, monkeypatch):
+    """HPC/NFS: the passwd entry and HOME often name one directory two ways
+    (an automount symlink and the real mount). Same directory, no redirect."""
+    real = tmp_path / "nfs" / "u"
+    real.mkdir(parents=True)
+    link = tmp_path / "home-u"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.delenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", raising=False)
+    for pw_dir, home in ((link, real), (real, link), (link, link)):
+        monkeypatch.setattr(measure, "_real_account_home", lambda pw=pw_dir: pw)
+        monkeypatch.setattr(measure, "HOME", home)
+        assert measure._compute_home_redirected() is False, (pw_dir, home)
+
+
+def test_windows_home_guard_compares_profile_dir(tmp_path, monkeypatch):
+    """Review #2: Windows has no pwd, so the schtasks hijack class was open.
+    The account home there is the profile folder the OS records
+    (SHGetKnownFolderPath), compared against the home TO derives its paths
+    from (USERPROFILE via Path.home()). Runs on every OS via monkeypatch."""
+    profile = tmp_path / "Users" / "alex"
+    profile.mkdir(parents=True)
+    monkeypatch.delenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", raising=False)
+    monkeypatch.setattr(measure, "_ACCOUNT_HOME_IS_WINDOWS", True)
+    monkeypatch.setattr(measure, "_windows_profile_dir", lambda: profile)
+    assert measure._real_account_home() == profile
+    monkeypatch.setattr(measure, "HOME", profile)
+    assert measure._compute_home_redirected() is False
+    monkeypatch.setattr(measure, "HOME", tmp_path / "e2e-scratch")
+    assert measure._compute_home_redirected() is True
+    # Case-insensitive on Windows is handled by normcase; an API failure
+    # (None) never refuses.
+    monkeypatch.setattr(measure, "_windows_profile_dir", lambda: None)
+    assert measure._compute_home_redirected() is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real SHGetKnownFolderPath call")
+def test_windows_profile_dir_ignores_userprofile_env(tmp_path, monkeypatch):
+    before = measure._windows_profile_dir()
+    assert before is not None and before.is_dir()
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert measure._windows_profile_dir() == before
+
+
+def test_windows_profile_dir_is_none_off_windows():
+    if os.name != "nt":
+        assert measure._windows_profile_dir() is None
+
+
+@pytest.fixture
+def account_home(tmp_path, monkeypatch):
+    """This process at the account's real home (HOME == account home), the
+    Claude home relocated to /opt-style dir, no snapshot override."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = tmp_path / "opt" / "claude-config"
+    cfg.mkdir(parents=True)
+    monkeypatch.delenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", raising=False)
+    monkeypatch.setattr(measure, "_real_account_home", lambda: home)
+    monkeypatch.setattr(measure, "HOME", home)
+    monkeypatch.setattr(measure, "CLAUDE_DIR", cfg)
+    monkeypatch.setattr(measure, "RUNTIME_DIR", cfg)
+    monkeypatch.setattr(measure, "SNAPSHOT_DIR", cfg / "plugins" / "data" / "to" / "data")
+    monkeypatch.setattr(measure, "_RESOLVED_PLUGIN_DATA", None)
+    monkeypatch.setattr(measure, "_SNAPSHOT_DIR_OVERRIDE", "")
+    monkeypatch.setattr(measure, "_HOME_REDIRECTED", measure._compute_home_redirected())
+    plist = home / "Library" / "LaunchAgents" / "com.token-optimizer.dashboard.plist"
+    kw = home / "Library" / "LaunchAgents" / "com.token-optimizer.keepwarm.plist"
+    monkeypatch.setattr(measure, "PLIST_PATH", plist)
+    monkeypatch.setattr(measure, "_keepwarm_scheduler_plist_path", lambda: kw)
+    monkeypatch.setattr(measure, "_systemd_user_unit_path", lambda: home / ".config" / "systemd" / "user" / "to.service")
+    measure._reset_job_guard_cache()
+    return {"home": home, "cfg": cfg, "plist": plist, "tmp": tmp_path}
+
+
+def _write_plist(path, script, log):
+    import plistlib
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as fh:
+        plistlib.dump({"Label": "com.token-optimizer.dashboard",
+                       "ProgramArguments": ["/usr/bin/python3", str(script)],
+                       "StandardOutPath": str(log), "StandardErrorPath": str(log)}, fh)
+
+
+def test_config_dir_outside_home_keeps_scheduler_and_uninstall(account_home, monkeypatch):
+    """Review #2 repro: HOME=real, CLAUDE_DIR=/opt/claude-config. Before: every
+    scheduler action, uninstall included, was refused ("noop-sandbox")."""
+    assert measure._HOME_REDIRECTED is False
+    assert measure._daemon_snapshot_sandboxed() is False
+    assert measure._scheduler_install_refused() is False  # no job yet
+    assert measure.setup_daemon(uninstall=True, dry_run=True, latch_optout=False) != "noop-sandbox"
+    # A job that this install wrote (paths under the relocated Claude home).
+    monkeypatch.setattr(measure, "_normalized_platform", lambda: "Darwin")
+    data = account_home["cfg"] / "plugins" / "data" / "to" / "data"
+    _write_plist(account_home["plist"], data / "dashboard-server.py", data / "logs" / "stdout.log")
+    assert measure._scheduler_job_points_elsewhere() == ""
+    assert measure._scheduler_install_refused() is False
+
+
+@pytest.mark.parametrize("platform", ["Darwin", "Linux", "Windows"])
+def test_job_of_another_install_blocks_writes_not_uninstall(account_home, monkeypatch, platform):
+    """Real HOME, but the account's job was installed by a different install
+    (a scratch CLAUDE_CONFIG_DIR e2e run would otherwise re-point it): install,
+    restart and revive refuse; uninstall and status stay allowed."""
+    monkeypatch.setattr(measure, "_normalized_platform", lambda: platform)
+    foreign = account_home["tmp"] / "someone-else" / ".claude" / "token-optimizer"
+    if platform == "Darwin":
+        _write_plist(account_home["plist"], foreign / "dashboard-server.py", foreign / "out.log")
+    elif platform == "Linux":
+        unit = measure._systemd_user_unit_path()
+        unit.parent.mkdir(parents=True)
+        unit.write_text('[Service]\nExecStart="%s"\nStandardOutput=append:%s/stdout.log\n'
+                        % (foreign / "dashboard-launcher.sh", foreign), encoding="utf-8")
+    else:
+        monkeypatch.setattr(measure, "_windows_task_job_paths",
+                            lambda: [str(foreign / "dashboard-launcher.cmd")])
+    assert str(foreign) in measure._scheduler_job_points_elsewhere()
+    assert measure._scheduler_install_refused() is True
+    assert measure._daemon_snapshot_sandboxed() is False  # uninstall/status allowed
+    assert measure._ensure_dashboard_daemon(force=True) == "noop-sandbox"
+    assert measure._daemon_resurrection_blocked() == "sandbox"
+    monkeypatch.setenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "1")
+    assert measure._scheduler_install_refused() is False
+
+
+def test_windows_task_reader_parses_command_and_arguments(monkeypatch):
+    xml = ("<Task><Actions><Exec><Command>C:\\Python312\\pythonw.exe</Command>"
+           "<Arguments>\"C:\\Users\\a\\.claude\\token-optimizer\\dashboard-server.py\"</Arguments>"
+           "</Exec></Actions></Task>")
+
+    class _R:
+        returncode = 0
+        stdout = "\x00".join(xml)  # schtasks emits UTF-16
+
+    monkeypatch.setattr(measure.subprocess, "run", lambda *a, **k: _R())
+    assert measure._windows_task_job_paths() == [
+        "C:\\Users\\a\\.claude\\token-optimizer\\dashboard-server.py"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pwd-based account home is POSIX only")
