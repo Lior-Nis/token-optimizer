@@ -234,4 +234,9 @@ MUTATIONS = [
      [MATRIX + "::test_skill_preamble_agrees_with_python_detector[copilot_home]"],
      RUNTIME_ENV,
      [('_COPILOT_HOME_ENV = "COPILOT_HOME"', '_COPILOT_HOME_ENV = "COPILOT_HOME_X"')]),
+
+    ("Copilot install bakes a world-writable python into the hooks file",
+     [MATRIX + "::test_copilot_install_refuses_a_world_writable_interpreter"],
+     "skills/token-optimizer/scripts/py_trust.py",
+     [("    return py_trust_reason(p) is None", "    return True")]),
 ]

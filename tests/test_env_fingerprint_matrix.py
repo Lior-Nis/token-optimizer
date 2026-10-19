@@ -999,9 +999,88 @@ def test_installed_bridge_payload_imports_without_the_repo(tmp_path, installer):
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [], (installer, proc.stdout, proc.stderr[-300:])
 
 
+def _py_trust(path: str):
+    """The product's own interpreter gate (py_trust), run out of process so the
+    test never imports product modules into pytest."""
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import py_trust;"
+            "print(json.dumps(py_trust.py_trust_reason(sys.argv[2])))")
+    proc = subprocess.run([sys.executable, "-I", "-c", code, str(SCRIPTS), path],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _owner_only_venv(where: Path) -> tuple[str, dict]:
+    """A `venv --copies` interpreter the current user owns, mode 0755 in a
+    0700 dir: what a user on a host with a world-writable system Python (the
+    GitHub hosted toolcache) points TOKEN_OPTIMIZER_PYTHON at. Returns the
+    interpreter and any extra env it needs to start (a shared-libpython build
+    copied out of its tree needs LD_LIBRARY_PATH to find libpython)."""
+    import sysconfig
+    subprocess.run([sys.executable, "-m", "venv", "--copies", "--without-pip", str(where)],
+                   check=True, capture_output=True, timeout=120)
+    os.chmod(where, 0o700)
+    py = where / "bin" / "python3"
+    for f in (where / "bin").iterdir():
+        if f.is_file() and not f.is_symlink():
+            os.chmod(f, 0o755)
+    extra = {}
+    if subprocess.run([str(py), "-c", "pass"], capture_output=True, timeout=60).returncode != 0:
+        libdir = sysconfig.get_config_var("LIBDIR") or ""
+        extra = {"LD_LIBRARY_PATH": libdir, "DYLD_LIBRARY_PATH": libdir}
+        probe_env = {**os.environ, **extra}
+        assert subprocess.run([str(py), "-c", "pass"], env=probe_env, capture_output=True,
+                              timeout=60).returncode == 0, "venv --copies interpreter cannot start"
+    return str(py), extra
+
+
+def _trusted_python(where: Path) -> tuple[str, dict]:
+    """sys.executable when the product trusts it, else an owner-only venv."""
+    if _py_trust(sys.executable) is None:
+        return sys.executable, {}
+    py, extra = _owner_only_venv(where)
+    assert _py_trust(py) is None, _py_trust(py)
+    return py, extra
+
+
+def _copilot_install(env: dict, project: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([env["TOKEN_OPTIMIZER_PYTHON"], str(SCRIPTS / "measure.py"), "copilot-install"],
+                          env={**env, "TOKEN_OPTIMIZER_RUNTIME": "copilot"}, cwd=str(project),
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_copilot_install_refuses_a_world_writable_interpreter(machine):
+    """The security gate behind the Copilot hook: a group/world-writable
+    python is never baked into the hooks file, and the refusal says why.
+    (GitHub's hosted toolcache Python is world-writable, so CI hits this for
+    real; here it is planted on every host.)"""
+    home = machine.path("home/alex")
+    (home / ".copilot").mkdir(parents=True)
+    project = machine.path("home/alex/work/app")
+    project.mkdir(parents=True)
+    py, extra = _owner_only_venv(machine.path("ww-venv"))
+    for f in Path(py).parent.iterdir():
+        if f.is_file() and not f.is_symlink():
+            os.chmod(f, 0o777)
+    real = os.path.realpath(py)
+    env = {**machine.base_env(home), **extra, "TOKEN_OPTIMIZER_PYTHON": py,
+           # Keep every fallback candidate untrusted too, so only the gate decides.
+           "PATH": f"{Path(py).parent}:{machine.base_env(home)['PATH']}"}
+    proc = subprocess.run([py, str(SCRIPTS / "measure.py"), "copilot-install"],
+                          env={**env, "TOKEN_OPTIMIZER_RUNTIME": "copilot"}, cwd=str(project),
+                          capture_output=True, text=True, timeout=120)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, out[-800:]
+    assert "no trusted python interpreter found" in out and f"{real} is world-writable" in out, out[-800:]
+    assert not (home / ".copilot" / "hooks" / "token-optimizer.json").exists()
+
+
 def test_copilot_install_then_hooks_run_clean_and_leave_claude_alone(machine):
     """Copilot CLI on a machine that also has Claude Code: install through the
-    real CLI, then run the hook commands Copilot reads from its hooks file."""
+    real CLI, then run the hook commands Copilot reads from its hooks file.
+    Uses an interpreter the product's gate trusts: sys.executable, or on a
+    host whose system Python is world-writable (GitHub runners) an owner-only
+    venv passed as TOKEN_OPTIMIZER_PYTHON, the documented escape hatch."""
     home = machine.path("home/alex")
     (home / ".claude" / "projects").mkdir(parents=True)
     claude_settings = home / ".claude" / "settings.json"
@@ -1009,13 +1088,13 @@ def test_copilot_install_then_hooks_run_clean_and_leave_claude_alone(machine):
     (home / ".copilot").mkdir()
     project = machine.path("home/alex/work/app")
     project.mkdir(parents=True)
-    env = machine.base_env(home)
-    env["TOKEN_OPTIMIZER_PYTHON"] = sys.executable
-    proc = subprocess.run([sys.executable, str(SCRIPTS / "measure.py"), "copilot-install"],
-                          env={**env, "TOKEN_OPTIMIZER_RUNTIME": "copilot"}, cwd=str(project),
-                          capture_output=True, text=True, timeout=120)
+    py, extra = _trusted_python(machine.path("venv"))
+    env = {**machine.base_env(home), **extra, "TOKEN_OPTIMIZER_PYTHON": py}
+    proc = _copilot_install(env, project)
     assert proc.returncode == 0, proc.stderr[-800:]
     hooks = json.loads((home / ".copilot" / "hooks" / "token-optimizer.json").read_text())["hooks"]
+    # The hook bakes in exactly the trusted interpreter, never a PATH lookup.
+    assert os.path.realpath(py) in hooks["stop"][0]["bash"], hooks["stop"][0]["bash"]
     before = machine.files()
     settings_before = claude_settings.read_bytes()
     sid = "c0b1107a-0000-4000-8000-000000000001"
