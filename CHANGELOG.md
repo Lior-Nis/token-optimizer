@@ -2,11 +2,18 @@
 
 ## [5.13.51] - 2026-10-19
 
-- Windows desktops no longer run a Task Scheduler query on every session start: the dashboard check only asks the scheduler when a repair is actually due.
-- The before-compact checkpoint is faster on big conversations: it reads only the recent part of the log and calls git once instead of twice.
-- Hooks keep their compiled-code cache even when your environment sets `PYTHONDONTWRITEBYTECODE`, so they don't recompile on every call. Thanks @Rewdzi (#259).
-- Start fresh and the desktop status bar work on Windows when `python` and `python3` are Microsoft Store shortcuts: `py -3` is tried first, and only an interpreter that proves it is Python 3 is used. With no Python at all, Start fresh says so. Thanks @Flurry2005 (#261).
-- The cloud setup script writes correct paths even when generated on a Windows machine.
+- Codex and Claude Code side by side stay separate: a Codex session no longer writes its data into Claude Code's folder or changes Claude Code's status line.
+- Codex now saves checkpoints at Stop and before compaction, and its hooks keep working after a plugin update mid-session.
+- After a compact, Claude gets back your real task instead of the compaction summary.
+- Windows desktops no longer query Task Scheduler on every session start.
+- Hook time limits are enforced again, so a stuck hook can't hang your session.
+- Copilot, Cursor, Antigravity and Grok installs ship every file their hooks need, including the full secret-redaction list.
+- Desktop Clean up says "Cleaned up." only when the compact really happened, and shows Claude Code's reason when it didn't, in any language (#207).
+- Fleet reports warn instead of showing a silent zero, and an unknown system name is an error.
+- The before-compact checkpoint is faster on big conversations.
+- Hooks keep their compiled-code cache even when your environment sets `PYTHONDONTWRITEBYTECODE`. Thanks @Rewdzi (#259).
+- Start fresh and the desktop status bar work on Windows when `python` and `python3` are Microsoft Store shortcuts. Thanks @Flurry2005 (#261).
+- The cloud setup works on a minimal PATH and when generated on a Windows machine.
 
 ## [5.13.50] - 2026-10-19
 
