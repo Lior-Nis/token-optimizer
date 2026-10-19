@@ -116,3 +116,15 @@ def test_guard_flags_exists_and_stat_probes_under_real_home():
     assert "os.access" in events
     assert events & {"os.stat", "os.path.exists"}
     assert events & {"os.lstat", "os.path.lexists"}
+
+
+def test_desktop_bundled_claude_probe_is_stat_only():
+    """The dashboard's live process scan stats the .app bundle of a running,
+    desktop-bundled Claude CLI. That read-only probe is allowed; any read,
+    listing or write there is still flagged."""
+    rel = ("Library/Application Support/Claude/claude-code/2.1.299/4fa9694b7975/"
+           "claude.app/Contents/Resources/app.asar")
+    assert _home_guard._allowed("STAT", rel)
+    for kind in ("R", "W", "LIST", "SQLITE"):
+        assert not _home_guard._allowed(kind, rel), kind
+    assert not _home_guard._allowed("STAT", "Library/Application Support/Claude/claude_desktop_config.json")

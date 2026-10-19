@@ -103,6 +103,14 @@ ALLOWLIST: list[tuple[str, str, str]] = [
     # npm discovery for the cloud-kit packaging test (shutil.which("npm") stats
     # the node version manager's bin dir). STAT only, same reasoning as above.
     ("STAT", r"^\.(nvm|volta|fnm|asdf)(/|$)", "npm binary discovery"),
+    # Live claude-process classification (dashboard health scan): when a
+    # Claude CLI bundled by the desktop app is running on the dev machine, the
+    # scan stats its .app bundle (MacOS/, Resources/app.asar, Electron
+    # Framework) to tell the desktop app from a terminal CLI. Read-only probe
+    # of an installed binary, not user data, and only reachable while such a
+    # process happens to run, which made two dashboard tests fail in one full
+    # run and pass in the next (2026-10-19). STAT only.
+    ("STAT", r"^Library/Application Support/Claude/claude-code(/|$)", "desktop-bundled claude binary probe"),
 ]
 
 
