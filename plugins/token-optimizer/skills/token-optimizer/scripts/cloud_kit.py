@@ -65,7 +65,19 @@ MARKER = "/" + RUNNER_NAME
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPTS_DIR.parents[2]
 
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# Semver with an optional prerelease tag (5.13.50-rc.1). The charset stays
+# shell-safe because the version is rendered into the setup script.
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$")
+
+
+def _version_key(v: str):
+    """Sort key: releases after their prereleases, numeric parts numerically."""
+    core, _, pre = v.partition("-")
+    nums = tuple(int(x) for x in core.split("."))
+    if not pre:
+        return nums + ((1,),)
+    parts = tuple((0, int(x), "") if x.isdigit() else (1, 0, x) for x in pre.split("."))
+    return nums + ((0,) + parts,)
 _ARG_RE = re.compile(r"^[A-Za-z0-9_./=:-]+$")
 # The canonical hooks.json command ends with:
 #   exec "$b" "$L" "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" <runner args>; done; exit 0
@@ -779,7 +791,7 @@ def doctor(cache=None, claude=None, managed=None) -> dict:
     runner = cache / RUNNER_NAME
     add(runner.is_file(), "Runner", str(runner) if runner.is_file() else "missing: run the setup script")
     versions = sorted((c.name for c in cache.iterdir() if _is_our_version_dir(c)),
-                      key=lambda v: tuple(int(x) for x in v.split("."))) if cache.is_dir() else []
+                      key=_version_key) if cache.is_dir() else []
     root = cache / versions[-1] if versions else None
     add(bool(versions), "Installed version", ", ".join(versions) or "none")
     expected = None

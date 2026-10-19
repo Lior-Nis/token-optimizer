@@ -863,3 +863,12 @@ def test_run_sh_logs_session_starts_wired_by_another_layer(tmp_path):
     subprocess.run(["sh", str(script), "hooks/stop_runner.py"], env=env, input="{}", timeout=20,
                    capture_output=True, text=True)
     assert not log.exists()
+
+
+def test_prerelease_versions_are_accepted_and_sorted():
+    # A -rc build must install, render and sort like any other version.
+    assert cloud_kit._VERSION_RE.match("5.13.50-rc.1")
+    assert not cloud_kit._VERSION_RE.match("5.13.50-rc;rm")
+    vs = ["5.13.50", "5.13.50-rc.1", "5.13.49", "5.13.50-rc.10", "5.13.50-rc.2"]
+    assert sorted(vs, key=cloud_kit._version_key) == [
+        "5.13.49", "5.13.50-rc.1", "5.13.50-rc.2", "5.13.50-rc.10", "5.13.50"]
