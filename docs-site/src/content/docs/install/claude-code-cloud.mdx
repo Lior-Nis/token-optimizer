@@ -1,0 +1,70 @@
+---
+title: Claude Code (cloud sessions)
+description: "Run the real Token Optimizer in Claude Code cloud sessions (claude.ai/code) with one setup script per environment."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Claude Code cloud sessions (claude.ai/code, and `claude --cloud`) run in a fresh VM. They load no plugins at all: not the ones installed on your machine, not ones enabled in a repository's `.claude/settings.json`. What a cloud VM does run is your environment's **setup script**, and the hooks in the VM's own `~/.claude/settings.json`. Token Optimizer uses both.
+
+## Set it up once per environment
+
+<Steps>
+
+1. On a machine where Token Optimizer is installed, print the setup script for your version:
+
+   ```
+   python3 measure.py cloud-setup-script
+   ```
+
+   (Or ask Claude: "print the Token Optimizer cloud setup script".) The output is three lines: two comments and one command.
+
+2. On claude.ai/code, open your environment's settings and paste those lines into **Setup script**. Keep anything else you already have there; the lines never stop the rest of your script from running.
+
+3. Start a session. That's it. Every session in that environment, in any repository, runs Token Optimizer.
+
+</Steps>
+
+No per-repository setup, and nothing is committed to your repositories.
+
+## How it works
+
+1. The setup script downloads `@alexgreensh/token-optimizer` from registry.npmjs.org. The npm package is the Claude Code plugin itself, version for version: the same hooks and scripts.
+2. It checks the tarball's sha512 against the value printed into the script. If they don't match, nothing in the tarball runs.
+3. It runs the package's `install-cloud.sh`, which copies Token Optimizer to `~/.cache/token-optimizer-cloud/<version>` in the VM and merges hooks into the VM's `~/.claude/settings.json`. The hook list is generated from the plugin's own `hooks/hooks.json`, so cloud sessions run exactly the hooks a desktop install runs, with the same matchers and timeouts. Existing settings are merged, never overwritten.
+4. In the session, each hook calls a small runner that points `CLAUDE_PLUGIN_ROOT` at the installed copy and starts the real hook. Compression, read dedup, the tool-result archive and `measure.py expand`, checkpoints and compaction restore all work as they do on your machine.
+
+The setup script always succeeds, even if the registry is unreachable, and prints nothing. Its log is `~/.cache/token-optimizer-cloud/install.log` in the VM.
+
+## Pinned or latest
+
+By default the script pins the version you printed it from, plus that version's sha512. The code that runs is fixed until you paste a new script. To update, run `cloud-setup-script` again after updating Token Optimizer and replace the lines.
+
+`python3 measure.py cloud-setup-script --latest` prints a script that follows the newest published version instead. It still checks the tarball against the sha512 the registry publishes, which catches corruption in transit, but it trusts the registry account for what "latest" is. Cloud environments cache their setup for about a week, so either way a new version arrives when the environment rebuilds.
+
+## Startup cost
+
+The setup script runs when the environment is built, before Claude Code starts, not at every session: one ~1.6 MB download and under a second of install work. During a session, hooks cost what they cost on your desktop.
+
+## Limits
+
+- **Nothing persists across sessions yet.** Trends, the session database, checkpoints and the dashboard live in the VM and go away with it. Each session starts clean.
+- **The dashboard** can be generated in the VM (`measure.py dashboard`), but there is no browser to show it in. Use your local install for history.
+- **Cowork** cloud tasks are a separate setup; see [Cowork](/platforms/cowork/).
+
+## Check it, or turn it off
+
+From inside a cloud session:
+
+```
+python3 ~/.cache/token-optimizer-cloud/*/skills/token-optimizer/scripts/measure.py cloud-doctor
+```
+
+It checks the install, and that the hooks in settings still match `hooks.json`.
+
+- Set `TOKEN_OPTIMIZER_CLOUD_KIT=off` in the environment's variables to switch the hooks off without touching the setup script, or delete the lines to remove it.
+- Outside a cloud VM the hooks do nothing, and if the real plugin is ever loaded in the same VM (an account-synced copy, for example), the cloud hooks stand down so nothing runs twice.
+
+<Aside type="note">
+The setup script needs `curl`, `openssl`, `tar` and Python 3.9+, all present on Claude Code cloud VMs.
+</Aside>
