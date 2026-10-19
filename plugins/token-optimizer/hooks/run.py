@@ -579,7 +579,14 @@ def main() -> int:
         return 0
 
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
-    if plugin_root:
+    # A CLAUDE_PLUGIN_ROOT that no longer exists is the host's stale view of a
+    # version dir an upgrade deleted under the running session (Codex keeps the
+    # root it loaded at session start). The manifest already found the live
+    # sibling version and exec'd ITS run.py, so this file's own location is the
+    # live root. Trusting the stale value made every hook exit 0 having done
+    # nothing until the session restarted.
+    stale_plugin_root = bool(plugin_root) and not os.path.isdir(plugin_root)
+    if plugin_root and not stale_plugin_root:
         root_path = Path(plugin_root)
     else:
         # Fallback: relative to this wrapper's parent directory.
@@ -645,6 +652,9 @@ def main() -> int:
     # never crash a hook with UnicodeDecode/EncodeError. PYTHONUTF8 also makes the
     # child's default open() encoding UTF-8; PYTHONIOENCODING covers its std streams.
     child_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if stale_plugin_root:
+        # The handler and everything it imports resolve paths from this too.
+        child_env["CLAUDE_PLUGIN_ROOT"] = str(root_resolved)
     # The child (and every detached worker it spawns) inherits the bytecode
     # prefix chosen at the top of main(), so no __pycache__ lands in a repo.
     _apply_bytecode_prefix(_pycache_prefix, child_env)
