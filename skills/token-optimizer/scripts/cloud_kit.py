@@ -80,8 +80,10 @@ def _version_key(v: str):
     return nums + ((0,) + parts,)
 _ARG_RE = re.compile(r"^[A-Za-z0-9_./=:-]+$")
 # The canonical hooks.json command ends with:
-#   exec "$b" "$L" "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" <runner args>; done; exit 0
-_CANON_RE = re.compile(r'"\$\{CLAUDE_PLUGIN_ROOT\}/hooks/run\.py" ([^;"\'`$]+?); done; exit 0$')
+#   exec "$b" "$D/hooks/python-launcher.sh" "$D/hooks/run.py" <runner args>; done; exit 0
+# ($D = the plugin root, or the newest sibling version when an upgrade deleted
+# it). The older "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" spelling is still accepted.
+_CANON_RE = re.compile(r'"(?:\$\{CLAUDE_PLUGIN_ROOT\}|\$D)/hooks/run\.py" ([^;"\'`$]+?); done; exit 0$')
 
 
 class KitError(Exception):

@@ -114,9 +114,10 @@ for group in data.get("hooks", {}).get("SessionEnd", []):
 # runtime version-resolver: prefer ${CLAUDE_PLUGIN_ROOT}, else scan the parent dir
 # for the newest installed version. Codex pins ${CLAUDE_PLUGIN_ROOT} to the
 # session's plugin version, so on a mid-session refresh the old dir is already
-# gone; scanning for the newest heals without a restart. Claude keeps the simple
-# guard in the root hooks.json — its ${CLAUDE_PLUGIN_ROOT} already tracks the live
-# version, and a resolver's $(...) would flip _hook_command_identity's dedup path.
+# gone; scanning for the newest heals without a restart. Since 5.13.51 the root
+# hooks.json ships the same resolver (a Claude Code session's root can be deleted
+# under it too), so this rewrite is a no-op for current sources and only matters
+# for an older guard-style hooks.json. _hook_command_identity strips the resolver.
 _GUARD = ('L="${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh"; [ -r "$L" ] || exit 0; '
           'exec "$b" "$L" "${CLAUDE_PLUGIN_ROOT}/hooks/run.py"')
 _RESOLVER = ('D="${CLAUDE_PLUGIN_ROOT}"; [ -r "$D/hooks/python-launcher.sh" ] || '

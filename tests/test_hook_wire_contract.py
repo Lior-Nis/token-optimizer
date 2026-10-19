@@ -724,8 +724,10 @@ def test_version_manager_python_shim_is_the_interpreter_used(harness, sandbox):
 # 5. Upgrade removed the version dir the host still points at (#92 #75)
 # --------------------------------------------------------------------------- #
 
-def _version_cache(sb: Sandbox, live_root: Path):
-    base = sb.root / "plugins" / "cache" / "alexgreensh-token-optimizer" / "token-optimizer"
+def _version_cache(sb: Sandbox, live_root: Path, host_dir=".codex"):
+    """The host's real plugin cache layout:
+    ~/<.claude|.codex>/plugins/cache/<marketplace>/token-optimizer/<version>/"""
+    base = sb.home / host_dir / "plugins" / "cache" / "alexgreensh-token-optimizer" / "token-optimizer"
     base.mkdir(parents=True)
     old, new = base / "5.13.50", base / "5.13.51"
     return base, old, new
@@ -769,19 +771,43 @@ def test_codex_global_hooks_survive_an_upgrade(sandbox):
     assert not failures, "\n\n".join(failures)
 
 
-def test_claude_plugin_hooks_with_a_deleted_root_exit_clean(sandbox):
-    """Claude Code keeps an old version dir until no session uses it, so a
-    stale root is rare there; when it happens the hook must still never fail."""
-    base, old, new = _version_cache(sandbox, REPO)
+def test_claude_plugin_hooks_survive_an_upgrade_mid_session(sandbox):
+    """Claude Code hands every hook the CLAUDE_PLUGIN_ROOT of the version the
+    session loaded. When an update replaces .../token-optimizer/5.13.50/ with
+    5.13.51/ under a running session, every entry must find the newest sibling
+    and really run its handler there (not exit 0 having done nothing)."""
+    base, old, new = _version_cache(sandbox, REPO, host_dir=".claude")
     new.symlink_to(REPO, target_is_directory=True)
+    # A stray non-version sibling must never be picked over the real one.
+    (base / "latest").mkdir()
+    warm(sandbox, "claude")
     failures = []
     for e in harness_entries("claude", sandbox):
         env = harness_env("claude", sandbox)
-        env["CLAUDE_PLUGIN_ROOT"] = str(old)
+        env["CLAUDE_PLUGIN_ROOT"] = str(old)  # deleted by the update
         r = fire_entry(sandbox, e, env)
-        if r.rc != 0 or r.err.strip() or stdout_problem("claude", e.event, r.out):
-            failures.append(f"{e.id}\n{r}")
+        problem = stdout_problem("claude", e.event, r.out)
+        ran_from_new = any(str(new) in " ".join(map(str, p.get("argv") or [])) for p in r.procs)
+        if r.rc != 0 or r.err.strip() or problem or not r.ran(*e.expected_handler()) or not ran_from_new:
+            failures.append(f"{e.id} {problem or ''}\n{r}")
     assert not failures, "\n\n".join(failures)
+
+
+def test_claude_plugin_hooks_pick_the_highest_semver_sibling(sandbox):
+    """sort -V, not lexical order: 5.13.10 is newer than 5.13.9, and 5.9.0 is
+    older than 5.13.0. Hosts sort with BSD sort (macOS) and GNU sort (Linux,
+    Git Bash); both must land on the highest version."""
+    base, old, _new = _version_cache(sandbox, REPO, host_dir=".claude")
+    for v in ("5.9.0", "5.13.9", "5.13.10"):
+        (base / v).symlink_to(REPO, target_is_directory=True)
+    e = pick(harness_entries("claude", sandbox), "PreToolUse", matcher_prefix="Bash")
+    env = harness_env("claude", sandbox)
+    env["CLAUDE_PLUGIN_ROOT"] = str(old)
+    r = fire_entry(sandbox, e, env)
+    used = " ".join(" ".join(map(str, p.get("argv") or [])) for p in r.procs)
+    assert r.rc == 0 and r.ran(*e.expected_handler()), r
+    assert str(base / "5.13.10") + "/hooks/run.py" in used, used
+    assert str(base / "5.13.9") + "/" not in used and str(base / "5.9.0") + "/" not in used, used
 
 
 # --------------------------------------------------------------------------- #

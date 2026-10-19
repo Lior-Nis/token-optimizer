@@ -23,11 +23,21 @@ CLOUD_KIT = "skills/token-optimizer/scripts/cloud_kit.py"
 CODEX_INSTALL = "skills/token-optimizer/scripts/codex_install.py"
 
 _BASH_LOOP = "for b in bash /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do"
+# hooks/hooks.json as JSON text: the version resolver every entry runs (5.13.51+)
+# and the pre-5.13.51 guard that trusted ${CLAUDE_PLUGIN_ROOT} blindly.
+_RESOLVER = (
+    'D=\\"${CLAUDE_PLUGIN_ROOT}\\"; [ -r \\"$D/hooks/python-launcher.sh\\" ] || '
+    'D=\\"$(ls -d \\"${D%/*}\\"/*/ 2>/dev/null | grep -E \\"/[0-9]+[.][0-9]+[.][0-9]+/$\\" | sort -V | tail -n1)\\"; '
+    'D=\\"${D%/}\\"; [ -r \\"$D/hooks/python-launcher.sh\\" ] || exit 0; '
+    'exec \\"$b\\" \\"$D/hooks/python-launcher.sh\\" \\"$D/hooks/run.py\\"'
+)
+_OLD_GUARD = (
+    'L=\\"${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh\\"; [ -r \\"$L\\" ] || exit 0; '
+    'exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\"'
+)
 _UPS_CMD = (
     _BASH_LOOP + ' command -v \\"$b\\" >/dev/null 2>&1 || continue; '
-    'L=\\"${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh\\"; [ -r \\"$L\\" ] || exit 0; '
-    'exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\" hooks/userpromptsubmit_runner.py; '
-    'done; exit 0'
+    + _RESOLVER + ' hooks/userpromptsubmit_runner.py; done; exit 0'
 )
 _UPS_HOOK_TAIL = 'hooks/userpromptsubmit_runner.py; done; exit 0",\n            "timeout": 20\n          }'
 
@@ -84,12 +94,10 @@ MUTATIONS = [
     ("#80 hooks.json calls bare `bash` (PATH without bash -> exit 127)",
      [WIRE + "::test_hooks_run_when_path_has_no_bash[claude]"],
      CLAUDE_HOOKS,
-     [(_BASH_LOOP + ' command -v \\"$b\\" >/dev/null 2>&1 || continue; L=\\"${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh\\"; '
-       '[ -r \\"$L\\" ] || exit 0; exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\" '
-       'skills/token-optimizer/scripts/bash_hook.py',
-       'for b in bash; do command -v \\"$b\\" >/dev/null 2>&1 || continue; L=\\"${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh\\"; '
-       '[ -r \\"$L\\" ] || exit 0; exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\" '
-       'skills/token-optimizer/scripts/bash_hook.py')]),
+     [(_BASH_LOOP + ' command -v \\"$b\\" >/dev/null 2>&1 || continue; ' + _RESOLVER
+       + ' skills/token-optimizer/scripts/bash_hook.py',
+       'for b in bash; do command -v \\"$b\\" >/dev/null 2>&1 || continue; ' + _RESOLVER
+       + ' skills/token-optimizer/scripts/bash_hook.py')]),
 
     ("#80 class in the cloud kit: settings hook execs bare `sh` (stripped PATH -> exit 127)",
      [WIRE + "::test_hooks_run_when_path_has_no_bash[cloud-kit]"],
@@ -111,12 +119,19 @@ MUTATIONS = [
        'return \'L="${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh"; [ -r "$L" ] || exit 0; '
        'exec /bin/sh %s %s\' % (r, " ".join(args))')]),
 
-    ("#92 class on Claude Code: no readable-launcher guard, a missing root exits 127",
-     [WIRE + "::test_plugin_manifest_without_plugin_root_exits_clean[claude]",
-      WIRE + "::test_claude_plugin_hooks_with_a_deleted_root_exit_clean"],
+    ("#92 class on Claude Code: no readable-launcher check, a missing root exits 127",
+     [WIRE + "::test_plugin_manifest_without_plugin_root_exits_clean[claude]"],
      CLAUDE_HOOKS,
-     [('[ -r \\"$L\\" ] || exit 0; exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\" hooks/sessionstart_runner.py',
-       'exec \\"$b\\" \\"$L\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\\" hooks/sessionstart_runner.py')]),
+     [('D=\\"${D%/}\\"; [ -r \\"$D/hooks/python-launcher.sh\\" ] || exit 0; '
+       'exec \\"$b\\" \\"$D/hooks/python-launcher.sh\\" \\"$D/hooks/run.py\\" hooks/sessionstart_runner.py',
+       'D=\\"${D%/}\\"; '
+       'exec \\"$b\\" \\"$D/hooks/python-launcher.sh\\" \\"$D/hooks/run.py\\" hooks/sessionstart_runner.py')]),
+
+    ("#92 #75 on Claude Code: one entry trusts the root an update deleted (no sibling fallback)",
+     [WIRE + "::test_claude_plugin_hooks_survive_an_upgrade_mid_session"],
+     CLAUDE_HOOKS,
+     [(_RESOLVER + ' hooks/stop_runner.py; done; exit 0",\n            "timeout": 15',
+       _OLD_GUARD + ' hooks/stop_runner.py; done; exit 0",\n            "timeout": 15')]),
 
     ("#92 #75 codex-install pins the versioned plugin dir an upgrade deletes",
      [WIRE + "::test_codex_global_hooks_survive_an_upgrade"],

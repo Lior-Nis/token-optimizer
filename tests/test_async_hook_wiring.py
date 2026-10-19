@@ -206,7 +206,9 @@ def test_total_async_count_is_three():
 def test_mirror_has_async_stripped_but_is_otherwise_identical():
     """plugins/token-optimizer/ (Codex mirror) must have async stripped -- Codex
     skips any hook with async: true entirely -- but be identical otherwise."""
-    root = [(e, m, c) for e, m, c, _ in _flatten(HOOKS_JSON)]
+    from _codex_mirror_norm import guard_from_resolver
+    # Since 5.13.51 the root ships the same resolver; normalize both sides.
+    root = [(e, m, guard_from_resolver(c)) for e, m, c, _ in _flatten(HOOKS_JSON)]
     mirror = list(_flatten(MIRROR_HOOKS_JSON))
 
     assert all(not is_async for *_, is_async in mirror), (
