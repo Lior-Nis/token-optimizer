@@ -133,9 +133,47 @@ def install_sandbox() -> Path | None:
     if os.name == "nt":
         # Cursor, Copilot and Cowork read %APPDATA% before falling back to HOME.
         os.environ["APPDATA"] = str(home / "AppData" / "Roaming")
+    _install_scheduler_shims(root)
     SANDBOX = root
     atexit.register(shutil.rmtree, str(root), True)
     return SANDBOX
+
+
+# Service managers are per ACCOUNT, not per HOME: a test that reaches a real
+# ``launchctl bootstrap`` re-points the developer's live job at the sandbox
+# (2026-10-19: an e2e run re-bootstrapped the real dashboard agent). The
+# product guard refuses those calls from a redirected HOME, but a guard is not
+# a reason to let the real binaries be reachable. Each tool that exists on this
+# machine gets a no-op shim first on PATH (so ``shutil.which`` answers exactly
+# as before), which logs its argv to SCHEDULER_LOG and exits 0. Child processes
+# inherit the PATH. POSIX only: Windows CreateProcess resolves ``schtasks`` to
+# ``schtasks.exe`` and would skip a script shim, and the Windows CI runner has
+# no live user jobs to hijack.
+SCHEDULER_TOOLS = ("launchctl", "systemctl", "schtasks", "crontab", "loginctl")
+SCHEDULER_LOG: Path | None = None
+
+
+def _install_scheduler_shims(root: Path) -> None:
+    global SCHEDULER_LOG
+    if os.name == "nt":
+        return
+    shim_dir = root / "scheduler-shims"
+    shim_dir.mkdir(exist_ok=True)
+    log = root / "scheduler-calls.log"
+    for tool in SCHEDULER_TOOLS:
+        if shutil.which(tool) is None:
+            continue
+        shim = shim_dir / tool
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s %s\\n" "{tool}" "$*" >> "{log}" 2>/dev/null\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+    os.environ["PATH"] = str(shim_dir) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["TOKEN_OPTIMIZER_TEST_SCHEDULER_LOG"] = str(log)
+    SCHEDULER_LOG = log
 
 
 # --- audit guard -----------------------------------------------------------
