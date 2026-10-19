@@ -9,7 +9,9 @@ For script installs on Claude Code, `config.json` lives at `~/.claude/token-opti
 
 ## Project config file
 
-A repo can carry Token Optimizer settings in a committed file at `.claude/token-optimizer.json` (under `$CLAUDE_PROJECT_DIR`). This matters most in Claude Code cloud sessions, where the home directory, and with it `config.json`, starts fresh every session, so opt-outs and feature toggles would otherwise reset each time.
+A repo can carry Token Optimizer settings for Claude Code cloud sessions in a committed file at `.claude/token-optimizer.json` (under `$CLAUDE_PROJECT_DIR`). In a cloud session the home directory, and with it `config.json`, starts fresh every time, so opt-outs and feature toggles would otherwise reset each session.
+
+The file is read only inside a Claude Code cloud session. On your own machine Token Optimizer ignores it completely: your `config.json` persists there, and a repo you clone never changes your dashboard, pricing tier or feature flags.
 
 Precedence, highest first: environment variable, then your own `config.json` (user or plugin-data), then the project file, then the built-in default. Your own setting always beats the repo's; the project file only fills keys you never set.
 
@@ -24,7 +26,7 @@ Only non-secret preference keys are read: the `v5_` feature gates, `read_cache_e
 
 ## Claude Code cloud
 
-In a Claude Code cloud session Token Optimizer runs a lean profile: the in-session features (compression, read dedup, archive and expand, checkpoints, trends) work as on the desktop, and the work that cannot help in a throwaway VM is skipped: the dashboard daemon, keep-warm, the status line and hook self-heal writes to `~/.claude/settings.json`, the `cleanupPeriodDays` write, the auto-updater and the first-run welcome. The session-end flush runs inside the hook instead of a detached worker, so its data lands before the VM can be reclaimed. Python bytecode goes to `~/.cache/token-optimizer/pycache`, never into the repo.
+In a Claude Code cloud session (detected from `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE`, `CLAUDE_CODE_REMOTE_SESSION_ID`, the cloud kit, or the pin below; `CLAUDE_CODE_REMOTE=true` alone is not enough) Token Optimizer runs a lean profile: the in-session features (compression, read dedup, archive and expand, checkpoints, trends) work as on the desktop, and the work that cannot help in a throwaway VM is skipped: the dashboard daemon, keep-warm, the status line and hook self-heal writes to `~/.claude/settings.json`, the `cleanupPeriodDays` write, the auto-updater and the first-run welcome. The session-end flush runs inside the hook instead of a detached worker, so its data lands before the VM can be reclaimed. Python bytecode goes to `~/.cache/token-optimizer/pycache`, never into the repo.
 
 | Variable | Default | Effect |
 |---|---|---|

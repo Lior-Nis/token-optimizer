@@ -63,6 +63,7 @@ _HOST_ENV = (
 def _clear_caches():
     for fn in (runtime_env.remote_host, runtime_env.is_cowork,
                runtime_env.is_claude_code_cloud, runtime_env.project_config,
+               runtime_env._project_config_file,
                runtime_env.detect_runtime):
         clear = getattr(fn, "cache_clear", None)
         if callable(clear):
@@ -581,7 +582,8 @@ def test_project_config_allowlist(tmp_path, host):
         "v5_delta_mode": {"nested": 1},    # wrong type
         "pricing_tier_long": "x" * 100,
     })
-    host(CLAUDE_PROJECT_DIR=str(project))
+    host(CLAUDE_PROJECT_DIR=str(project), CLAUDE_CODE_REMOTE="true",
+         CLAUDE_CODE_REMOTE_SESSION_ID="cse_01TESTCLOUD")
     assert runtime_env.project_config() == {
         "v5_bash_compress": False, "daemon_disabled": True, "pricing_tier": "vertex_global"}
 
@@ -593,7 +595,8 @@ def test_project_config_allowlist(tmp_path, host):
 ], ids=["malformed", "not-object", "oversize"])
 def test_project_config_rejects_bad_files(tmp_path, host, content):
     project = _write_project_config(tmp_path, content)
-    host(CLAUDE_PROJECT_DIR=str(project))
+    host(CLAUDE_PROJECT_DIR=str(project), CLAUDE_CODE_REMOTE="true",
+         CLAUDE_CODE_REMOTE_SESSION_ID="cse_01TESTCLOUD")
     assert runtime_env.project_config() == {}
 
 
@@ -604,7 +607,8 @@ def test_project_config_rejects_symlink(tmp_path, host):
     project = tmp_path / "proj"
     (project / ".claude").mkdir(parents=True)
     (project / ".claude" / "token-optimizer.json").symlink_to(real)
-    host(CLAUDE_PROJECT_DIR=str(project))
+    host(CLAUDE_PROJECT_DIR=str(project), CLAUDE_CODE_REMOTE="true",
+         CLAUDE_CODE_REMOTE_SESSION_ID="cse_01TESTCLOUD")
     assert runtime_env.project_config() == {}
 
 
@@ -616,7 +620,8 @@ def test_project_layer_sits_under_user_config(tmp_path, host, monkeypatch):
     import plugin_env
 
     project = _write_project_config(tmp_path, {"v5_bash_compress": False, "daemon_disabled": True})
-    host(CLAUDE_PROJECT_DIR=str(project))
+    host(CLAUDE_PROJECT_DIR=str(project), CLAUDE_CODE_REMOTE="true",
+         CLAUDE_CODE_REMOTE_SESSION_ID="cse_01TESTCLOUD")
     user_cfg_dir = tmp_path / "user"
     user_cfg_dir.mkdir()
     monkeypatch.setattr(plugin_env, "_USER_CONFIG_DIR", user_cfg_dir)
@@ -642,11 +647,42 @@ def test_project_layer_sits_under_user_config(tmp_path, host, monkeypatch):
     assert measure._read_config_flag("last_hook_heal_check", 0) == 0
 
 
+def test_project_layer_is_ignored_on_desktop(tmp_path, host, monkeypatch):
+    """Review #5: a cloned repo's .claude/token-optimizer.json steered
+    machine-wide desktop state (daemon_disabled stopped the global daemon
+    revive, pricing_tier changed the cost_saved_usd persisted in the shared
+    trends.db, v5 flags). Outside a cloud VM the file is now ignored."""
+    import plugin_env
+
+    project = _write_project_config(tmp_path, {
+        "daemon_disabled": True, "pricing_tier": "vertex_global",
+        "v5_bash_compress": False, "read_cache_enabled": False})
+    for desktop_env in ({}, {"CLAUDE_CODE_REMOTE": "true"},
+                        {"CLAUDE_PLUGIN_ROOT": "/u/.claude/plugins/synced/a/token-optimizer"}):
+        host(**{"CLAUDE_PROJECT_DIR": str(project), "CLAUDE_CODE_REMOTE": None, "CLAUDE_PLUGIN_ROOT": None,
+                 "CLAUDE_CODE_REMOTE_SESSION_ID": None, **desktop_env})
+        assert runtime_env.project_config() == {}, desktop_env
+        assert runtime_env.project_config_value("daemon_disabled") is None
+    cfg = tmp_path / "measure-config.json"
+    monkeypatch.setattr(measure, "CONFIG_PATH", cfg)
+    assert measure._read_config_flag("daemon_disabled", False) is False
+    user_cfg_dir = tmp_path / "user"
+    user_cfg_dir.mkdir()
+    monkeypatch.setattr(plugin_env, "_USER_CONFIG_DIR", user_cfg_dir)
+    monkeypatch.setattr(plugin_env, "resolve_plugin_data_dir", lambda: None)
+    monkeypatch.delenv("TOKEN_OPTIMIZER_BASH_COMPRESS", raising=False)
+    assert plugin_env.is_v5_flag_enabled("v5_bash_compress", "TOKEN_OPTIMIZER_BASH_COMPRESS", default=True) is True
+    # The same file applies once the session is a cloud VM.
+    host(CLAUDE_CODE_REMOTE="true", CLAUDE_CODE_REMOTE_SESSION_ID="cse_01X")
+    assert runtime_env.project_config_value("daemon_disabled") is True
+
+
 def test_project_layer_read_cache_opt_out(tmp_path, host, monkeypatch):
     import read_cache
 
     project = _write_project_config(tmp_path, {"read_cache_enabled": False})
-    host(CLAUDE_PROJECT_DIR=str(project))
+    host(CLAUDE_PROJECT_DIR=str(project), CLAUDE_CODE_REMOTE="true",
+         CLAUDE_CODE_REMOTE_SESSION_ID="cse_01TESTCLOUD")
     monkeypatch.delenv("TOKEN_OPTIMIZER_READ_CACHE", raising=False)
     monkeypatch.setattr(read_cache, "SNAPSHOT_DIR", tmp_path / "snap")
     monkeypatch.setattr(read_cache, "CACHE_DIR", tmp_path / "cache")

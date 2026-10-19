@@ -1487,6 +1487,13 @@ def run_origin() -> str:
 #
 #     $CLAUDE_PROJECT_DIR/.claude/token-optimizer.json
 #
+# CLOUD ONLY. The file is read only inside a Claude Code cloud VM
+# (is_claude_code_cloud(): positive evidence, see remote_host()). On a desktop
+# it is ignored entirely: there the user's own config.json persists, and a
+# cloned repo must never steer machine-wide state (daemon_disabled stopping the
+# global dashboard revive, pricing_tier rewriting the cost_saved_usd stored in
+# the shared trends.db, v5 feature flags) just because a session opened in it.
+#
 # Precedence, highest first (every reader follows it):
 #   1. environment variable (TOKEN_OPTIMIZER_*)
 #   2. user config.json (<runtime-home>/token-optimizer/config.json, or the
@@ -1528,11 +1535,18 @@ def _project_config_path():
         return None
 
 
-@functools.lru_cache(maxsize=None)
 def project_config() -> dict:
     """The repo-scoped settings layer (see the block comment above), filtered
-    to the allowlist. Empty when CLAUDE_PROJECT_DIR is unset, the file is
-    missing/unsafe/malformed, or nothing in it is allowed. Never raises."""
+    to the allowlist. Empty outside a Claude Code cloud VM, and when
+    CLAUDE_PROJECT_DIR is unset, the file is missing/unsafe/malformed, or
+    nothing in it is allowed. Never raises."""
+    if not is_claude_code_cloud():
+        return {}
+    return _project_config_file()
+
+
+@functools.lru_cache(maxsize=None)
+def _project_config_file() -> dict:
     path = _project_config_path()
     if path is None:
         return {}
