@@ -234,7 +234,7 @@ def _install_call_recorder(monkeypatch, runner):
     def _compact_capture(**kw):
         calls["compact_capture"].append(kw)
 
-    def _dispatch_session_end_flush(args):
+    def _dispatch_session_end_flush(args, budget_seconds=None):
         calls["session_end_flush"].append(list(args))
 
     def _write_keepwarm_arm(session_id, transcript_path, now=None):
@@ -350,7 +350,7 @@ def test_stop_subcommands_run_in_dispatch_order(monkeypatch, tmp_path):
     def _cc(**kw):
         order.append("compact-capture")
 
-    def _sef(args):
+    def _sef(args, **_kw):
         order.append("session-end-flush")
 
     def _kw(sid, tp, now=None):
@@ -406,7 +406,7 @@ def test_a_subcommand_calling_sys_exit_does_not_abort_the_others(monkeypatch, tm
     _install_fake_deadline(monkeypatch, runner)
     calls = _install_call_recorder(monkeypatch, runner)
 
-    def _exiting(args):
+    def _exiting(args, **_kw):
         raise SystemExit(0)
 
     monkeypatch.setattr(runner.measure, "_dispatch_session_end_flush", _exiting)
@@ -513,7 +513,7 @@ def test_stop_stdout_preserves_order_when_emitted(monkeypatch, tmp_path, capsys)
     def _cc(**kw):
         print("CC-OUTPUT")
 
-    def _sef(args):
+    def _sef(args, **_kw):
         print("SEF-OUTPUT")
 
     def _kw(sid, tp, now=None):
@@ -544,7 +544,7 @@ def test_hook_always_exits_zero(monkeypatch, tmp_path):
     def _boom_cc(**kw):
         raise RuntimeError("boom")
 
-    def _boom_sef(args):
+    def _boom_sef(args, **_kw):
         raise SystemExit(1)
 
     def _boom_kw(sid, tp, now=None):

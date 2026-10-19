@@ -342,6 +342,40 @@ def test_inline_flush_budget_without_deadline_is_default():
     assert measure._inline_flush_budget_seconds(default=7.0) == 7.0
 
 
+def test_inline_flush_respects_the_stop_runners_fair_share(lean, monkeypatch, tmp_path):
+    """Review #9: the Stop runner splits ONE 13 s deadline across
+    compact-capture, session-end-flush and keepwarm-arm. The inline cloud flush
+    took deadline.remaining() - 0.5 instead of its share, could overrun, and the
+    shared HookDeadline then os._exit(0)'d the runner with its buffered stdout.
+    The flush now gets at most the share the runner hands it."""
+    import importlib.util as _ilu
+
+    spec = _ilu.spec_from_file_location("to_stop_runner_cloud", HOOKS / "stop_runner.py")
+    runner = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    seen = {}
+    monkeypatch.setattr(runner.measure, "_remote_lean_profile", lambda: True)
+    monkeypatch.setattr(runner.measure, "_run_session_end_flush_worker",
+                        lambda args, budget_seconds=20: seen.setdefault("budget", budget_seconds))
+    deadline = runner._install_runner_deadline(13.0)
+    try:
+        runner._runner_budget(8, subcommand_count_hint=3)
+        runner._sub_session_end_flush_stop({})
+    finally:
+        runner._clear_runner_deadline()
+    # Two subcommands left of ~13 s: share ~6.5 s, capped at 8, minus margin.
+    assert 0.1 <= seen["budget"] <= 6.5 - 0.5 + 0.05, seen
+    assert deadline is not None
+    # Direct: an explicit cap below the deadline's remainder wins.
+    d = measure.HookDeadline(10).start()
+    try:
+        assert measure._inline_flush_budget_seconds(cap=2.0) == pytest.approx(1.5, abs=0.01)
+        assert measure._inline_flush_budget_seconds(cap=0.2) == pytest.approx(0.1)
+        assert 9.0 <= measure._inline_flush_budget_seconds() <= 9.5
+    finally:
+        d.cancel()
+
+
 # --------------------------------------------------------------------------- #
 # 3. Bytecode never lands in a repo
 # --------------------------------------------------------------------------- #

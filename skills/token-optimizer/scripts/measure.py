@@ -8905,7 +8905,7 @@ def _defer_session_end_flush(args):
         pass
 
 
-def _dispatch_session_end_flush(args):
+def _dispatch_session_end_flush(args, budget_seconds=None):
     """Route the `session-end-flush` CLI entry.
 
     Defer by DEFAULT so a legacy bare `session-end-flush` hook fossilized in
@@ -8923,24 +8923,37 @@ def _dispatch_session_end_flush(args):
         # Run the flush in this process instead, bounded by what is left of the
         # hook's own deadline (Stop 13 s, SessionEnd 58 s) so it never runs past
         # the hook timeout. A flush that does not fit resumes on the next Stop.
-        _run_session_end_flush_worker(args, budget_seconds=_inline_flush_budget_seconds())
+        # The Stop runner shares ONE deadline across its subcommands and passes
+        # this one's fair share (``budget_seconds``); taking the whole remainder
+        # instead let the flush overrun into keepwarm-arm's slice, the shared
+        # HookDeadline then fired os._exit(0) and the runner's buffered stdout
+        # was lost (review #9).
+        _run_session_end_flush_worker(args, budget_seconds=_inline_flush_budget_seconds(cap=budget_seconds))
         return "inline-remote"
     _defer_session_end_flush(args)
     return "deferred"
 
 
-def _inline_flush_budget_seconds(default=8.0, margin=0.5):
+def _inline_flush_budget_seconds(default=8.0, margin=0.5, cap=None):
     """Seconds the inline (cloud) session-end flush may use: the remaining time
-    on the active hook deadline minus a margin, or ``default`` without one.
-    Floor 0.5 s so a nearly spent deadline still gets a bounded attempt."""
+    on the active hook deadline minus a margin, or ``default`` without one, and
+    never more than ``cap`` (the caller's fair share of a shared deadline)
+    minus the margin. Floor 0.1 s: a spent share gets a token attempt that
+    the flush lock and the budget cut short, never an overrun."""
+    budget = default
     try:
         from hook_runtime import current_deadline
         deadline = current_deadline()
         if deadline is not None:
-            return max(0.5, min(20.0, deadline.remaining() - margin))
+            budget = min(20.0, deadline.remaining() - margin)
     except Exception:
         pass
-    return default
+    if cap is not None:
+        try:
+            budget = min(budget, float(cap) - margin)
+        except (TypeError, ValueError):
+            pass
+    return max(0.1, budget)
 
 
 def _dispatch_collect(args):
