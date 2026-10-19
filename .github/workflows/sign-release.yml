@@ -93,3 +93,16 @@ jobs:
           echo "Verifying the tagged tree against the released manifest..."
           sha256sum -c /tmp/released.sha256 --quiet
           echo "OK: $(wc -l < /tmp/released.sha256) entries verified."
+
+      # Release gate for the Claude Code cloud package. Cloud setup scripts
+      # install @alexgreensh/token-optimizer@<this version> from npm; a release
+      # without it hands every cloud user a script that installs nothing. This
+      # runs LAST, after the CHECKSUMS.sha256 upload and its verification, so a
+      # missing npm package turns this workflow red without also breaking the
+      # script installer. Same answer as `npm view <pkg>@<ver> dist.integrity`.
+      # Retries cover registry propagation when npm publish ran moments before
+      # the release was created. Tags that predate packaging/npm are skipped.
+      - name: Check the cloud npm package for this release is published
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30
