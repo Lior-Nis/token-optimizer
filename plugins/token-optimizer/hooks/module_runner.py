@@ -30,6 +30,8 @@ def _warn_readonly_scripts_dir_once(scripts_dir: str) -> None:
     (writable even when the plugin install dir is read-only, which is the whole
     failure mode). Best-effort: any error here must never break the hook."""
     try:
+        if getattr(sys, "pycache_prefix", None):
+            return  # bytecode goes to a cache prefix, scripts_dir needn't be writable
         if os.access(scripts_dir, os.W_OK):
             return  # normal case — bytecode cache works, stay silent
         import hashlib

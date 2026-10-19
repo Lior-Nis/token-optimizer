@@ -33,7 +33,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from runtime_env import plugin_data_env_vars, runtime_home
+from runtime_env import plugin_data_env_vars, project_config_value, runtime_home
 
 _RUNTIME_HOME = runtime_home()
 _USER_CONFIG_DIR = _RUNTIME_HOME / "token-optimizer"
@@ -522,7 +522,9 @@ def is_v5_flag_enabled(
     1. Environment variable
     2. User config: <runtime-home>/token-optimizer/config.json
     3. Plugin-data config: <plugin-data>/config/config.json
-    4. default
+    4. Project config: $CLAUDE_PROJECT_DIR/.claude/token-optimizer.json
+       (runtime_env.project_config: committed, allowlisted keys only)
+    5. default
 
     Value interpretation is delegated to interpret_flag_value so the env path,
     the config path, and measure.py's dashboard reader all share one gate. An
@@ -550,5 +552,11 @@ def is_v5_flag_enabled(
             # Unrecognized string / unusable JSON type: warn once, fall through.
             _warn_unrecognized_flag_value(flag_name, cfg[flag_name], config_path)
             continue
+
+    project_val = project_config_value(flag_name)
+    if project_val is not None:
+        r = interpret_flag_value(project_val, env_truthy_value=env_truthy_value)
+        if r is not None:
+            return r
 
     return default
