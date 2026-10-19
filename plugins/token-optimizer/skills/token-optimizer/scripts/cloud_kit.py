@@ -158,8 +158,11 @@ def _sh_path(path) -> str:
 
 
 def hook_command(runner: Path, args: list) -> str:
+    # /bin/sh by absolute path: the host runs this line with whatever PATH it
+    # has, and a stripped PATH turned a bare `sh` into "exec: sh: not found",
+    # exit 127 on every hook (the #80 class). POSIX guarantees /bin/sh.
     r = shlex.quote(_sh_path(runner))
-    return "[ -r %s ] || exit 0; exec sh %s %s" % (r, r, " ".join(args))
+    return "[ -r %s ] || exit 0; exec /bin/sh %s %s" % (r, r, " ".join(args))
 
 
 def generate_hook_map(hooks_json: dict, runner: Path) -> dict:
@@ -465,7 +468,13 @@ if [ "$CLAUDE_CODE_REMOTE" = true ]; then
   TOKEN_OPTIMIZER_CLOUD_KIT_VERSION={version}
   export TOKEN_OPTIMIZER_CLOUD_KIT_VERSION
 fi
-exec bash "$L" "$R/hooks/run.py" "$@"
+# bash by absolute path too (a stripped PATH must not exit 127, #80), and a
+# clean exit when no bash exists at all: a hook never fails the session.
+for b in bash /bin/bash /usr/bin/bash /usr/local/bin/bash; do
+  command -v "$b" >/dev/null 2>&1 || continue
+  exec "$b" "$L" "$R/hooks/run.py" "$@"
+done
+exit 0
 """
 
 

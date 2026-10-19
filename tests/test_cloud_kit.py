@@ -70,7 +70,7 @@ def test_hook_map_matches_hooks_json_entry_for_entry():
                        {k: v for k, v in h_gen.items() if k != "command"}, (event, h_src)
                 assert h_src.get("timeout") == h_gen.get("timeout")
                 assert h_src.get("async") == h_gen.get("async")
-                gen_args = shlex.split(h_gen["command"].split("; exec sh ", 1)[1])[1:]
+                gen_args = shlex.split(h_gen["command"].split("; exec /bin/sh ", 1)[1])[1:]
                 assert gen_args == _independent_args(h_src["command"]), (event, h_gen["command"])
                 assert "CLAUDE_PLUGIN_ROOT" not in h_gen["command"]
                 assert cloud_kit.MARKER in h_gen["command"]
@@ -79,7 +79,7 @@ def test_hook_map_matches_hooks_json_entry_for_entry():
 
 def test_generated_command_is_guarded_and_absolute():
     cmd = cloud_kit.hook_command(RUNNER, ["hooks/stop_runner.py"])
-    assert cmd == ("[ -r %s ] || exit 0; exec sh %s hooks/stop_runner.py" % (RUNNER.as_posix(), RUNNER.as_posix()))
+    assert cmd == ("[ -r %s ] || exit 0; exec /bin/sh %s hooks/stop_runner.py" % (RUNNER.as_posix(), RUNNER.as_posix()))
     spaced = cloud_kit.hook_command(Path("/home/a b") / cloud_kit.RUNNER_NAME, ["x.py"])
     assert "'/home/a b/token-optimizer-cloud-run.sh'" in spaced
     assert cloud_kit.MARKER in spaced

@@ -40048,7 +40048,13 @@ def _confine_transcript_path(transcript_path):
         resolved = raw.resolve()
     except OSError:
         return None
-    if _use_codex_session_adapter():
+    # Path-aware, like the parser that reads it: the Codex marketplace plugin
+    # runs these hooks with CLAUDE_PLUGIN_ROOT set and no Codex marker, so
+    # detect_runtime() says "claude" there while transcript_path is a Codex
+    # rollout under ~/.codex/sessions. Judging by runtime alone refused it and
+    # every Codex plugin Stop exited 0 with no checkpoint (#253 class). Still
+    # confined: only the Codex session roots, and only for a path inside them.
+    if _use_codex_session_adapter(resolved):
         try:
             roots = [r.resolve() for r in codex_session.session_roots()]
         except Exception:
