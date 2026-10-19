@@ -107,9 +107,11 @@ def _cloud(host):
         # A bare CLAUDE_CODE_REMOTE says "hosted VM", not which one: no cloud
         # lean profile, no Cowork caveats (review #4).
         ({"CLAUDE_CODE_REMOTE": "true"}, "remote"),
-        # The cloud VM sets CLAUDE_CODE_CONTAINER_ID too: it is no host signal.
-        ({"CLAUDE_CODE_CONTAINER_ID": "abc"}, ""),
-        ({"CLAUDE_CODE_REMOTE": "true", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "remote"),
+        # CLAUDE_CODE_CONTAINER_ID (every Cowork VM) means Cowork when no
+        # cloud evidence is present; the cloud VM always carries some (review 2 MED-3).
+        ({"CLAUDE_CODE_CONTAINER_ID": "abc"}, "cowork"),
+        ({"CLAUDE_CODE_REMOTE": "true", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "cowork"),
+        ({"CLAUDE_CODE_CONTAINER_ID": "abc", "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE": "cloud_default"}, "cloud"),
         ({"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X", "CLAUDE_CODE_CONTAINER_ID": "abc"}, "cloud"),
         # Synced plugin root: Cowork only without cloud evidence (the cloud VM
         # has plugins/synced/ too; account plugin sync will deliver there).
@@ -182,7 +184,7 @@ def test_bare_remote_flag_gets_no_lean_profile(host, monkeypatch):
     monkeypatch.delenv("TOKEN_OPTIMIZER_REMOTE_LEAN", raising=False)
     host(CLAUDE_CODE_REMOTE="true")
     assert measure._remote_lean_profile() is False
-    host(CLAUDE_CODE_REMOTE="true", CLAUDE_CODE_CONTAINER_ID="abc")
+    host(CLAUDE_CODE_REMOTE="true", CLAUDE_CODE_CONTAINER_ID="abc")  # Cowork, not cloud
     assert measure._remote_lean_profile() is False
     for positive in ({"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_01X"},
                      {"TOKEN_OPTIMIZER_CLOUD_KIT_VERSION": "5.13.50"},

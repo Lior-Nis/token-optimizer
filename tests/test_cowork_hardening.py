@@ -109,15 +109,25 @@ def test_remote_falsy_values_leave_both_off(monkeypatch, val):
     assert runtime_env.is_claude_code_cloud() is False
 
 
-def test_container_id_is_not_a_cowork_marker(monkeypatch):
-    """The Anthropic-hosted cloud VM sets CLAUDE_CODE_CONTAINER_ID too (live
-    probe cse_01Au8fmq3iUyLMULzXTMuy5o), so it marks neither host."""
+def test_container_id_is_cowork_only_without_cloud_evidence(monkeypatch):
+    """Review 2 MED-3: CLAUDE_CODE_CONTAINER_ID is in every Cowork VM, so with
+    no cloud evidence it still means Cowork (state base, Cowork envelope,
+    once-per-session guard). The Anthropic-hosted cloud VM sets it too, but
+    always with the session id and the cloud environment type (live probe
+    cse_01Au8fmq3iUyLMULzXTMuy5o), and those win."""
     _reset_cowork_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_CONTAINER_ID", "cowork-abc")
-    assert runtime_env.is_cowork() is False
+    assert runtime_env.is_cowork() is True
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
-    assert runtime_env.is_cowork() is False
+    assert runtime_env.is_cowork() is True
     assert runtime_env.is_claude_code_cloud() is False
+    for key, value in (("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01X"),
+                       ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+                       ("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "5.13.50")):
+        monkeypatch.setenv(key, value)
+        assert runtime_env.is_claude_code_cloud() is True, key
+        assert runtime_env.is_cowork() is False, key
+        monkeypatch.delenv(key)
 
 
 def test_synced_root_is_cowork_only_without_cloud_evidence(monkeypatch):
