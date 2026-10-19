@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.13.51] - 2026-10-19
+
+- Windows desktops no longer run a Task Scheduler query on every session start: the dashboard check only asks the scheduler when a repair is actually due.
+- The before-compact checkpoint is faster on big conversations: it reads only the recent part of the log and calls git once instead of twice.
+- Hooks keep their compiled-code cache even when your environment sets `PYTHONDONTWRITEBYTECODE`, so they don't recompile on every call. Thanks @Rewdzi (#259).
+- Start fresh and the desktop status bar work on Windows when `python` and `python3` are Microsoft Store shortcuts: `py -3` is tried first, and only an interpreter that proves it is Python 3 is used. With no Python at all, Start fresh says so. Thanks @Flurry2005 (#261).
+- The cloud setup script writes correct paths even when generated on a Windows machine.
+
 ## [5.13.50] - 2026-10-19
 
 - Token Optimizer now runs in Claude Code cloud sessions with the same savings as on your desktop: paste one setup script into your cloud environment and every session, in every repo, gets the full plugin. `measure.py cloud-setup-script` prints it; `measure.py cloud-doctor` checks it.
