@@ -34709,8 +34709,11 @@ def _ensure_dashboard_daemon(force=False):
     landing-verification.) Never raises.
     """
     # An explicit snapshot override is an isolation boundary, including when a
-    # detached daemon-revive child calls this with force=True.
-    if _scheduler_install_refused():
+    # detached daemon-revive child calls this with force=True. Frozen flag
+    # only up here: this is the SessionStart hot path, and the full guard's
+    # job check runs `schtasks /Query` on Windows. It runs below, once the
+    # cheap gates and the health probe say a repair is actually due.
+    if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
     # Claude Code cloud VM: no browser to open the URL in, and no systemd user
     # bus to install a unit on (the install path fails in containers).
@@ -34745,6 +34748,11 @@ def _ensure_dashboard_daemon(force=False):
     alive = _verify_daemon_port(timeout_seconds=1, retries=1, retry_sleep=0)
     if installed and alive:
         return "noop-healthy"
+
+    # A repair is due. Refuse it (before stamping the throttle) when the
+    # account's job belongs to another install: writing ours would re-point it.
+    if _scheduler_install_refused():
+        return "noop-sandbox"
 
     # We need the costly path (install or restart). Throttle the ATTEMPT so a
     # persistently-failing install doesn't shell out every prompt. The cheap
@@ -35222,7 +35230,9 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
     """
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
-    if _scheduler_install_refused():
+    # Frozen flag here; the job check (a `schtasks /Query`) waits until the
+    # cheap gates below say a heal is actually due.
+    if _daemon_snapshot_sandboxed():
         return False
     try:
         if os.name != "nt":
@@ -35249,6 +35259,10 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
             return False  # nothing better to migrate TO (a DEAD action is
             # always worth re-registering: the .cmd fallback beats a daemon
             # that can never start again)
+        # A heal is due. Refuse it when the registered task belongs to
+        # another install (re-registering would re-point it at this one).
+        if _scheduler_install_refused():
+            return False
         if throttle:
             # A heal that keeps failing (policy-blocked /Create,
             # foreign process on the port) must not bounce the daemon every
@@ -35471,12 +35485,17 @@ def _restart_dashboard_daemon(system):
     would SIGTERM session A's freshly-bound correct daemon, causing a restart
     flap. Checking the served version first makes the whole restart idempotent.
     """
-    if _scheduler_install_refused():
+    if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
     try:
-        # Already current (a sibling session fixed it)? Do not reap/restart.
+        # Already current (a sibling session fixed it)? Do not reap/restart,
+        # and do not pay for the job check below (`schtasks /Query` on
+        # Windows): nothing is about to be written.
         if _daemon_served_version() == TOKEN_OPTIMIZER_VERSION:
             return "restarted"
+        # About to reap and restart: refuse when the job is another install's.
+        if _scheduler_install_refused():
+            return "noop-sandbox"
 
         # Reap our own orphaned port-holder first (never a foreign process).
         try:

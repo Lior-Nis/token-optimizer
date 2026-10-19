@@ -1173,6 +1173,10 @@ def test_job_of_another_install_blocks_writes_not_uninstall(account_home, monkey
     assert str(foreign) in measure._scheduler_job_points_elsewhere()
     assert measure._scheduler_install_refused() is True
     assert measure._daemon_snapshot_sandboxed() is False  # uninstall/status allowed
+    # A dead daemon, so a repair is due (a live one on the dev box would make
+    # this "noop-healthy", which writes nothing and never asks the guard).
+    monkeypatch.setattr(measure, "_verify_daemon_port", lambda *a, **k: False)
+    monkeypatch.setattr(measure, "_daemon_served_version", lambda *a, **k: None)
     assert measure._ensure_dashboard_daemon(force=True) == "noop-sandbox"
     assert measure._restart_dashboard_daemon(platform) == "noop-sandbox"
     monkeypatch.setenv("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "1")
@@ -1217,6 +1221,39 @@ def test_hot_hook_paths_never_query_the_scheduler(account_home, monkeypatch):
                         lambda: pytest.fail("guard consulted before the lean check"))
     assert measure._daemon_midsession_pulse() == "noop-remote"
     assert measure._ensure_health_daemon_revive_first() == "noop-remote"
+
+
+def test_scheduler_writers_run_cheap_gates_before_the_job_query(account_home, monkeypatch):
+    """Windows CI 5.13.50: the restart and task-heal writers ran the full guard
+    (a `schtasks /Query` on Windows) before their own cheap gates, so an
+    already-current daemon or a disabled one still spawned schtasks, and
+    _ensure_dashboard_daemon did it on every SessionStart. The job check now
+    runs only once a write is actually due. Host-independent: Windows is
+    simulated, the query is recorded instead of run."""
+    queries = []
+    monkeypatch.setattr(measure, "_normalized_platform", lambda: "Windows")
+    monkeypatch.setattr(measure, "_windows_task_job_paths",
+                        lambda: queries.append("schtasks /Query") or [])
+    monkeypatch.setattr(measure, "_reclaim_posix_daemon_port", lambda *a, **k: None)
+    measure._reset_job_guard_cache()
+
+    # Already current: nothing to write, nothing to ask.
+    monkeypatch.setattr(measure, "_daemon_served_version", lambda *a, **k: measure.TOKEN_OPTIMIZER_VERSION)
+    assert measure._restart_dashboard_daemon("Windows") == "restarted"
+    # Healthy SessionStart ensure: no job query either.
+    monkeypatch.setattr(measure, "_remote_lean_profile", lambda: False)
+    monkeypatch.setattr(measure, "_is_foreign_runtime", lambda: False)
+    monkeypatch.setattr(measure, "detect_runtime", lambda: "claude")
+    monkeypatch.setattr(measure, "_daemon_install_failed_marker_present", lambda: False)
+    monkeypatch.setattr(measure, "_daemon_service_installed", lambda system: True)
+    monkeypatch.setattr(measure, "_verify_daemon_port", lambda *a, **k: True)
+    assert measure._ensure_dashboard_daemon() == "noop-healthy"
+    # Disabled daemon: the task heal's resurrection gate answers first. (Last,
+    # because os.name is spoofed until teardown.)
+    monkeypatch.setattr(measure.os, "name", "nt", raising=False)
+    monkeypatch.setattr(measure, "_daemon_resurrection_blocked", lambda: "disabled")
+    assert measure._heal_windows_task_action() is False
+    assert queries == [], queries
 
 
 def test_doctor_and_cli_name_the_other_install(account_home, monkeypatch, capsys):
