@@ -4983,8 +4983,24 @@ def doctor(as_json=False):
     # 6. Quality bar
     total += 1
     qb = _is_quality_bar_installed(settings)
-    if qb["statusline"] and qb["hook"]:
-        checks.append(("OK", "Quality bar", "status line + hook active"))
+    # Which statusline.js the status line really runs: a missing file shows a
+    # blank status line, and another checkout runs other code than this one.
+    _qb_sl_path = None
+    try:
+        _found = _statusline_js_in_command(((settings or {}).get("statusLine") or {}).get("command") or "")
+        _qb_sl_path = _found[2] if _found else None
+    except Exception:
+        _qb_sl_path = None
+    _qb_ours = _get_statusline_path()
+    if qb["statusline"] and _qb_sl_path and not Path(_qb_sl_path).expanduser().is_file():
+        checks.append(("!!", "Quality bar", _hint(
+            f"status line runs a missing file: {_qb_sl_path} "
+            "(fix: start a new session, it re-points it; or python3 measure.py setup-quality-bar --force)")))
+    elif qb["statusline"] and qb["hook"]:
+        _qb_note = ""
+        if _qb_sl_path and os.path.normcase(os.path.abspath(_qb_sl_path)) != os.path.normcase(os.path.abspath(_qb_ours)):
+            _qb_note = f" (runs another Token Optimizer copy: {_qb_sl_path})"
+        checks.append(("OK", "Quality bar", "status line + hook active" + _qb_note))
         score += 1
     else:
         missing = []
@@ -46154,6 +46170,84 @@ def _migrate_statusline_to_stable_path():
         return False
 
 
+_STATUSLINE_JS_IN_CMD_RE = re.compile(r"""(['"])([^'"]*statusline\.js)\1|([^\s'"]*statusline\.js)""")
+
+
+def _statusline_js_in_command(cmd):
+    """(start, end, path) of the statusline.js path inside a statusLine
+    command (quoted or bare), or None."""
+    m = _STATUSLINE_JS_IN_CMD_RE.search(cmd or "")
+    if not m:
+        return None
+    if m.group(2) is not None:
+        return m.start(2), m.end(2), m.group(2)
+    return m.start(3), m.end(3), m.group(3)
+
+
+def _path_is_under(path, base):
+    try:
+        Path(path).expanduser().resolve(strict=False).relative_to(Path(base).resolve(strict=False))
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+def _heal_dangling_statusline():
+    """Re-point OUR statusLine when it runs a statusline.js that is gone or
+    that sits in Codex's plugin cache.
+
+    Before 5.13.51 a Codex-loaded plugin hook was detected as Claude Code, and
+    its settings heal pointed Claude Code's statusLine at the Codex plugin
+    cache (deleted on Codex's next plugin update, so the status line went
+    blank). The stale-path heal only rewrites ``/plugins/cache/`` roots and
+    only on plugin-cache installs, so a script install, a missing file outside
+    a cache, or a still-present Codex copy kept the bad command.
+
+    Acts only in Claude Code (never a hosted VM's lean profile), only on a
+    statusLine that is ours (``statusline.js`` + ``token-optimizer`` in the
+    command), and only when the referenced file is missing or under
+    ``<codex home>/plugins/``. An existing statusline.js from another Token
+    Optimizer checkout (a dev clone) is the user's choice and is left alone.
+    Only the path inside the command changes; every other key is preserved.
+    Returns True if it rewrote the command.
+    """
+    try:
+        if detect_runtime() != "claude" or _remote_lean_profile():
+            return False
+        settings, _ok = _read_settings_for_write()
+        if not _ok or not settings:
+            return False
+        sl = settings.get("statusLine")
+        if not isinstance(sl, dict):
+            return False
+        cmd = sl.get("command") or ""
+        if not isinstance(cmd, str) or "statusline.js" not in cmd or "token-optimizer" not in cmd:
+            return False
+        found = _statusline_js_in_command(cmd)
+        if not found:
+            return False
+        start, end, old_path = found
+        ours = _get_statusline_path()
+        if not ours or not Path(ours).is_file():
+            return False
+        if os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(ours)):
+            return False
+        from runtime_env import codex_home as _codex_home
+        in_codex = _path_is_under(old_path, _codex_home() / "plugins")
+        if Path(old_path).expanduser().is_file() and not in_codex:
+            return False
+        new_cmd = cmd[:start] + ours + cmd[end:]
+        if cmd[start - 1:start] not in ("'", '"') and any(c.isspace() for c in ours):
+            new_cmd = cmd[:start] + "'" + ours + "'" + cmd[end:]
+        new_settings = dict(settings)
+        new_sl = dict(sl)
+        new_sl["command"] = new_cmd
+        new_settings["statusLine"] = new_sl
+        return bool(_write_settings_atomic(new_settings))
+    except Exception:
+        return False
+
+
 def _heal_keepwarm_plist_path():
     """Rewrite an installed keep-warm launchd plist whose measure.py path went
     stale onto the update-surviving marketplace clone path, then reload the agent.
@@ -55533,6 +55627,12 @@ def run_ensure_health():
                 print("  [Token Optimizer] Migrated statusLine to stable path", file=sys.stderr)
         except Exception as _e:
             print(f"  [Token Optimizer] statusLine path migration failed: {_e}", file=sys.stderr)
+        try:
+            if _heal_dangling_statusline():
+                print("  [Token Optimizer] Re-pointed a statusLine that ran a missing "
+                      "or Codex-cache statusline.js", file=sys.stderr)
+        except Exception as _e:
+            print(f"  [Token Optimizer] statusLine heal failed: {_e}", file=sys.stderr)
         # Same class for the keep-warm launchd agent: an existing plist pinned to a
         # version-cache measure.py path dies on plugin update and freezes the
         # dashboard's savings. Lift it onto the clone path (macOS-only in practice).
