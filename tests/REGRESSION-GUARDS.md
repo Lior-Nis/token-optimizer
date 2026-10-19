@@ -32,7 +32,11 @@ The check fails, never skips, when a mutation's `old` text is no longer in the
 file (stale: nothing gets planted), when an entry or mutations file is
 malformed, when the guard tests already fail on clean code, and when pytest
 exits with anything but test failures (a collection error or "no tests ran"
-proves nothing). The harness guards itself the same way
+proves nothing). A mutation whose listed tests ALL skip on the current OS
+(read from the clean run's real outcomes) is reported `n/a`, neither caught nor
+missed; if some of its tests ran it is judged on those. The Linux job runs
+`--require-all` (no n/a allowed), so every mutation is proven there; the
+Windows job proves what can run on Windows. The harness guards itself the same way
 (`scripts/mutations/harness.py`).
 - If the fix changes a number on the dashboard, add that number to the golden
   user with its hand-worked value.

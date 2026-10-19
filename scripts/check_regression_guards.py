@@ -27,6 +27,13 @@ Run from anywhere:  python3 scripts/check_regression_guards.py
   --list            print every mutation and exit
   --only TEXT       run only mutations whose name or file contains TEXT (repeatable)
   --jobs N          run N mutations in parallel, each in its own copy (default 1)
+  --require-all     fail when any mutation is n/a on this OS (see below)
+
+The clean pre-run records each guard test's real outcome. A mutation whose
+listed tests ALL skip on this OS (POSIX-only tests on Windows, say) is reported
+"n/a" and is neither caught nor missed: a mutated run would pass by skipping.
+If some ran, it is judged on those. The Linux CI job runs --require-all, so
+every mutation is still proven somewhere.
 """
 
 from __future__ import annotations
@@ -34,7 +41,9 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import importlib.util
+import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -213,11 +222,58 @@ def _copy_repo(src: Path, dst: Path) -> None:
             print(f"warning: skipping unreadable path {entry[0]}: {entry[2]}", file=sys.stderr)
 
 
-def _pytest(copy_root: Path, tests: list, exitfirst: bool = True):
+# Loaded into the clean pre-run with -p: records every test's real outcome by
+# pytest node id, so "skips on this OS" is read from pytest, never guessed.
+_OUTCOME_PLUGIN = """\
+import json, os
+_OUT = {}
+def pytest_runtest_logreport(report):
+    prev = _OUT.get(report.nodeid)
+    if report.failed:
+        now = "failed"
+    elif report.skipped:
+        now = "skipped"
+    else:
+        now = "passed"
+    rank = {"passed": 0, "skipped": 1, "failed": 2}
+    if prev is None or rank[now] > rank[prev]:
+        _OUT[report.nodeid] = now
+def pytest_sessionfinish(session):
+    with open(os.environ["REGRESSION_GUARDS_OUTCOMES"], "w", encoding="utf-8") as fh:
+        json.dump(_OUT, fh)
+"""
+
+
+def coverage(tests: list, outcomes: dict) -> str:
+    """How a mutation's listed tests fared on clean code on THIS OS.
+
+    'run': at least one listed test really ran (passed); the mutation is judged
+    on those. 'n/a': every listed test skipped here, so a mutated run would pass
+    by skipping and prove nothing either way. 'missing': a listed id matched no
+    test at all (typo, renamed test), which is an error, not n/a."""
+    ran = skipped = 0
+    for t in tests:
+        hits = [o for n, o in outcomes.items()
+                if n == t or n.startswith(t + "::") or n.startswith(t + "[")]
+        if not hits:
+            return "missing"
+        ran += sum(1 for o in hits if o != "skipped")
+        skipped += sum(1 for o in hits if o == "skipped")
+    return "run" if ran else "n/a"
+
+
+def _pytest(copy_root: Path, tests: list, exitfirst: bool = True, outcomes_to: Path = None):
     args = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *tests]
     if exitfirst:
         args.insert(4, "-x")
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if outcomes_to is not None:
+        plugin_dir = outcomes_to.parent / "plugin"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "_rg_outcomes.py").write_text(_OUTCOME_PLUGIN, encoding="utf-8")
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH")]))
+        env["REGRESSION_GUARDS_OUTCOMES"] = str(outcomes_to)
+        args[4:4] = ["-p", "_rg_outcomes"]
     proc = subprocess.run(args, cwd=copy_root, capture_output=True, text=True, timeout=900, env=env)
     return proc.returncode, proc.stdout[-3000:] + proc.stderr[-2000:]
 
@@ -245,6 +301,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--only", action="append", default=[])
+    ap.add_argument("--require-all", action="store_true",
+                    help="fail when any mutation is n/a (its guard tests all skip on this OS)")
     ap.add_argument("--jobs", type=int, default=int(os.environ.get("REGRESSION_GUARDS_JOBS", "1")))
     opts = ap.parse_args(argv)
 
@@ -265,6 +323,7 @@ def main(argv=None) -> int:
         return 0
 
     failures = []
+    not_applicable = []
     # Stale check up front, against the real tree: fast and names every stale entry.
     runnable = []
     for mut in muts:
@@ -294,12 +353,37 @@ def main(argv=None) -> int:
 
         # The guard tests must pass on clean code, or every mutation looks caught.
         all_tests = sorted({t for m in runnable for t in m[1]})
-        if all_tests:
-            code, out = _pytest(copies[0], all_tests, exitfirst=False)
-            if code != 0:
-                print(f"Regression guards: the guard tests fail on UNMUTATED code (pytest exit {code}),\n"
-                      f"so no mutation result would mean anything. Fix them first.\n{out}", file=sys.stderr)
-                return 1
+        outcomes_file = Path(tmp) / "outcomes" / "clean.json"
+        code, out = _pytest(copies[0], all_tests, exitfirst=False, outcomes_to=outcomes_file)
+        if code != 0:
+            print(f"Regression guards: the guard tests fail on UNMUTATED code (pytest exit {code}),\n"
+                  f"so no mutation result would mean anything. Fix them first.\n{out}", file=sys.stderr)
+            return 1
+        try:
+            outcomes = json.loads(outcomes_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"Regression guards: could not read the clean run's test outcomes: {exc}", file=sys.stderr)
+            return 1
+
+        # A mutation whose guard tests all skip on this OS cannot be proven
+        # here: report it n/a (never caught, never a miss). --require-all turns
+        # n/a into a failure, for the job that must prove every mutation.
+        here = platform.system() or os.name
+        provable = []
+        for mut in runnable:
+            cov = coverage(mut[1], outcomes)
+            if cov == "run":
+                provable.append(mut)
+            elif cov == "n/a":
+                not_applicable.append(mut[0])
+                print(f"n/a   {mut[0]} (guard tests skip on {here})")
+                if opts.require_all:
+                    failures.append(f"{mut[0]} ({mut[4]}): guard tests skip on {here}, and "
+                                    f"--require-all needs every mutation proven on this job")
+            else:
+                print(f"FAIL  {mut[0]}")
+                failures.append(f"{mut[0]} ({mut[4]}): a listed test id matched no collected test; "
+                                f"fix the node id")
 
         free = list(copies)
         import threading
@@ -315,7 +399,7 @@ def main(argv=None) -> int:
                     free.append(root)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-            for mut, (status, detail) in pool.map(work, runnable):
+            for mut, (status, detail) in pool.map(work, provable):
                 if status == "ok":
                     print(f"ok    {mut[0]}")
                 else:
@@ -328,7 +412,12 @@ def main(argv=None) -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print(f"\nAll {len(muts)} known regressions are caught ({elapsed:.0f}s, {jobs} job(s)).")
+    caught = len(muts) - len(not_applicable)
+    if not_applicable:
+        print(f"\n{caught} of {len(muts)} known regressions are caught; {len(not_applicable)} n/a "
+              f"(guard tests skip on {platform.system() or os.name}) ({elapsed:.0f}s, {jobs} job(s)).")
+    else:
+        print(f"\nAll {len(muts)} known regressions are caught ({elapsed:.0f}s, {jobs} job(s)).")
     return 0
 
 
