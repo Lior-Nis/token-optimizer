@@ -129,8 +129,18 @@ def main() -> int:
     # already self-bounds at 60s, so 110s is a last-resort backstop for any
     # OTHER hook that runs past run.py's wait while orphaned on Windows.
     # Fail-open if hook_runtime is missing (unit-test dummy plugin trees).
+    # The consolidated runners live in hooks/, so scripts_dir is hooks/ and
+    # hook_runtime (in skills/token-optimizer/scripts) was never importable for
+    # them: the import failed, the except swallowed it, and every runner ran
+    # with no backstop at all. Look it up in the plugin's own scripts dir,
+    # APPENDED so it can never shadow a module of the hook being run.
     deadline = None
     try:
+        _plugin_scripts = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "skills", "token-optimizer", "scripts")
+        if os.path.isdir(_plugin_scripts) and _plugin_scripts not in sys.path:
+            sys.path.append(_plugin_scripts)
         from hook_runtime import HookDeadline, arm_entry_budget
         deadline = arm_entry_budget(module_name, script_args)
         if deadline is None:
