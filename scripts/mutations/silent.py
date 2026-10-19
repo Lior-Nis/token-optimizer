@@ -17,6 +17,8 @@ SWALLOWED = "tests/test_swallowed_errors.py"
 FALSE_SUCCESS = "tests/test_false_success.py"
 REAL_LAYOUT = "tests/test_module_runner_real_layout.py"
 
+DRIFT = "tests/test_release_drift.py"
+
 UPS_HOOK = SWALLOWED + "::test_hook_raises_no_programming_error[UserPromptSubmit[*]:hooks/userpromptsubmit_runner.py]"
 POST_HOOK = (SWALLOWED + "::test_hook_raises_no_programming_error[PostToolUse[Bash|PowerShell|Read|Glob|Grep|"
              "Agent|Edit|Write|MultiEdit|NotebookEdit|mcp__.*]:hooks/posttooluse_runner.py]")
@@ -82,4 +84,19 @@ MUTATIONS = [
      [FALSE_SUCCESS + "::test_fleet_unknown_system_is_an_error_not_a_zero"],
      FLEET,
      [("    if target_system not in known:\n", "    if False:\n")]),
+
+    # 5.13.50: npm bytes from an earlier commit than the git release; the
+    # release gate only checked that the version existed.
+    ("npm tree match ignores changed bytes",
+     [DRIFT + "::test_tree_comparison_names_every_kind_of_drift"],
+     "scripts/check_npm_published.py",
+     [("        elif found[rel] != expected[rel]:\n", "        elif False:\n")]),
+    ("release workflow stops running the npm tree match",
+     [DRIFT + "::test_sign_release_workflow_runs_the_tree_match"],
+     ".github/workflows/sign-release.yml",
+     [('then match="--match-tree"; fi', 'then match=""; fi')]),
+    ("signer drops a root the installer still requires a checksum for",
+     [DRIFT + "::test_signer_and_installer_checksum_the_same_roots"],
+     "scripts/sign-release.sh",
+     [("    .codex/ \\\n", "")]),
 ]

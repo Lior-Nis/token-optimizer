@@ -15,6 +15,7 @@ when the answer is empty.
     python3 scripts/check_npm_published.py                      # plugin.json version
     python3 scripts/check_npm_published.py --tag v5.13.50       # a release tag
     python3 scripts/check_npm_published.py --expect-integrity sha512-...   # also match bytes
+    python3 scripts/check_npm_published.py --tag v5.13.51 --match-tree     # npm == this checkout
 
 Wired into the release in two places (docs: packaging/npm/RELEASING.md):
   * RELEASING.md step 4, by hand, right after `npm publish`, with
@@ -32,9 +33,14 @@ mismatched, 2 usage error.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import sys
+import tarfile
+import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -73,6 +79,64 @@ def check(version: str, fetch=cloud_kit.registry_dist, expect_integrity: str = "
                    "nothing. Publish it: packaging/npm/RELEASING.md." % (cloud_kit.PACKAGE, version, last))
 
 
+def _staged_files(repo: Path) -> dict:
+    """relpath -> sha256 of what packaging/npm/build.py ships from ``repo``
+    (tracked files only, exactly as --pack stages them)."""
+    sys.path.insert(0, str(repo / "packaging" / "npm"))
+    try:
+        import build
+    finally:
+        sys.path.pop(0)
+    if Path(build.REPO).resolve() != repo.resolve():
+        raise SystemExit("check_npm_published: packaging/npm/build.py belongs to %s, not %s"
+                         % (build.REPO, repo))
+    with tempfile.TemporaryDirectory() as tmp:
+        pkg = build.stage(Path(tmp), include_untracked=False)
+        return {p.relative_to(pkg).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in pkg.rglob("*") if p.is_file()}
+
+
+def tree_mismatches(tgz: bytes, expected: dict) -> list:
+    """Every way the published tarball differs from ``expected`` (relpath ->
+    sha256): changed bytes, files only on npm, files only in the tree. Members
+    are read in memory, never extracted."""
+    found = {}
+    with tarfile.open(fileobj=io.BytesIO(tgz), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            name = member.name[len("package/"):] if member.name.startswith("package/") else member.name
+            found[name] = hashlib.sha256(tar.extractfile(member).read()).hexdigest()
+    out = []
+    for rel in sorted(set(found) | set(expected)):
+        if rel not in found:
+            out.append("missing from npm: %s" % rel)
+        elif rel not in expected:
+            out.append("only on npm:      %s" % rel)
+        elif found[rel] != expected[rel]:
+            out.append("different bytes:  %s" % rel)
+    return out
+
+
+def match_tree(version: str, repo: Path, fetch, download=None) -> tuple:
+    """(ok, message): the npm tarball for ``version`` is byte-for-byte what this
+    checkout ships. The existence check alone passed 5.13.50, whose npm bytes
+    came from an earlier commit than the git release."""
+    download = download or (lambda url: urllib.request.urlopen(url, timeout=60).read())  # noqa: S310
+    try:
+        dist = fetch(version)
+        tgz = download(dist["tarball"])
+    except Exception as exc:  # noqa: BLE001 - any failure is a failed gate, said out loud
+        return False, "could not download %s@%s to compare it with the tree (%s)" % (
+            cloud_kit.PACKAGE, version, exc)
+    diffs = tree_mismatches(tgz, _staged_files(repo))
+    if diffs:
+        return False, ("%s@%s on npm is not this release's tree (%d difference(s)); the npm and "
+                       "git releases have drifted. Never republish a version: fix forward.\n  %s"
+                       % (cloud_kit.PACKAGE, version, len(diffs), "\n  ".join(diffs[:40])))
+    return True, "%s@%s on npm matches this tree file for file" % (cloud_kit.PACKAGE, version)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--version", help="package version (default: .claude-plugin/plugin.json)")
@@ -81,6 +145,8 @@ def main(argv=None) -> int:
     ap.add_argument("--registry", default=cloud_kit.REGISTRY)
     ap.add_argument("--attempts", type=int, default=1, help="tries, for registry propagation")
     ap.add_argument("--wait", type=float, default=20.0, help="seconds between tries")
+    ap.add_argument("--match-tree", action="store_true",
+                    help="also download the tarball and require it to equal this checkout's shipped files")
     ap.add_argument("--repo", type=Path, default=REPO, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -95,6 +161,8 @@ def main(argv=None) -> int:
     ok, message = check(version, fetch=lambda v: cloud_kit.registry_dist(v, args.registry),
                         expect_integrity=args.expect_integrity, attempts=args.attempts,
                         wait_seconds=args.wait)
+    if ok and args.match_tree:
+        ok, message = match_tree(version, args.repo, fetch=lambda v: cloud_kit.registry_dist(v, args.registry))
     if ok:
         print("OK: " + message)
         return 0
