@@ -46145,7 +46145,11 @@ def _heal_keepwarm_plist_path():
     """
     # Per-account scheduler job: never touched from a redirected HOME
     # (a test sandbox or scratch run would re-point the user's live job).
-    if _scheduler_install_refused():
+    # Frozen flag only up here: this runs in ensure-health on EVERY
+    # SessionStart, and the full guard's job check is a `schtasks /Query` on
+    # Windows, where this macOS heal never has a plist to fix. The full guard
+    # runs below, once a stale plist exists and needs a rewrite.
+    if _daemon_snapshot_sandboxed():
         return False
     if not _is_running_from_plugin_cache():
         return False
@@ -46171,6 +46175,10 @@ def _heal_keepwarm_plist_path():
     idx = next((i for i, a in enumerate(args)
                 if isinstance(a, str) and a.endswith("measure.py")), None)
     if idx is None or args[idx] == stable:
+        return False
+    # A rewrite is due. Refuse it when the account's job belongs to another
+    # install (rewriting and reloading would re-point it at this one).
+    if _scheduler_install_refused():
         return False
     new_args = list(args)
     new_args[idx] = stable
