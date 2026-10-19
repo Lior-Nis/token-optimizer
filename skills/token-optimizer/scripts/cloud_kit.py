@@ -33,7 +33,9 @@ Rules this module keeps:
     * nothing is written into any repository working tree.
     * settings are merged, never overwritten; only entries whose command runs
       our run.sh are ever replaced or removed; JSONC / duplicate keys refused.
-    * install never raises out of ``main`` and the shell wrapper exits 0.
+    * ``main`` never raises (any error is one line on stderr, which
+      install-cloud.sh appends to install.log, and exit status 1), and the
+      shell wrapper always exits 0, so a cloud session's setup never fails.
 """
 
 from __future__ import annotations
@@ -780,6 +782,11 @@ def main(argv) -> int:
             return 2
     except (KitError, OSError) as exc:
         print("cloud_kit %s: %s" % (cmd, exc), file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - never a traceback out of the setup script
+        # A settings.json that is not UTF-8, an odd value type, a bug: report
+        # it in install.log and fail this command, never raise.
+        print("cloud_kit %s: unexpected %s: %s" % (cmd, type(exc).__name__, exc), file=sys.stderr)
         return 1
     print(json.dumps(report, ensure_ascii=False))
     return 0

@@ -273,6 +273,35 @@ def test_user_set_cloud_home_never_loses_unrelated_version_dirs(tmp_path, staged
     assert not (cache / report["version"]).exists()
 
 
+@pytest.mark.parametrize("exc", [
+    UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    TypeError("unhashable"),
+    ValueError("odd"),
+])
+def test_main_never_raises(monkeypatch, capsys, exc):
+    """Review #12: main caught only KitError/OSError, so a settings.json that
+    is not UTF-8 (UnicodeDecodeError) or a bad value type escaped as a
+    traceback. Any error is now one stderr line and exit 1."""
+    def _boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(cloud_kit, "install", _boom)
+    monkeypatch.setattr(cloud_kit, "uninstall", _boom)
+    assert cloud_kit.main(["install", "--source", "/nonexistent"]) == 1
+    assert cloud_kit.main(["uninstall"]) == 1
+    err = capsys.readouterr().err
+    assert "cloud_kit install:" in err and type(exc).__name__ in err
+
+
+def test_non_utf8_settings_does_not_crash_install(tmp_path, staged):
+    claude = tmp_path / "claude"
+    claude.mkdir()
+    (claude / "settings.json").write_bytes(b'{"x": "\xff\xfe"}')
+    assert cloud_kit.main(["install", "--source", str(staged), "--cache", str(tmp_path / "c"),
+                           "--claude-dir", str(claude), "--no-precompile"]) == 1
+    assert (claude / "settings.json").read_bytes() == b'{"x": "\xff\xfe"}'
+
+
 def test_install_refuses_incomplete_package(tmp_path):
     (tmp_path / "pkg").mkdir()
     with pytest.raises(cloud_kit.KitError):
