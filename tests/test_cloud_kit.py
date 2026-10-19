@@ -743,3 +743,120 @@ def test_doctor_reports_a_clean_install(tmp_path, staged):
     data["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 1
     settings.write_text(json.dumps(data), encoding="utf-8")
     assert cloud_kit.doctor(cache, claude)["ok"] is False, "drift from hooks.json is caught"
+
+
+# ------------------------------------------- live route + managed fallback
+
+
+@pytest.fixture
+def cloud_env(monkeypatch, tmp_path):
+    """A cloud VM's host env, and a temp managed-settings.d (never /etc)."""
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "repo"))
+    managed = tmp_path / "etc" / "claude-code" / "managed-settings.d"
+    monkeypatch.setenv("TOKEN_OPTIMIZER_CLOUD_MANAGED_DIR", str(managed))
+    monkeypatch.delenv(cloud_kit.MANAGED_ENV, raising=False)
+    return managed
+
+
+def _check(report, name):
+    return next(c for c in report["checks"] if c["check"] == name)
+
+
+def test_doctor_names_hooks_rewritten_away_after_the_setup_script(tmp_path, staged, cloud_env):
+    """Review #1: if the launcher rewrites ~/.claude/settings.json after the
+    setup script, our hooks vanish silently. cloud-doctor must say so in
+    plain words and report that no route runs Token Optimizer."""
+    cache, claude = tmp_path / "cache", tmp_path / "claude"
+    cloud_kit.install(staged, cache, claude, precompile=False)
+    report = cloud_kit.doctor(cache, claude)
+    assert report["route"] == "settings" and report["ok"] is True
+    assert "setup script" in _check(report, "Live route")["detail"]
+
+    (claude / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "bash ~/.claude/stop-hook-git-check.sh"}]}]}}), encoding="utf-8")
+    report = cloud_kit.doctor(cache, claude)
+    assert report["ok"] is False and report["route"] == "none"
+    detail = _check(report, "Settings hooks")["detail"]
+    assert "MISSING" in detail and "at session time" in detail and "NOT running" in detail
+    assert _check(report, "Live route")["ok"] is False
+
+
+def test_managed_fallback_keeps_hooks_wired_and_never_touches_other_files(tmp_path, staged, cloud_env, monkeypatch):
+    cache, claude = tmp_path / "cache", tmp_path / "claude"
+    cloud_env.mkdir(parents=True)
+    org = cloud_env.parent / "managed-settings.json"
+    org.write_text('{"permissions": {"deny": ["Bash(rm:*)"]}}', encoding="utf-8")
+    other = cloud_env / "10-team.json"
+    other.write_text('{"env": {"A": "1"}}', encoding="utf-8")
+
+    report = cloud_kit.install(staged, cache, claude, precompile=False)
+    assert report["managed_fallback"] == "", "opt-in only"
+    assert not (cloud_env / cloud_kit.MANAGED_FILE).exists()
+
+    monkeypatch.setenv(cloud_kit.MANAGED_ENV, "1")
+    report = cloud_kit.install(staged, cache, claude, precompile=False)
+    ours = cloud_env / cloud_kit.MANAGED_FILE
+    assert report["managed_fallback"] == str(ours)
+    settings_hooks = json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]
+    assert json.loads(ours.read_text(encoding="utf-8")) == {"hooks": settings_hooks}, \
+        "byte-identical handlers, so Claude Code runs each once"
+    assert org.read_text(encoding="utf-8") == '{"permissions": {"deny": ["Bash(rm:*)"]}}'
+    assert other.read_text(encoding="utf-8") == '{"env": {"A": "1"}}'
+    assert cloud_kit.doctor(cache, claude)["route"] == "settings"
+
+    # The launcher rewrites settings.json: the managed drop-in still wires it.
+    (claude / "settings.json").write_text("{}", encoding="utf-8")
+    report = cloud_kit.doctor(cache, claude)
+    assert report["route"] == "managed" and report["ok"] is True, report
+    assert "managed fallback" in _check(report, "Settings hooks")["detail"]
+
+    cloud_kit.uninstall(cache, claude)
+    assert not ours.exists()
+    assert org.exists() and other.exists()
+
+
+def test_uninstall_leaves_a_foreign_file_with_our_name(tmp_path, cloud_env):
+    cloud_env.mkdir(parents=True)
+    foreign = cloud_env / cloud_kit.MANAGED_FILE
+    foreign.write_text('{"hooks": {}}', encoding="utf-8")
+    assert cloud_kit.remove_managed_fallback() is False
+    assert foreign.exists()
+
+
+def test_setup_script_managed_fallback_flag(capsys):
+    assert cloud_kit.main_setup_script(["--version", "1.2.3", "--integrity", "sha512-abc",
+                                        "--managed-fallback"]) == 0
+    out = capsys.readouterr().out
+    assert "TOKEN_OPTIMIZER_CLOUD_MANAGED=1 sh package/install-cloud.sh" in out
+    assert cloud_kit.main_setup_script(["--version", "1.2.3", "--integrity", "sha512-abc"]) == 0
+    assert "TOKEN_OPTIMIZER_CLOUD_MANAGED" not in capsys.readouterr().out
+
+
+@needs_posix
+def test_run_sh_logs_session_starts_wired_by_another_layer(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    root = _fake_root(tmp_path)
+    script = tmp_path / cloud_kit.RUNNER_NAME
+    script.write_text(cloud_kit.render_run_sh(root, tmp_path / "pyc", "9.9.9"), encoding="utf-8")
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "CLAUDE_CODE_REMOTE": "true"}
+
+    def start():
+        return subprocess.run(["sh", str(script), "hooks/sessionstart_runner.py"], capture_output=True,
+                              text=True, env=env, input="{}", timeout=20)
+
+    assert start().stdout.startswith("RAN ")
+    log = tmp_path / cloud_kit.ROUTE_LOG
+    assert "hooks missing from" in log.read_text(encoding="utf-8")
+    log.unlink()
+    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": cloud_kit.hook_command(script, ["hooks/sessionstart_runner.py"])}]}]}}))
+    assert start().stdout.startswith("RAN ")
+    assert not log.exists(), "hooks present in settings.json: nothing to log"
+    # Only SessionStart pays for the check.
+    (home / ".claude" / "settings.json").write_text("{}")
+    subprocess.run(["sh", str(script), "hooks/stop_runner.py"], env=env, input="{}", timeout=20,
+                   capture_output=True, text=True)
+    assert not log.exists()

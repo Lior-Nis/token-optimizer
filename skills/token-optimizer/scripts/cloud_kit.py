@@ -93,6 +93,23 @@ def claude_dir() -> Path:
     return Path(os.path.expanduser("~")) / ".claude"
 
 
+# Managed-settings drop-in (opt-in fallback, see write_managed_fallback). Our
+# own file in Claude Code's documented drop-in dir; managed-settings.json and
+# every other file there are never read for writing, changed or removed.
+MANAGED_DIR = "/etc/claude-code/managed-settings.d"
+MANAGED_FILE = "50-token-optimizer-cloud.json"
+MANAGED_ENV = "TOKEN_OPTIMIZER_CLOUD_MANAGED"
+ROUTE_LOG = "route.log"
+
+
+def managed_dir() -> Path:
+    return Path(os.environ.get("TOKEN_OPTIMIZER_CLOUD_MANAGED_DIR") or MANAGED_DIR)
+
+
+def managed_fallback_requested() -> bool:
+    return os.environ.get(MANAGED_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def package_version(root: Path) -> str:
     for rel in ("package.json", ".claude-plugin/plugin.json"):
         try:
@@ -316,6 +333,69 @@ def write_settings_hooks(settings_path: Path, hook_map) -> bool:
     return True
 
 
+def write_managed_fallback(hook_map: dict, directory=None) -> str:
+    """Write the same hook map into our own managed-settings drop-in.
+
+    WHY, AND WHY OPT-IN. The primary route is the VM's ~/.claude/settings.json:
+    proven live (probe P7: hooks written there fire), absent at session start,
+    and separate from the launcher's own hooks (~/.claude/launcher-settings.json).
+    If a future launcher rewrote that file after the setup script, our hooks
+    would vanish silently. The only other documented layer a root setup script
+    can write without touching the repository is the managed tier:
+    /etc/claude-code/managed-settings.d/*.json on Linux (code.claude.com
+    managed-settings: drop-ins merge with managed-settings.json, one file per
+    owner). Hooks there merge with user hooks, and a handler defined in more
+    than one settings file runs once (hooks docs, "Deduplication of identical
+    handlers"), so the drop-in carries byte-identical commands.
+
+    But the docs only promise that file to SELF-HOSTED environments ("also
+    reads the managed settings file in its runner image ... only when neither
+    server-managed settings nor an MDM policy supplies the managed tier"); for
+    Anthropic-hosted VMs they say policy comes from server-managed settings.
+    And a managed file that fails to parse stops Claude Code from starting. So
+    this is off unless asked for (TOKEN_OPTIMIZER_CLOUD_MANAGED=1, printed by
+    `cloud-setup-script --managed-fallback`), never touches another file in the
+    dir, and is written atomically. Returns the path written, '' when skipped.
+    """
+    d = Path(directory) if directory else managed_dir()
+    if not managed_fallback_requested() and directory is None:
+        return ""
+    target = d / MANAGED_FILE
+    data = (json.dumps({"hooks": hook_map}, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        if target.read_bytes() == data:
+            return str(target)
+    except OSError:
+        pass
+    _atomic_write(target, data, 0o644)
+    return str(target)
+
+
+def remove_managed_fallback(directory=None) -> bool:
+    """Delete our drop-in, only if it is ours (carries our runner marker)."""
+    target = (Path(directory) if directory else managed_dir()) / MANAGED_FILE
+    try:
+        if MARKER not in target.read_text(encoding="utf-8", errors="replace"):
+            return False
+        target.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def managed_fallback_hooks(directory=None) -> dict:
+    """Our hooks as the managed drop-in carries them ({} when absent)."""
+    target = (Path(directory) if directory else managed_dir()) / MANAGED_FILE
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return {}
+    return {e: _only_ours(gs) for e, gs in hooks.items() if isinstance(gs, list) and _only_ours(gs)}
+
+
 # --------------------------------------------------------------------- run.sh
 
 
@@ -344,6 +424,16 @@ case "${{TOKEN_OPTIMIZER_CLOUD_KIT:-}}" in
     for f in "$P"/synced/*/token-optimizer*/hooks/hooks.json; do [ -f "$f" ] && exit 0; done
     ;;
 esac
+# Route check, once per session: if our hooks are not in the user settings
+# file, something rewrote it after the setup script and this hook was wired by
+# another layer (the managed fallback). cloud-doctor reports the last line.
+if [ "$1" = hooks/sessionstart_runner.py ]; then
+  S="${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/settings.json"
+  if ! grep -qF "/{runner_name}" "$S" 2>/dev/null; then
+    date -u "+%Y-%m-%dT%H:%M:%SZ session-start: hooks missing from $S; wired by another layer" \\
+      >> "$(dirname "$0")/{route_log}" 2>/dev/null
+  fi
+fi
 CLAUDE_PLUGIN_ROOT="$R"
 PYTHONPYCACHEPREFIX={pycache}
 export CLAUDE_PLUGIN_ROOT PYTHONPYCACHEPREFIX
@@ -360,7 +450,7 @@ exec bash "$L" "$R/hooks/run.py" "$@"
 
 def render_run_sh(root: Path, pycache: Path, version: str) -> str:
     return RUN_SH.format(root=shlex.quote(str(root)), pycache=shlex.quote(str(pycache)),
-                         version=version)
+                         version=version, runner_name=RUNNER_NAME, route_log=ROUTE_LOG)
 
 
 # -------------------------------------------------------------------- install
@@ -445,6 +535,12 @@ def install(source: Path, cache=None, claude=None, precompile=True) -> dict:
     hook_map = generate_hook_map(load_hooks_json(target), runner)
     settings_path = claude / "settings.json"
     changed = write_settings_hooks(settings_path, hook_map)
+    managed = ""
+    if managed_fallback_requested():
+        try:
+            managed = write_managed_fallback(hook_map)
+        except OSError as exc:  # not root, read-only /etc: the primary route stands
+            managed = "skipped: %s" % exc
 
     if precompile:
         try:
@@ -460,7 +556,7 @@ def install(source: Path, cache=None, claude=None, precompile=True) -> dict:
 
     return {"version": version, "root": str(target), "runner": str(runner),
             "settings": str(settings_path), "settings_changed": changed,
-            "events": sorted(hook_map), "pruned": pruned}
+            "managed_fallback": managed, "events": sorted(hook_map), "pruned": pruned}
 
 
 def uninstall(cache=None, claude=None) -> dict:
@@ -468,6 +564,8 @@ def uninstall(cache=None, claude=None) -> dict:
     claude = Path(claude) if claude else claude_dir()
     changed = write_settings_hooks(claude / "settings.json", None)
     removed = []
+    if remove_managed_fallback():
+        removed.append(MANAGED_FILE)
     if cache.is_dir():
         ours = (cache / CACHE_MARKER).is_file()
         for child in cache.iterdir():
@@ -475,7 +573,7 @@ def uninstall(cache=None, claude=None) -> dict:
                     child.name == "pycache" or child.name.startswith(".stage-"))):
                 shutil.rmtree(str(child), ignore_errors=True)
                 removed.append(child.name)
-        for name in ((RUNNER_NAME, "install.log", CACHE_MARKER) if ours else (RUNNER_NAME,)):
+        for name in ((RUNNER_NAME, "install.log", ROUTE_LOG, CACHE_MARKER) if ours else (RUNNER_NAME,)):
             p = cache / name
             if p.is_file():
                 p.unlink()
@@ -527,7 +625,11 @@ _VERIFY_RUN = (
 )
 
 
-def render_setup_script(version: str, integrity: str, url: str) -> str:
+def _install_cmd(managed: bool) -> str:
+    return ("%s=1 sh package/install-cloud.sh" % MANAGED_ENV) if managed else "sh package/install-cloud.sh"
+
+
+def render_setup_script(version: str, integrity: str, url: str, managed: bool = False) -> str:
     """Pinned: the paste carries the hash, so the code that runs is fixed."""
     for v, label in ((version, "version"), (integrity, "integrity")):
         if "'" in v or "\n" in v:
@@ -538,12 +640,16 @@ def render_setup_script(version: str, integrity: str, url: str) -> str:
         "# Token Optimizer %s for Claude Code cloud sessions: fetches the npm tarball, checks its\n"
         "# sha512, runs its install-cloud.sh. Quiet and never fails the setup (log: ~/.cache/%s/install.log).\n"
         "( U=%s I=%s T=\"$(mktemp -d)\" && cd \"$T\" && %s; cd /; rm -rf \"$T\" ) >/dev/null 2>&1 || true\n"
-        % (version, CACHE_DIRNAME, shlex.quote(url), shlex.quote(integrity), _VERIFY_RUN)
+        % (version, CACHE_DIRNAME, shlex.quote(url), shlex.quote(integrity),
+           _VERIFY_RUN.replace("sh package/install-cloud.sh", _install_cmd(managed)))
     )
 
 
-def render_setup_script_latest(registry: str = REGISTRY) -> str:
-    """Follows the `latest` dist-tag; the hash is the registry's own integrity."""
+def render_setup_script_latest(registry: str = REGISTRY, managed: bool = False) -> str:
+    """Follows the `latest` dist-tag; the hash is the registry's own integrity.
+
+    That hash proves the bytes arrived intact, not who published them: this
+    script trusts whatever is published under the package name."""
     meta = "%s/%s/latest" % (registry.rstrip("/"), urllib.parse.quote(PACKAGE, safe="@"))
     prefix = "%s/%s/-/" % (registry.rstrip("/"), PACKAGE)
     py = ('import json,sys;d=json.load(open(sys.argv[1]))["dist"];'
@@ -554,7 +660,8 @@ def render_setup_script_latest(registry: str = REGISTRY) -> str:
         "( T=\"$(mktemp -d)\" && cd \"$T\" && curl -fsSL --max-time 30 -o m.json %s && "
         "set -- $(python3 -I -c %s m.json) && U=\"$1\" I=\"$2\" && [ \"${U#%s}\" != \"$U\" ] && %s; "
         "cd /; rm -rf \"$T\" ) >/dev/null 2>&1 || true\n"
-        % (CACHE_DIRNAME, shlex.quote(meta), shlex.quote(py), prefix, _VERIFY_RUN)
+        % (CACHE_DIRNAME, shlex.quote(meta), shlex.quote(py), prefix,
+           _VERIFY_RUN.replace("sh package/install-cloud.sh", _install_cmd(managed)))
     )
 
 
@@ -646,7 +753,20 @@ def plugin_loaded(claude=None, project=None) -> str:
     return ""
 
 
-def doctor(cache=None, claude=None) -> dict:
+def _host_detail() -> str:
+    keys = ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "CLAUDE_CODE_REMOTE_SESSION_ID")
+    return ", ".join("%s=%s" % (k, os.environ.get(k) or "(unset)") for k in keys)
+
+
+def doctor(cache=None, claude=None, managed=None) -> dict:
+    """Check the install and say which route runs the hooks in THIS session.
+
+    Routes, in the order Claude Code would honour them for Token Optimizer:
+    a loaded plugin (installed or account-synced: the kit stands down), the
+    VM's ~/.claude/settings.json (the setup script's primary target), the
+    opt-in managed-settings drop-in, or none. "Hooks missing from
+    ~/.claude/settings.json" while the runner is installed means something
+    rewrote that file after the setup script ran: called out on its own."""
     cache = Path(cache) if cache else cache_dir()
     claude = Path(claude) if claude else claude_dir()
     checks = []
@@ -654,8 +774,8 @@ def doctor(cache=None, claude=None) -> dict:
     def add(ok, name, detail):
         checks.append({"ok": bool(ok), "check": name, "detail": detail})
 
-    remote = os.environ.get("CLAUDE_CODE_REMOTE", "")
-    add(True, "Cloud session", "CLAUDE_CODE_REMOTE=%s" % (remote or "(unset)"))
+    in_cloud = os.environ.get("CLAUDE_CODE_REMOTE", "").strip().lower() == "true"
+    add(True, "Cloud session", _host_detail())
     runner = cache / RUNNER_NAME
     add(runner.is_file(), "Runner", str(runner) if runner.is_file() else "missing: run the setup script")
     versions = sorted((c.name for c in cache.iterdir() if _is_our_version_dir(c)),
@@ -668,34 +788,94 @@ def doctor(cache=None, claude=None) -> dict:
             expected = generate_hook_map(load_hooks_json(root), runner)
         except (OSError, ValueError, KitError) as exc:
             add(False, "Hook map", "cannot build from %s: %s" % (root, exc))
+
+    settings_path = claude / "settings.json"
+    ours = {}
+    settings_error = ""
     try:
-        data, _ = load_settings(claude / "settings.json")
+        data, _ = load_settings(settings_path)
         hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
         ours = {e: _only_ours(gs) for e, gs in hooks.items() if isinstance(gs, list)}
         ours = {e: gs for e, gs in ours.items() if gs}
-        if expected is None:
-            add(bool(ours), "Settings hooks", "%d events wired" % len(ours))
-        else:
-            add(ours == expected, "Settings hooks",
-                "match hooks.json (%d events)" % len(expected) if ours == expected
-                else "drift from hooks.json: re-run the setup script")
     except KitError as exc:
-        add(False, "Settings hooks", str(exc))
+        settings_error = str(exc)
+    managed_hooks = managed_fallback_hooks(managed)
+    managed_path = (Path(managed) if managed else managed_dir()) / MANAGED_FILE
     reason = plugin_loaded(claude)
+
+    if reason:
+        route = "plugin"
+    elif ours:
+        route = "settings"
+    elif managed_hooks:
+        route = "managed"
+    else:
+        route = "none"
+
+    if settings_error:
+        add(False, "Settings hooks", settings_error)
+    elif not ours:
+        if runner.is_file() and in_cloud:
+            add(route in ("managed", "plugin"), "Settings hooks",
+                "MISSING from %s at session time: the setup script wrote them, so something "
+                "rewrote the file after it ran. %s" % (
+                    settings_path,
+                    "Hooks still run through the managed fallback (%s)." % managed_path
+                    if route == "managed" else
+                    "No other route wires them: Token Optimizer is NOT running in this session. "
+                    "Re-run the setup script, or add --managed-fallback to it."
+                    if route == "none" else "The plugin runs the hooks instead."))
+        else:
+            add(route in ("managed", "plugin"), "Settings hooks", "none in %s" % settings_path)
+    elif expected is None:
+        add(True, "Settings hooks", "%d events wired" % len(ours))
+    else:
+        add(ours == expected, "Settings hooks",
+            "match hooks.json (%d events)" % len(expected) if ours == expected
+            else "drift from hooks.json: re-run the setup script")
+
+    if managed_hooks:
+        same = expected is None or managed_hooks == expected
+        add(same, "Managed fallback", "%s (%s)" % (
+            managed_path, "identical to the settings hooks, deduplicated by Claude Code" if same
+            else "drift from hooks.json: re-run the setup script"))
+    else:
+        add(True, "Managed fallback", "not installed (opt-in: cloud-setup-script --managed-fallback)")
     add(True, "Plugin also loaded", ("yes, the cloud hooks stand down (%s)" % reason) if reason else "no")
-    return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
+    labels = {"plugin": "the Token Optimizer plugin (%s)" % reason,
+              "settings": "%s (setup script)" % settings_path,
+              "managed": "%s (managed fallback)" % managed_path,
+              "none": "none: no hooks are wired"}
+    add(route != "none", "Live route", labels[route])
+    try:
+        lines = (cache / ROUTE_LOG).read_text(encoding="utf-8", errors="replace").splitlines()
+        if lines:
+            add(True, "Route log", "%d session start(s) without settings hooks; last: %s"
+                % (len(lines), lines[-1]))
+    except OSError:
+        pass
+    return {"ok": all(c["ok"] for c in checks), "route": route, "checks": checks}
 
 
 # ------------------------------------------------------------------------ CLI
 
-_SETUP_USAGE = """usage: measure.py cloud-setup-script [--latest] [--version V] [--integrity sha512-...]
-                                     [--from-tarball FILE] [--registry URL]
+_SETUP_USAGE = """usage: measure.py cloud-setup-script [--latest] [--managed-fallback] [--version V]
+                                     [--integrity sha512-...] [--from-tarball FILE] [--registry URL]
 
 Prints a setup script for Claude Code cloud environments (claude.ai/code ->
 environment settings -> Setup script). Paste it once per environment: every
 session in that environment, any repo, then runs the real Token Optimizer
-hooks. Default pins this version and its registry sha512. --latest prints a
-script that follows npm's latest tag instead (see the docs for the tradeoff)."""
+hooks. Default pins this version and its registry sha512.
+
+--latest            follow npm's latest tag instead. Each download is checked
+                    against the sha512 the registry publishes, which proves the
+                    bytes are intact, NOT who published them: it trusts whatever
+                    is published under @alexgreensh/token-optimizer.
+--managed-fallback  also write the hooks to /etc/claude-code/managed-settings.d/
+                    (our own drop-in file), in case something rewrites
+                    ~/.claude/settings.json after the setup script. Documented
+                    for self-hosted environments; see the docs."""
 
 
 def main_setup_script(argv) -> int:
@@ -705,11 +885,14 @@ def main_setup_script(argv) -> int:
     opts = {"--version": None, "--integrity": None, "--from-tarball": None, "--registry": None,
             "--tarball-url": None}
     latest = False
+    managed = False
     i = 0
     while i < len(argv):
         a = argv[i]
         if a == "--latest":
             latest = True
+        elif a == "--managed-fallback":
+            managed = True
         elif a in opts and i + 1 < len(argv):
             opts[a] = argv[i + 1]
             i += 1
@@ -720,7 +903,7 @@ def main_setup_script(argv) -> int:
     registry = opts["--registry"] or REGISTRY
     try:
         if latest:
-            sys.stdout.write(render_setup_script_latest(registry))
+            sys.stdout.write(render_setup_script_latest(registry, managed=managed))
             return 0
         version = opts["--version"] or package_version(PLUGIN_ROOT)
         url = opts["--tarball-url"] or tarball_url(version, registry)
@@ -731,7 +914,7 @@ def main_setup_script(argv) -> int:
         else:
             dist = registry_dist(version, registry)
             integrity, url = dist["integrity"], opts["--tarball-url"] or dist["tarball"]
-        sys.stdout.write(render_setup_script(version, integrity, url))
+        sys.stdout.write(render_setup_script(version, integrity, url, managed=managed))
         return 0
     except (KitError, OSError) as exc:
         print("cloud-setup-script: %s" % exc, file=sys.stderr)
