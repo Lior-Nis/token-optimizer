@@ -66,6 +66,14 @@ MUTATIONS = [
      ["tests/test_bundled_prices.py", "tests/test_cost_accuracy_200.py"],
      [("    m = _CLAUDE_GENERATION_RE.search(model_id.lower())\n    if m:",
        "    m = None\n    if m:")]),
+    ("cwd/project mismatch warning printed to stdout (model context, broken hook JSON)",
+     ["tests/test_cloud_parity.py"],
+     [('Using most recent: {result.name}",\n          file=sys.stderr)',
+       'Using most recent: {result.name}")')]),
+    ("Claude Code cloud runs the desktop-only daemon / settings / welcome work",
+     ["tests/test_cloud_parity.py"],
+     [("            return False\n        return is_claude_code_cloud()\n",
+       "            return False\n        return False\n")]),
 ]
 
 
