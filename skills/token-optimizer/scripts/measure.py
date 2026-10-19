@@ -556,14 +556,64 @@ else:
     _CONFIG_BASE = None  # resolved below after constants
 
 
-def _daemon_snapshot_sandboxed():
-    """True when session data was explicitly redirected for tests/sandboxes.
+def _real_account_home():
+    """The OS account's own home directory (pwd entry for this uid), or None
+    where that cannot be known (Windows, no pwd entry)."""
+    try:
+        import pwd  # POSIX only
+        raw = pwd.getpwuid(os.getuid()).pw_dir
+        return Path(raw).resolve() if raw else None
+    except Exception:
+        return None
 
-    A sandbox snapshot must never mutate the machine-wide daemon identity.
-    The value is frozen with SNAPSHOT_DIR at import so later environment drift
-    cannot separate the guard from the paths it protects.
+
+def _is_under(child, parent):
+    try:
+        Path(child).resolve().relative_to(parent)
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+def _compute_home_redirected():
+    """True when HOME, or the resolved Claude home, is not the account's real
+    home: a test sandbox, a scratch e2e run, a second HOME on one account.
+
+    launchd / systemd --user / Task Scheduler jobs are per ACCOUNT, not per
+    HOME, and TO's labels are fixed (com.token-optimizer.dashboard, ...). A
+    redirected-HOME run that installs or restarts one of them re-points the
+    user's LIVE job at the throwaway home (seen 2026-10-19: an e2e run's
+    SessionStart re-bootstrapped the real dashboard agent to a scratch dir).
+    TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 is the explicit escape hatch
+    for a setup that really does run the daemon from a relocated home."""
+    if os.environ.get("TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER", "").strip() == "1":
+        return False
+    real = _real_account_home()
+    if real is None:
+        return False
+    try:
+        if Path(HOME).resolve() != real:
+            return True
+    except (OSError, RuntimeError):
+        return False
+    return not _is_under(CLAUDE_DIR, real)
+
+
+# Frozen at import, like _SNAPSHOT_DIR_OVERRIDE, so later env drift cannot
+# separate the guard from the paths it protects.
+_HOME_REDIRECTED = _compute_home_redirected()
+
+
+def _daemon_snapshot_sandboxed():
+    """True when session data was explicitly redirected for tests/sandboxes,
+    or when HOME / the Claude home is not the account's real home.
+
+    A sandbox must never mutate the machine-wide daemon or scheduler identity:
+    every install / uninstall / restart / revive path checks this first.
+    Both inputs are frozen at import so later environment drift cannot
+    separate the guard from the paths it protects.
     """
-    return bool(_SNAPSHOT_DIR_OVERRIDE)
+    return bool(_SNAPSHOT_DIR_OVERRIDE) or _HOME_REDIRECTED
 
 
 # Cowork dual-write: the per-session state dirs -- QUALITY_CACHE_DIR
@@ -587,6 +637,33 @@ if (
     _STATE_BASE = _RESOLVED_PLUGIN_DATA
 else:
     _STATE_BASE = RUNTIME_DIR
+
+
+def _remote_lean_profile():
+    """True when this process runs in a Claude Code cloud VM and should skip
+    the work that cannot help there.
+
+    A cloud session is an ephemeral Ubuntu VM (root, no status line, no browser,
+    no launchd/systemd user bus, thrown away when the session is reclaimed). In
+    that host TO skips: the dashboard daemon install/revive/auto-update and the
+    background dashboard regen, keep-warm arm + scheduler repair, the status
+    line and hook self-heal writes into ~/.claude/settings.json, the
+    cleanupPeriodDays write, the script-install auto-updater, the marketplace
+    auto-update tip and the first-run welcome (a fresh VM is a "first run" every
+    session). The session-end flush runs inline instead of detached so the data
+    lands before the VM can go away. In-session features (compression, read
+    dedup, archive/expand, checkpoints, trends.db) are untouched.
+
+    ``TOKEN_OPTIMIZER_REMOTE_LEAN=0`` turns the profile off (debugging, or a
+    long-lived self-hosted VM that does have a desktop). Never raises.
+    """
+    try:
+        if os.environ.get("TOKEN_OPTIMIZER_REMOTE_LEAN", "").strip().lower() in ("0", "false", "no", "off"):
+            return False
+        return is_claude_code_cloud()
+    except Exception:
+        return False
+
 
 DASHBOARD_PATH = SNAPSHOT_DIR / "dashboard.html"
 # Headline-shape marker for the current dashboard data contract. Bumped only when the data
@@ -8260,12 +8337,17 @@ def _session_refresh_due(min_interval_seconds=120):
         return True
 
 
-def _run_session_end_flush_worker(args):
-    """Run heavyweight Stop-hook work outside Codex's visible hook budget."""
+def _run_session_end_flush_worker(args, budget_seconds=20):
+    """Run heavyweight Stop-hook work outside Codex's visible hook budget.
+
+    ``budget_seconds`` bounds the whole flush; the inline cloud path passes what
+    is left of the calling hook's own deadline so the flush can never outlive
+    the hook timeout."""
     lock_dir = _acquire_session_end_flush_lock()
     if lock_dir is None:
         return
-    old_budget = _install_hook_budget(20)
+    _lean = _remote_lean_profile()
+    old_budget = _install_hook_budget(budget_seconds)
     try:
         if _session_refresh_due():
             try:
@@ -8314,7 +8396,9 @@ def _run_session_end_flush_worker(args):
             except Exception:
                 pass
             try:
-                if not (_dashboard_hook_backoff_active() or _dashboard_selfheal_inflight()):
+                # No browser in a cloud VM: the 4 MB dashboard rebuild is skipped
+                # there (an explicit /token-dashboard still builds it on demand).
+                if not _lean and not (_dashboard_hook_backoff_active() or _dashboard_selfheal_inflight()):
                     generate_standalone_dashboard(days=30, quiet=True)
             except _HookTimeout:
                 # Gap 4: the bounded SessionEnd regen was killed by the 20s budget
@@ -8593,8 +8677,30 @@ def _dispatch_session_end_flush(args):
     if "--no-defer" in args:
         _run_session_end_flush_worker(args)
         return "inline"
+    if _remote_lean_profile():
+        # Claude Code cloud: a detached worker can be cut off when the VM is
+        # reclaimed right after the session ends, losing the session's rows.
+        # Run the flush in this process instead, bounded by what is left of the
+        # hook's own deadline (Stop 13 s, SessionEnd 58 s) so it never runs past
+        # the hook timeout. A flush that does not fit resumes on the next Stop.
+        _run_session_end_flush_worker(args, budget_seconds=_inline_flush_budget_seconds())
+        return "inline-remote"
     _defer_session_end_flush(args)
     return "deferred"
+
+
+def _inline_flush_budget_seconds(default=8.0, margin=0.5):
+    """Seconds the inline (cloud) session-end flush may use: the remaining time
+    on the active hook deadline minus a margin, or ``default`` without one.
+    Floor 0.5 s so a nearly spent deadline still gets a bounded attempt."""
+    try:
+        from hook_runtime import current_deadline
+        deadline = current_deadline()
+        if deadline is not None:
+            return max(0.5, min(20.0, deadline.remaining() - margin))
+    except Exception:
+        pass
+    return default
 
 
 def _dispatch_collect(args):
@@ -15069,6 +15175,10 @@ def write_keepwarm_arm_record(session_id, transcript_path, now=None):
     try:
         if not session_id or not transcript_path:
             return None
+        # Claude Code cloud: no local CLI to keep warm and the VM is reclaimed
+        # with the session, so an arm record can never be acted on.
+        if _remote_lean_profile():
+            return None
         # ANTI-RECURSION contract: a keep-warm ping subprocess carries
         # TOKEN_OPTIMIZER_KEEPWARM_PING=1; its own Stop hook must never arm,
         # re-arm, or refresh any record -- no self-feeding ping loops.
@@ -16175,6 +16285,10 @@ def _keepwarm_scheduler_install_macos(quiet=False):
     holds the install lock. Idempotent: bootout-then-bootstrap so a re-install
     refreshes the agent in place. Returns (ok, message).
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _daemon_snapshot_sandboxed():
+        return (False, "refused: HOME or the Claude home is redirected away from this account's real home; the scheduler job is per account (set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override)")
     plist_path = _keepwarm_scheduler_plist_path()
     try:
         LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -16273,6 +16387,10 @@ def keepwarm_scheduler_uninstall(quiet=False):
     consent) intact -- only the scheduler's own plist + marker are removed.
     Returns (ok, message).
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _daemon_snapshot_sandboxed():
+        return (False, "refused: HOME or the Claude home is redirected away from this account's real home; the scheduler job is per account (set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override)")
     plist_path = _keepwarm_scheduler_plist_path()
     removed = []
     system = _normalized_platform()
@@ -16346,6 +16464,9 @@ def keepwarm_scheduler_repair(gate=None):
     Returns one of: 'noop-gate', 'noop-no-marker', 'noop-fresh', 'repaired',
     'repair-failed'. Does NOT touch the dashboard plist/lock/regen loop.
     """
+    # Claude Code cloud: no launchd/systemd user scheduler in the VM.
+    if _remote_lean_profile():
+        return "noop-remote"
     # Cheapest gate first: marker existence (one stat) before any gate read.
     marker = _keepwarm_read_scheduler_marker()
     if marker is None:
@@ -25218,8 +25339,8 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                     all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
                     quality_score, quality_grade, stale_waste_tokens, is_sidechain,
                     sidechain_reason, reported_input_tokens, reported_output_tokens,
-                    reported_model_usage_json, platform, session_uuid, daily_usage_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    reported_model_usage_json, platform, session_uuid, daily_usage_json, origin)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(jsonl_path) DO UPDATE SET
                date=MAX(session_log.date, excluded.date),
                project=excluded.project,
@@ -25255,7 +25376,8 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                reported_model_usage_json=excluded.reported_model_usage_json,
                platform=excluded.platform,
                session_uuid=COALESCE(excluded.session_uuid, session_log.session_uuid),
-               daily_usage_json=excluded.daily_usage_json
+               daily_usage_json=excluded.daily_usage_json,
+               origin=COALESCE(session_log.origin, excluded.origin)
                WHERE session_log.collected_at IS NULL
                   OR excluded.collected_at >= session_log.collected_at""",
             (
@@ -34259,6 +34381,10 @@ def _ensure_dashboard_daemon(force=False):
     # detached daemon-revive child calls this with force=True.
     if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
+    # Claude Code cloud VM: no browser to open the URL in, and no systemd user
+    # bus to install a unit on (the install path fails in containers).
+    if _remote_lean_profile():
+        return "noop-remote"
     # Cheapest gates first -- all pure/stat, no subprocess.
     if _is_foreign_runtime() or detect_runtime() != "claude":
         return "noop-foreign"
@@ -34449,6 +34575,8 @@ def _daemon_midsession_pulse():
     try:
         if _daemon_snapshot_sandboxed():
             return "noop-sandbox"
+        if _remote_lean_profile():
+            return "noop-remote"
         # SAFETY gates run EVERY turn, BEFORE the probe throttle: a
         # disabled/uninstalled/thrashing daemon must NEVER be revived, not even on
         # the 59/60 throttled turns. All are cheap (a stat + a small config read +
@@ -34750,6 +34878,10 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
 
     Returns True only when the re-registration succeeded. Never raises.
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _daemon_snapshot_sandboxed():
+        return False
     try:
         if os.name != "nt":
             return False
@@ -45589,6 +45721,10 @@ def _heal_keepwarm_plist_path():
     ~/Library/LaunchAgents on macOS, so on other platforms it simply won't exist
     and this no-ops. Best effort: any failure leaves the plist untouched, False.
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _daemon_snapshot_sandboxed():
+        return False
     if not _is_running_from_plugin_cache():
         return False
     stable = _stable_marketplace_script_path("measure.py")
@@ -46548,6 +46684,13 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False, force=F
       install        -> clears "quality_bar_disabled" (explicit opt-in)
       --uninstall    -> sets   "quality_bar_disabled" (sticky opt-out)
     """
+    # Claude Code cloud has no status line, and in a cloud VM TO's hooks come
+    # from the repo's .claude/settings.json: a silent self-heal that adds our
+    # statusLine + cache hook to ~/.claude/settings.json (which the VM does
+    # read) would double-register the hook. Only the automatic (quiet) callers
+    # are skipped; an explicit `setup-quality-bar` still runs.
+    if quiet and not (dry_run or uninstall or status_only) and _remote_lean_profile():
+        return
     # This function WRITES `settings` back. The old
     # `_read_settings_json()` collapsed a malformed / unreadable / missing file
     # to `{}`, and the write below then rebuilt settings.json from that `{}` --
@@ -54448,6 +54591,9 @@ def run_ensure_health():
     # (opencode, copilot) returned above, but if that guard is ever bypassed
     # they must not be treated as Claude and have ~/.claude written.
     _is_claude = detect_runtime() == "claude"
+    # Claude Code cloud VM: skip everything that only pays off on a machine
+    # that outlives the session (see _remote_lean_profile).
+    _lean = _remote_lean_profile()
 
     # Settings self-heal: runs BEFORE any other settings writes so we see the
     # file as the user left it. Claude Code ONLY -- the wipe bug only affects
@@ -54464,7 +54610,8 @@ def run_ensure_health():
     # Preserve session transcripts: set cleanupPeriodDays if not configured.
     # Claude Code only: writes to ~/.claude/settings.json.
     # Codex and Hermes don't have this setting; their sessions persist by default.
-    if _is_claude:
+    # Not in a cloud VM: its transcripts go away with the VM regardless.
+    if _is_claude and not _lean:
         try:
             # Writes this dict back, so it must not act on an
             # unknown-state or missing-file {}. The `_cp_data` truthiness check
@@ -54539,7 +54686,7 @@ def run_ensure_health():
     # the latest headline shape, so any dashboard missing the marker predates
     # the corrected calculation and is force-refreshed.
     try:
-        if DASHBOARD_PATH.exists():
+        if DASHBOARD_PATH.exists() and not _lean:
             # Cheap staleness check via the sidecar meta (~40 bytes) instead of
             # scanning the 4-5MB HTML every SessionStart. The dashboard is fresh
             # iff the sidecar's version+shape match the running build. A missing
@@ -54610,7 +54757,7 @@ def run_ensure_health():
     try:
         current_marker = f'TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"'
         legacy_dir = RUNTIME_DIR / "_backups" / "token-optimizer"
-        candidate_paths = set() if _daemon_snapshot_sandboxed() else {
+        candidate_paths = set() if (_daemon_snapshot_sandboxed() or _lean) else {
             SNAPSHOT_DIR / "dashboard-server.py", legacy_dir / "dashboard-server.py"}
         # The auto-update refresh writes dashboard-server.py (not the LaunchAgent
         # plist) and reloads via `launchctl kickstart`, which restarts the process
@@ -54827,7 +54974,9 @@ def run_ensure_health():
         pass
     # v5.0.2: Self-heal hooks with correct semantics for each install mode.
     # Claude Code only: reads/writes ~/.claude/settings.json for hook management.
-    if not _is_codex:
+    # Never in a cloud VM: the hooks come from the repo's .claude/settings.json,
+    # so writing them into ~/.claude/settings.json would fire every hook twice.
+    if not _is_codex and not _lean:
         try:
             last_check = _read_config_flag("last_hook_heal_check", 0)
             now = int(time.time())
@@ -54888,8 +55037,10 @@ def run_ensure_health():
             pass
     # v5.1: First-run welcome. Shows once when v5 is first seen on this machine.
     # Routed to stderr so the welcome banner never enters the model's context.
+    # Not in a cloud VM: every cloud session starts on a fresh VM, so the
+    # "first run" banner would repeat every session.
     try:
-        if not _read_config_flag("v5_welcome_shown", False):
+        if not _lean and not _read_config_flag("v5_welcome_shown", False):
             from contextlib import redirect_stdout as _redirect_welcome
             with _redirect_welcome(sys.stderr):
                 _show_v5_welcome()
@@ -55103,7 +55254,7 @@ def run_ensure_health():
         install_dir = RUNTIME_DIR / "token-optimizer"
         update_marker = install_dir / ".last-update-check"
         installer = install_dir / "install.sh"
-        if (install_dir / ".git").is_dir() and installer.exists():
+        if not _lean and (install_dir / ".git").is_dir() and installer.exists():
             should_check = True
             if update_marker.exists():
                 age = time.time() - update_marker.stat().st_mtime
@@ -55137,7 +55288,8 @@ def run_ensure_health():
     try:
         already_shown = _read_config_flag("autoupdate_nudge_shown", False)
         qb_disabled = _read_config_flag("quality_bar_disabled", False)
-        if (_is_running_from_plugin_cache()
+        if (not _lean
+                and _is_running_from_plugin_cache()
                 and not already_shown
                 and not qb_disabled):
             # User-visible onboarding tip. Emitted as a systemMessage so the
@@ -55180,6 +55332,8 @@ def _ensure_health_daemon_revive_first():
     """
     if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
+    if _remote_lean_profile():
+        return "noop-remote"
     try:
         _proc = spawn_detached(
             [_detached_python_exe(), str(MEASURE_PY_PATH), "daemon-revive"],
