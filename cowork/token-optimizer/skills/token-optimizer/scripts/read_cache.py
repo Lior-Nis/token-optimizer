@@ -438,37 +438,87 @@ def _make_store(
 # auto-compact, followed by the summary as a user row with
 # "isCompactSummary": true. A per-session cursor (session_meta) means each
 # Read scans only the bytes appended since the previous Read.
+#
+# The cursor is a {transcript_path: offset} map, not a single path: hooks fired
+# from a subagent carry a different transcript_path than the main session, and
+# with one slot every alternation reset the offset to 0, rescanned the whole
+# file, re-found the OLD boundaries and cleared file_reads again, so read dedup
+# was effectively off in any session that used subagents. Boundaries already
+# acted on are remembered (row uuid, else a hash of the row), so the same
+# boundary never clears twice even if a file is rescanned from 0.
 _COMPACT_SCAN_META_KEY = "compact_scan_cursor"
+_COMPACT_SCAN_MAX_PATHS = 32
+_COMPACT_SCAN_MAX_SEEN = 256
 _COMPACT_MARKERS = (b"compact_boundary", b"isCompactSummary")
 _COMPACT_SCAN_CHUNK = 1 << 20  # 1 MiB
 _COMPACT_SCAN_MAX_SECONDS = 0.25
 
 
-def _is_compact_boundary_row(line: bytes) -> bool:
-    """True for a real compaction row, not a tool result that merely quotes
-    the marker text (reading TO's own source would otherwise trip it)."""
+def _compact_boundary_id(line: bytes, where: str = ""):
+    """Stable id of a real compaction row (its uuid, else a hash of the row and
+    ``where`` it sits: path + byte offset, so two identical uuid-less rows stay
+    distinct), or None when the line is not one: a tool result that merely
+    quotes the marker text (reading TO's own source would otherwise trip it)
+    is not."""
     if not any(m in line for m in _COMPACT_MARKERS):
-        return False
+        return None
     try:
         row = json.loads(line.decode("utf-8", errors="replace"))
     except (ValueError, UnicodeDecodeError):
-        return False
+        return None
     if not isinstance(row, dict):
-        return False
-    if row.get("type") == "system" and row.get("subtype") == "compact_boundary":
-        return True
-    return row.get("isCompactSummary") is True
+        return None
+    if not ((row.get("type") == "system" and row.get("subtype") == "compact_boundary")
+            or row.get("isCompactSummary") is True):
+        return None
+    uuid = row.get("uuid")
+    if isinstance(uuid, str) and uuid:
+        return "u:" + uuid[:80]
+    import hashlib
+    return "h:" + hashlib.sha1(where.encode("utf-8", "replace") + b"\0" + line.strip()).hexdigest()[:20]
+
+
+def _is_compact_boundary_row(line: bytes) -> bool:
+    return _compact_boundary_id(line) is not None
+
+
+def _load_compact_cursor(store: Any) -> tuple:
+    """(paths: {path: offset}, seen: [boundary ids]) from session_meta. Reads
+    the pre-map single-slot shape too. Never raises."""
+    try:
+        raw = store.get_meta(_COMPACT_SCAN_META_KEY)
+        cur = json.loads(raw) if raw else None
+    except Exception:
+        cur = None
+    if not isinstance(cur, dict):
+        return {}, []
+    paths: dict = {}
+    if isinstance(cur.get("paths"), dict):
+        for k, v in cur["paths"].items():
+            try:
+                paths[str(k)] = max(0, int(v))
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(cur.get("path"), str):
+        try:
+            paths[cur["path"]] = max(0, int(cur.get("offset") or 0))
+        except (TypeError, ValueError):
+            pass
+    seen = [x for x in cur.get("seen") or [] if isinstance(x, str)]
+    return paths, seen
 
 
 def _scan_for_compaction(store: Any, transcript_path: Any) -> bool:
-    """Advance this session's transcript cursor; True when a compaction
-    boundary appeared since the last scan.
+    """Advance this session's cursor for ``transcript_path``; True when a
+    compaction boundary not acted on before appeared in that file.
 
     Line-aligned: the cursor only moves past complete lines, so a row being
     written while we read is seen whole on the next Read. Bounded by
-    _COMPACT_SCAN_MAX_SECONDS; an unfinished scan resumes next time. A
-    transcript that shrank or changed path restarts from 0. Fail-open: any
-    error returns False (status quo behaviour), never raises.
+    _COMPACT_SCAN_MAX_SECONDS; an unfinished scan resumes next time. Each
+    transcript keeps its own offset (subagent hooks alternate paths); a
+    transcript that shrank restarts from 0, and a boundary seen before never
+    counts again. Fail-open: any error returns False (status quo behaviour),
+    never raises.
     """
     if store is None or not transcript_path:
         return False
@@ -478,20 +528,14 @@ def _scan_for_compaction(store: Any, transcript_path: Any) -> bool:
         if not stat_module.S_ISREG(st.st_mode):
             return False
         size = st.st_size
-        offset = 0
-        try:
-            raw = store.get_meta(_COMPACT_SCAN_META_KEY)
-            if raw:
-                cur = json.loads(raw)
-                if isinstance(cur, dict) and cur.get("path") == path:
-                    offset = int(cur.get("offset") or 0)
-        except Exception:
-            offset = 0
+        paths, seen = _load_compact_cursor(store)
+        offset = paths.get(path, 0)
         if offset > size:
             offset = 0  # rewritten / truncated transcript: rescan
         if offset == size:
             return False
         found = False
+        new_ids: list = []
         start = time.monotonic()
         pos = offset
         with open(path, "rb") as fh:
@@ -510,18 +554,25 @@ def _scan_for_compaction(store: Any, transcript_path: Any) -> bool:
                     continue
                 complete, carry = buf[: cut + 1], buf[cut + 1:]
                 if any(m in complete for m in _COMPACT_MARKERS):
+                    line_at = pos
                     for line in complete.split(b"\n"):
-                        if line and _is_compact_boundary_row(line):
+                        bid = _compact_boundary_id(line, "%s@%d" % (path, line_at)) if line else None
+                        line_at += len(line) + 1
+                        if bid and bid not in seen and bid not in new_ids:
+                            new_ids.append(bid)
                             found = True
-                            break
                 pos += len(complete)
                 if time.monotonic() - start > _COMPACT_SCAN_MAX_SECONDS:
                     break
-        if pos != offset:
+        if pos != offset or new_ids:
+            paths.pop(path, None)
+            paths[path] = pos  # most recent last; the oldest paths drop first
+            while len(paths) > _COMPACT_SCAN_MAX_PATHS:
+                paths.pop(next(iter(paths)))
+            seen = (seen + new_ids)[-_COMPACT_SCAN_MAX_SEEN:]
             try:
-                store.set_meta(
-                    _COMPACT_SCAN_META_KEY, json.dumps({"path": path, "offset": pos})
-                )
+                store.set_meta(_COMPACT_SCAN_META_KEY,
+                               json.dumps({"v": 2, "paths": paths, "seen": seen}))
             except Exception:
                 pass
         return found
