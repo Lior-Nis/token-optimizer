@@ -99,4 +99,15 @@ MUTATIONS = [
      [DRIFT + "::test_signer_and_installer_checksum_the_same_roots"],
      "scripts/sign-release.sh",
      [("    .codex/ \\\n", "")]),
+
+    # Self-serving sweep: these two tests wrapped the call in try/except
+    # Exception: pass, so a heal that raised still passed them.
+    ("settings self-heal raises on an unreadable or malformed file",
+     ["tests/test_settings_self_heal.py::test_malformed_file_is_left_alone",
+      "tests/test_settings_self_heal.py::test_unreadable_file_is_left_alone"],
+     MEASURE,
+     [("        if not ok or not isinstance(data, dict):\n            return  # unreadable or malformed: fail open\n",
+       "        if not ok or not isinstance(data, dict):\n            raise ValueError(\"planted: unreadable settings\")\n"),
+      ("    except Exception:\n        # Fail open, always. A heal that breaks a session is a worse bug\n",
+       "    except OSError:\n        # Fail open, always. A heal that breaks a session is a worse bug\n")]),
 ]
