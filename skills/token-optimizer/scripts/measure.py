@@ -1930,7 +1930,10 @@ def find_projects_dir():
             return 0
 
     result = max(dirs, key=_safe_mtime)
-    print(f"  [Warning] Could not match cwd to project dir. Using most recent: {result.name}")
+    # stderr, never stdout: this runs inside hooks (SessionStart's ensure-health
+    # path among them), where stdout becomes the model's additionalContext.
+    print(f"  [Warning] Could not match cwd to project dir. Using most recent: {result.name}",
+          file=sys.stderr)
     return result
 
 
