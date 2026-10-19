@@ -1262,6 +1262,26 @@ def _antigravity_signal() -> bool:
     return _ancestor_in_process_tree(_AGY_BASENAMES)
 
 
+def _codex_plugin_env_signal() -> bool:
+    """True when CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA point inside Codex's
+    plugins dir (``<codex home>/plugins/``): a hook Codex loaded from the
+    plugin's hooks.json. Never raises."""
+    try:
+        base = (codex_home() / "plugins").resolve(strict=False)
+        for var in _CLAUDE_PLUGIN_ENVS:
+            raw = os.environ.get(var, "").strip()
+            if not raw:
+                continue
+            try:
+                Path(raw).expanduser().resolve(strict=False).relative_to(base)
+                return True
+            except (ValueError, OSError, RuntimeError):
+                continue
+    except Exception:
+        return False
+    return False
+
+
 @functools.lru_cache(maxsize=None)
 def detect_runtime() -> str:
     """Return the active runtime name.
@@ -1324,6 +1344,16 @@ def detect_runtime() -> str:
 
     if _opencode_process_signal():
         return _RUNTIME_OPENCODE
+
+    # Codex loads the plugin's own hooks/hooks.json and hands each hook ONLY
+    # CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA (no CODEX_HOME, no override;
+    # verified live, see tests/test_codex_sessionstart_json_contract.py). Both
+    # point inside Codex's plugins dir, which no Claude Code plugin uses, so
+    # they name Codex before the Claude plugin-env tier below claims them.
+    # Without this, a Codex session wrote its state into ~/.claude and pointed
+    # Claude Code's statusLine at the Codex plugin cache.
+    if _codex_plugin_env_signal():
+        return _RUNTIME_CODEX
 
     if any(os.environ.get(env_var) for env_var in _CLAUDE_PLUGIN_ENVS):
         return _RUNTIME_CLAUDE

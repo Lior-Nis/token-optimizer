@@ -59,6 +59,17 @@ _PAYLOAD_MODULES = (
     # hermes_session supplies compute_quality_score — without it copilot_session
     # silently falls back to a single-signal estimate (degraded quality grades).
     "hermes_session.py",
+    # spawn_utils supplies spawn_detached — without it the bridge logs
+    # "spawn_utils import failed" on every hook and its degraded fallback does
+    # NOT detach, so Stop-hook spawns die with the hook. hook_runtime supplies
+    # lease_lock (tally RMW); utf8_io is enforced at startup. Cursor and Grok
+    # already ship all three.
+    "spawn_utils.py",
+    "hook_runtime.py",
+    "utf8_io.py",
+    # credential_patterns: bash_compress's credential-preservation patterns and
+    # copilot_session's topic redaction (both fall back to less without it).
+    "credential_patterns.py",
 )
 
 

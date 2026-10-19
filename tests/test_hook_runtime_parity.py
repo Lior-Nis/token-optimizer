@@ -488,11 +488,13 @@ os._exit(0)
 @pytest.fixture()
 def measure_module(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", str(tmp_path / "snapshots"))
-    sys.modules.pop("measure", None)
+    # delitem (not pop) so teardown puts the original module back: a fresh
+    # measure/hook_runtime left in sys.modules splits HookDeadline's registry
+    # from the copy other test modules imported at collection time.
+    monkeypatch.delitem(sys.modules, "measure", raising=False)
     module = importlib.import_module("measure")
     module = importlib.reload(module)
     yield module
-    sys.modules.pop("measure", None)
 
 
 def test_windows_simulation_uses_portable_config_and_tripwire_leases(
@@ -515,7 +517,7 @@ def test_windows_simulation_uses_portable_config_and_tripwire_leases(
     # under the Windows simulation. Pop hook_runtime too so the bridge
     # re-imports it without fcntl.
     for mod_name in ("measure", "copilot_hook_bridge", "hook_runtime"):
-        sys.modules.pop(mod_name, None)
+        monkeypatch.delitem(sys.modules, mod_name, raising=False)
 
     measure = importlib.import_module("measure")
     copilot_bridge = importlib.import_module("copilot_hook_bridge")
@@ -596,8 +598,8 @@ def test_windows_simulation_uses_portable_config_and_tripwire_leases(
             for p in (tmp_path / "copilot").iterdir()
         )
     finally:
-        for mod_name in ("measure", "copilot_hook_bridge", "hook_runtime"):
-            sys.modules.pop(mod_name, None)
+        # monkeypatch.delitem above restores the original modules at teardown.
+        pass
 
 
 def test_config_contention_is_bounded_and_skips_mutation(

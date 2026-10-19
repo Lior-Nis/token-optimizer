@@ -55730,7 +55730,11 @@ def run_ensure_health():
     try:
         already_shown = _read_config_flag("autoupdate_nudge_shown", False)
         qb_disabled = _read_config_flag("quality_bar_disabled", False)
+        # Claude Code steps only: Codex loads the same plugin build from its
+        # own plugin cache, and its users were told to open Claude Code's
+        # /plugin menu.
         if (not _lean
+                and detect_runtime() == "claude"
                 and _is_running_from_plugin_cache()
                 and not already_shown
                 and not qb_disabled):
