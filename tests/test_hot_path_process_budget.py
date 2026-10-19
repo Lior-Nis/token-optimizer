@@ -150,6 +150,12 @@ _RECORDER_SITECUSTOMIZE = textwrap.dedent(r'''
 
         _w("boot", [])
         _Real = _sp.Popen
+        # Popen starts its child through an os primitive (os.posix_spawn on
+        # Linux 3.13+, fork/exec elsewhere). Inside a recorded Popen those calls
+        # are the same process: they pass through to the real primitive and are
+        # not recorded again. Per thread, so concurrent spawns stay separate.
+        import threading as _threading
+        _tls = _threading.local()
 
         class _RecPopen(_Real):
             def __init__(self, args, *a, **kw):
@@ -169,19 +175,24 @@ _RECORDER_SITECUSTOMIZE = textwrap.dedent(r'''
                 # Windows retries ONCE without CREATE_BREAKAWAY_FROM_JOB when
                 # the parent's job object refuses breakaway (the GitHub runner
                 # does); the refused attempt starts nothing and must not count.
+                _tls.inside = getattr(_tls, "inside", 0) + 1
                 try:
                     super().__init__(args, *a, **kw)
                 except BaseException as exc:
                     _w("failed", argv, dispatch=dispatch, flags=flags,
                        error=type(exc).__name__)
                     raise
+                finally:
+                    _tls.inside -= 1
                 _w("dispatch" if dispatch else "popen", argv, flags=flags,
                    child=self.pid)
 
         _sp.Popen = _RecPopen
 
-        def _rec(name):
+        def _rec(name, real):
             def _fn(*a, **k):
+                if getattr(_tls, "inside", 0):
+                    return real(*a, **k)  # Popen's own start: already recorded
                 _w(name, [str(x) for x in a[:3]])
                 return 0
             return _fn
@@ -190,7 +201,7 @@ _RECORDER_SITECUSTOMIZE = textwrap.dedent(r'''
                    "spawnl", "spawnle", "spawnlp", "spawnlpe", "posix_spawn",
                    "posix_spawnp"):
             if hasattr(_os, _n):
-                setattr(_os, _n, _rec(_n))
+                setattr(_os, _n, _rec(_n, getattr(_os, _n)))
 ''')
 
 
@@ -284,7 +295,8 @@ def test_real_dispatch_extra_processes_within_budget(real_dispatch_runs):
     assert not over, f"hook entries over their process budget: {over}"
 
 
-def test_recorder_counts_started_processes_not_refused_attempts(tmp_path):
+@pytest.mark.parametrize("spawn_path", ["default", "posix_spawn"])
+def test_recorder_counts_started_processes_not_refused_attempts(tmp_path, spawn_path):
     """Windows CI 5.13.51: Stop/SessionEnd showed two identical flush-worker
     records. _defer_session_end_flush calls spawn_detached once, and
     spawn_detached's only second Popen is its retry without
@@ -292,20 +304,34 @@ def test_recorder_counts_started_processes_not_refused_attempts(tmp_path):
     one process, two attempts. This pins the recorder's rule on every OS with
     a real refusal (a missing cwd makes CreateProcess/exec fail): a refused
     attempt then a successful retry is ONE started process, while two
-    successful starts stay two."""
+    successful starts stay two.
+
+    ``posix_spawn``: Linux CI 3.13/3.14 starts children through os.posix_spawn
+    inside Popen, which the recorder also hooks, so one process was recorded
+    twice (and the hooked primitive faked the start). Forced here on every
+    POSIX host (``_PYTHON_SUBPROCESS_USE_POSIX_SPAWN=1``, close_fds=False since
+    macOS lacks POSIX_SPAWN_CLOSEFROM) so the path is proven off Linux too."""
+    if spawn_path == "posix_spawn" and not hasattr(os, "posix_spawn"):
+        pytest.skip("no os.posix_spawn on this platform (Windows)")
     rec_dir = tmp_path / "rec"
     rec_dir.mkdir()
     (rec_dir / "sitecustomize.py").write_text(_RECORDER_SITECUSTOMIZE, encoding="utf-8")
     log = tmp_path / "spawns.jsonl"
+    kw = "close_fds=False" if spawn_path == "posix_spawn" else ""
     script = textwrap.dedent(f'''
         import subprocess, sys
         try:
             subprocess.Popen(["schtasks-stand-in", "/x"], cwd={str(tmp_path / "missing")!r}).wait()
         except OSError:
-            subprocess.Popen(["schtasks-stand-in", "/x"]).wait()   # the retry
-        subprocess.Popen(["second-real-start"]).wait()
+            p = subprocess.Popen(["schtasks-stand-in", "/x"], {kw})   # the retry
+            assert p.wait() == 0 and p.pid > 0, (p.pid, p.returncode)
+        p = subprocess.Popen(["second-real-start"], {kw})
+        assert p.wait() == 0 and p.pid > 0, (p.pid, p.returncode)
     ''')
     env = dict(os.environ, TO_SPAWN_LOG=str(log), PYTHONPATH=str(rec_dir))
+    env.pop("_PYTHON_SUBPROCESS_USE_POSIX_SPAWN", None)
+    if spawn_path == "posix_spawn":
+        env["_PYTHON_SUBPROCESS_USE_POSIX_SPAWN"] = "1"
     proc = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
                           text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr

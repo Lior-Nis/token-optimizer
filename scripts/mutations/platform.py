@@ -170,4 +170,12 @@ MUTATIONS = [
      [("                try:\n                    super().__init__(args, *a, **kw)\n",
        '                _w("popen", argv)\n'
        "                try:\n                    super().__init__(args, *a, **kw)\n")]),
+    # Linux CI 3.13+: Popen starts children through os.posix_spawn, which the
+    # recorder also hooks; without the re-entrancy pass-through one process is
+    # recorded twice and the faked primitive returns pid 0.
+    ("budget recorder double-counts Popen's own posix_spawn",
+     [BUDGET + "::test_recorder_counts_started_processes_not_refused_attempts"],
+     BUDGET,
+     [("                if getattr(_tls, \"inside\", 0):\n"
+       "                    return real(*a, **k)  # Popen's own start: already recorded\n", "")]),
 ]
