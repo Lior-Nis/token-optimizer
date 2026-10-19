@@ -56,18 +56,39 @@ def test_every_launcher_command_is_guarded(hooks_path):
         )
 
 
-def test_codex_mirror_uses_runtime_resolver():
-    """The Codex marketplace mirror must self-heal mid-session (resolve the newest
-    version dir per call), since Codex pins ${CLAUDE_PLUGIN_ROOT} to the session's
-    plugin version. Claude/Cowork keep the simpler guard."""
-    codex = _launcher_commands(REPO / "plugins" / "token-optimizer" / "hooks" / "hooks.json")
-    for cmd in codex:
-        assert 'sort -V' in cmd and 'ls -d' in cmd, f"Codex mirror command lost its resolver:\n{cmd}"
-    for tree in ("hooks", "cowork/token-optimizer/hooks"):
+def test_every_manifest_uses_runtime_resolver():
+    """Every plugin manifest must self-heal mid-session (resolve the newest
+    version dir per call): Codex pins ${CLAUDE_PLUGIN_ROOT} to the session's
+    plugin version, and a Claude Code update can delete the loaded version dir
+    under a running session too (5.13.51)."""
+    for tree in ("plugins/token-optimizer/hooks", "hooks", "cowork/token-optimizer/hooks"):
         for cmd in _launcher_commands(REPO / tree / "hooks.json"):
-            assert 'sort -V' not in cmd, (
-                f"{tree} must keep the simple guard (resolver's $(...) breaks Claude dedup):\n{cmd}"
-            )
+            assert 'sort -V' in cmd and 'ls -d' in cmd, f"{tree} command lost its resolver:\n{cmd}"
+
+
+def test_resolver_keeps_per_handler_dedup_identity():
+    """The resolver's $(...) once collapsed every command to the same dedup
+    identity ("run.py:..."), so setup_all_hooks / duplicate cleanup would treat
+    all of an event's hooks as one. Each root entry must keep its own handler
+    identity, distinct across different handlers."""
+    scripts = str(REPO / "skills" / "token-optimizer" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import measure
+    data = json.loads((REPO / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    seen = {}
+    for event, groups in data["hooks"].items():
+        for group in groups:
+            for hook in group["hooks"]:
+                cmd = hook["command"]
+                ident = measure._hook_command_identity(cmd)
+                handler_args = cmd.split('"$D/hooks/run.py"', 1)[1].split(";", 1)[0].strip()
+                handler = handler_args.split()[0].rsplit("/", 1)[-1]
+                assert handler in ident or ident.startswith("run.py:hooks/" + handler), (event, ident, handler)
+                seen.setdefault((event, group.get("matcher")), set()).add(ident)
+    assert all(len(v) == sum(1 for _ in v) for v in seen.values())
+    pre_compact = seen[("PreCompact", None)]
+    assert len(pre_compact) == 3, f"PreCompact's three handlers collapsed: {pre_compact}"
 
 
 @pytest.mark.parametrize("hooks_path", HOOKS_JSON_FILES, ids=lambda p: p.parent.parent.name)

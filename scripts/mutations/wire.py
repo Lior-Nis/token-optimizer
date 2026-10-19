@@ -172,4 +172,9 @@ MUTATIONS = [
      "plugins/token-optimizer/" + MEASURE,
      [("    if _use_codex_session_adapter(resolved):\n        try:\n            roots = [r.resolve() for r in codex_session.session_roots()]",
        "    if _use_codex_session_adapter():\n        try:\n            roots = [r.resolve() for r in codex_session.session_roots()]")]),
+
+    ("resolver $(...) collapses every hook to one dedup identity (setup_all_hooks/cleanup)",
+     ["tests/test_hook_launcher_failopen_guard.py::test_resolver_keeps_per_handler_dedup_identity"],
+     MEASURE,
+     [("    if 'D=\"$(ls -d ' in cmd:", "    if False:")]),
 ]
