@@ -610,9 +610,11 @@ def main() -> int:
     # directly: CPython never caches __pycache__ bytecode for a script run as
     # __main__, only for imported modules, so a direct `python script_path`
     # recompiles the target from source on every single hook invocation. For
-    # measure.py (35k+ lines) that is ~0.3s of pure parse/compile paid on
-    # nearly every tool call. module_runner.py runs it as a module instead, so
-    # the import system's normal bytecode cache applies. See module_runner.py.
+    # measure.py (~2.7 MB) that is 1.7 s on a fast Mac and 20+ s on some
+    # Windows machines (#264), paid on every call. module_runner.py runs it as
+    # a module instead, so the import system's normal bytecode cache applies,
+    # and moves the one cold compile off the hook's deadline. See
+    # module_runner.py.
     module_runner = Path(__file__).resolve().parent / "module_runner.py"
     cmd = [sys.executable, str(module_runner), str(script_path.parent), script_path.stem, *script_args]
 
