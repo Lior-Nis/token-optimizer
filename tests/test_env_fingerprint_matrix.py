@@ -131,6 +131,13 @@ class Machine:
         for meta in (".claude-plugin", ".codex-plugin"):
             if (base / meta).is_dir():
                 shutil.copytree(base / meta, dst / meta, ignore=ignore)
+        # A real install has run before: compile now so the first hook does not
+        # spend the PostToolUse runner's 2.5s self-budget compiling measure.py
+        # (on a slow CI runner it then rightly skips and prints nothing, which
+        # read as a missing envelope). Hosts that move bytecode elsewhere
+        # (hosted VMs) still compile on first use, as they do in real life.
+        import compileall
+        compileall.compile_dir(str(dst), quiet=1)
         return dst
 
     def base_env(self, home: Path) -> dict:
