@@ -78,7 +78,8 @@ jobs:
           npm install -g npm@11.6.2   # trusted publishing needs npm >= 11.5.1
           python3 packaging/npm/build.py --pack
           npm publish "build/npm/alexgreensh-token-optimizer-$ver.tgz" --access public
-          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 10 --wait 15 --match-tree
+          # npm takes minutes to serve a new version ("being processed"); 5.13.52 took ~5.
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 60 --wait 15 --match-tree
 
   sign:
     runs-on: ubuntu-latest
@@ -152,4 +153,4 @@ jobs:
           # release). Older tags whose gate predates the flag run without it.
           match=""
           if grep -q -- '--match-tree' scripts/check_npm_published.py; then match="--match-tree"; fi
-          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 16 --wait 30 $match
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 40 --wait 30 $match
