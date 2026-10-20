@@ -214,6 +214,13 @@ def _real_dispatch(tmp_path, tail, payload, log):
     env["PYTHONPATH"] = str(rec_dir) + (os.pathsep + env["PYTHONPATH"]
                                         if env.get("PYTHONPATH") else "")
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO)
+    # The recorder replaces every child with a stand-in, including the #264
+    # background compiler, so a cold round would wait for a compile that
+    # never happens (Windows: hung to the 120 s timeout; Linux: hooks failed
+    # open and a planted Stop double-spawn went unseen). Gate off = round 1
+    # compiles inline and writes the .pyc; the asserted round is the real
+    # warm steady state, gate check included. The gate has its own tests.
+    env["TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S"] = "-1"
     env.pop("TOKEN_OPTIMIZER_RUNTIME", None)
     proc = subprocess.run([sys.executable, str(HOOKS / "run.py"), *tail],
                           input=json.dumps(payload), capture_output=True, text=True,
