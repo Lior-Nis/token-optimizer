@@ -58,7 +58,9 @@ _SITECUSTOMIZE = textwrap.dedent(r'''
                 row = {"pid": _os.getpid(), "kind": kind, "compiler": _compiler,
                        "argv": [str(a) for a in _sys.argv[:3]] if not _compiler else []}
                 row.update(extra)
-                with open(_LOG, "a", encoding="utf-8") as fh:
+                # One file per process: concurrent appends to a shared file are
+                # not atomic on Windows and dropped rows there (CI, 5.13.51).
+                with open("%%s.%%d" %% (_LOG, _os.getpid()), "a", encoding="utf-8") as fh:
                     fh.write(_json.dumps(row) + "\n")
             except Exception:
                 pass
@@ -171,10 +173,11 @@ class Bench:
         return self.finish(self.start(**kw))
 
     def rows(self):
-        if not self.log.exists():
-            return []
-        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()
-                if line.strip()]
+        rows = []
+        for f in sorted(self.log.parent.glob(self.log.name + ".*")):
+            rows += [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines()
+                     if line.strip()]
+        return rows
 
     def compiler_boots(self):
         return [r for r in self.rows() if r["kind"] == "boot" and r["compiler"]]
@@ -195,10 +198,11 @@ class Bench:
         return False
 
     def clear_log(self):
-        try:
-            self.log.unlink()
-        except OSError:
-            pass
+        for f in self.log.parent.glob(self.log.name + ".*"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
 
 
 def _valid_envelope(out: str) -> bool:
