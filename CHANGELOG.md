@@ -1,8 +1,13 @@
 # Changelog
 
+## [5.13.52] - 2026-10-20
+
+- Context fill reads like your own meter: with a smaller auto-compact window, Claude now sees "38% of 1M window (auto-compact at 500k, 76% of the way there)" instead of a bare 76%, so it stops calling a half-empty session full.
+- Session cost examples in the docs and help text use neutral sample names.
+
 ## [5.13.51] - 2026-10-19
 
-- Ask what any session cost in plain words ("the Navina session yesterday") and get a priced answer.
+- Ask what any session cost in plain words ("the Garden session yesterday") and get a priced answer.
 - Codex and Claude Code side by side stay separate: a Codex session no longer writes its data into Claude Code's folder or changes Claude Code's status line.
 - Codex now saves checkpoints at Stop and before compaction, and its hooks keep working after a plugin update mid-session.
 - After a compact, Claude gets back your real task instead of the compaction summary.

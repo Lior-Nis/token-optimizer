@@ -234,3 +234,90 @@ def test_quality_score_surfaces_the_reduced_window_for_the_note(monkeypatch):
     note = measure._format_window_note(cached)
     assert note.startswith(" (of 600k compact window, 53% of 1M model window, source: ")
     assert "autoCompactWindow=600000" in note
+
+
+# --- the model reads the real-window share first ------------------------------
+#
+# With autoCompactWindow 500k on a 1M model, sessions were told "Context 76%"
+# (76% of the way to auto-compact) while the user's own meter showed 38%. Models
+# quote the first number they read, so they reported "76% of my working memory"
+# and offered handovers. Every model-facing fill phrase must lead with the share
+# of the model window; the auto-compact share may follow, clearly labelled.
+
+import re  # noqa: E402
+
+_FIRST_PCT = re.compile(r"(\d+)%")
+
+
+def _first_pct(text):
+    m = _FIRST_PCT.search(text)
+    assert m, text
+    return int(m.group(1))
+
+
+def test_fill_phrase_leads_with_the_model_window_share():
+    phrase = measure._format_context_fill(87.9, _reduced_cache())
+    assert _first_pct(phrase) == 53, phrase
+    assert phrase.startswith("53% of 1M window")
+    assert "auto-compact at 600k, 88% of the way there" in phrase
+
+
+def test_fill_phrase_matches_the_users_meter_for_a_500k_compact_window():
+    cached = _reduced_cache(fill_pct=76.3, model_fill_pct=38.2, compact_window=500_000)
+    assert _first_pct(measure._format_context_fill(76.3, cached)) == 38
+
+
+def test_fill_phrase_derives_the_model_share_for_an_older_cache():
+    cached = _reduced_cache()
+    del cached["model_fill_pct"]
+    assert _first_pct(measure._format_context_fill(87.9, cached)) == 53
+
+
+def test_fill_phrase_is_unchanged_without_a_reduced_window():
+    cached = _reduced_cache(compact_window_reduced=False)
+    assert measure._format_context_fill(53.0, cached) == "53% (1M window, source: session data)"
+    assert measure._format_context_fill(None, {}) == "?%"
+
+
+def test_display_fill_for_checkpoints_is_the_model_share():
+    assert measure._model_window_fill({"fill_pct": 76.3, "model_fill_pct": 38.2,
+                                       "compact_window_reduced": True}) == 38.2
+    assert measure._model_window_fill({"fill_pct": 40.0, "model_fill_pct": 40.0}) == 40.0
+
+
+def test_every_context_nudge_uses_the_shared_phrase():
+    """Source guard: the verbosity nudges must not hand-build the fill number."""
+    src = Path(measure.__file__).read_text(encoding="utf-8")
+    assert "{fill_pct:.0f}%{window_note}" not in src
+    nudges = re.findall(r'f"\[Token Optimizer\] Context (?:at )?\{([^}]*)\}', src)
+    assert nudges, "context nudges not found"
+    for expr in nudges:
+        assert expr.startswith("_format_context_fill("), expr
+
+
+def test_quality_score_labels_lead_with_the_model_share(monkeypatch):
+    """compute_quality_score's detail and top-drag label feed the post-compact
+    recovery and the dashboard: first number = model-window share."""
+    monkeypatch.setattr(measure, "_read_settings_json", lambda: ({"autoCompactWindow": 600000}, None))
+    monkeypatch.setattr(measure, "_resolve_feature_env", lambda v: None)
+    _clear_window_cache()
+    try:
+        result = measure.compute_quality_score(
+            {
+                "messages": [("user", "hello world " * 10, 40, None)],
+                "tool_results": [], "system_reminders": [], "reads": [], "writes": [],
+                "compactions": 0, "agent_dispatches": [], "decisions": [],
+                "context_tokens": 527_664, "model_context_window": 1_000_000,
+                "model": "claude-sonnet-5", "tool_calls": 0,
+            },
+            session_id="s-first-number",
+        )
+    finally:
+        _clear_window_cache()
+    cfd = result["breakdown"]["context_fill_degradation"]
+    assert _first_pct(cfd["detail"]) == 53, cfd["detail"]
+    assert "88% of the way to auto-compact" in cfd["detail"]
+    assert _first_pct(measure._format_context_fill(cfd["fill_pct"], cfd)) == 53
+    drag = result.get("top_drag") or {}
+    if drag.get("key") == "context_fill":
+        assert _first_pct(drag["label"]) == 53, drag["label"]

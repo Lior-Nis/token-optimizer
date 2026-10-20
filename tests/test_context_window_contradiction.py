@@ -51,7 +51,7 @@ def test_nudge_is_suppressed_when_the_window_is_contradicted():
     # Anchor updated when ResourceHealth stopped being labeled
     # as quality. The invariant is unchanged: suppression first, tiers after.
     # If this index() ever raises, repoint the anchor; do not delete the assertion.
-    tier_at = SRC.index('f"[Token Optimizer] Context {fill_pct:.0f}%{window_note}, resource health')
+    tier_at = SRC.index('f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, resource health')
     assert suppress_at < tier_at, "suppression must precede the nudge tiers"
 
 

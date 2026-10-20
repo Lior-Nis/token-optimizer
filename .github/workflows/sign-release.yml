@@ -46,6 +46,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Publishes the cloud npm package with npm trusted publishing: GitHub's OIDC
+  # identity replaces any token, so nothing secret lives in the repo and nobody
+  # runs a 2FA prompt per release. npmjs.com trusts exactly this workflow file
+  # in the `npm-publish` environment, which only release tags (v*) may deploy to.
+  npm:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Publish @alexgreensh/token-optimizer
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ ! -f packaging/npm/build.py ]; then echo "skipped: $TAG predates the npm package"; exit 0; fi
+          ver="${TAG#v}"
+          # A version's bytes never change once published; a retried run is a no-op.
+          if npm view "@alexgreensh/token-optimizer@$ver" version >/dev/null 2>&1; then
+            echo "$ver is already on npm"; exit 0
+          fi
+          npm install -g npm@11.6.2   # trusted publishing needs npm >= 11.5.1
+          python3 packaging/npm/build.py --pack
+          npm publish "build/npm/alexgreensh-token-optimizer-$ver.tgz" --access public
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 10 --wait 15 --match-tree
+
   sign:
     runs-on: ubuntu-latest
     steps:
@@ -118,4 +152,4 @@ jobs:
           # release). Older tags whose gate predates the flag run without it.
           match=""
           if grep -q -- '--match-tree' scripts/check_npm_published.py; then match="--match-tree"; fi
-          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30 $match
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 16 --wait 30 $match

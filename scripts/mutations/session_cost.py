@@ -10,7 +10,7 @@ MEASURE = "skills/token-optimizer/scripts/measure.py"
 SKILL = "skills/token-dashboard/SKILL.md"
 
 T = "tests/test_session_cost.py"
-HAND = T + "::test_navina_cost_matches_the_hand_worked_dollars"
+HAND = T + "::test_garden_cost_matches_the_hand_worked_dollars"
 PARITY = T + "::test_same_number_as_the_dashboard"
 TEXT = T + "::test_text_output_reads_like_an_answer"
 TWICE = T + "::test_a_session_stored_twice_counts_once"

@@ -12,18 +12,9 @@ Publish the npm package with every plugin release, from the release commit, afte
 
 2. Run the cloud tests: `python3 -m pytest tests/test_cloud_kit.py -q` (the end-to-end test installs that tarball into a fake VM home).
 
-3. Publish that file, not the directory, so the registry's integrity equals the one printed above. Use a fresh granular access token with publish rights on `@alexgreensh/token-optimizer` only, in a throwaway npmrc, never in `~/.npmrc`, from an npm account with two-factor authentication set to "auth and writes":
+3. Publish: automatic. Creating the GitHub release runs the `npm` job in `.github/workflows/sign-release.yml`, which builds this same tarball from the tag and publishes it with npm trusted publishing (GitHub OIDC, no token, provenance attached). npmjs.com trusts only that workflow file in the `npm-publish` environment, which only `v*` tags can deploy to. Nobody logs in or answers a 2FA prompt. A re-run skips a version that is already live.
 
-   ```
-   export NPM_CONFIG_USERCONFIG="$(mktemp)"
-   printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$NPM_CONFIG_USERCONFIG"
-   npm publish build/npm/alexgreensh-token-optimizer-<version>.tgz --access public
-   rm -f "$NPM_CONFIG_USERCONFIG"; unset NPM_CONFIG_USERCONFIG NPM_TOKEN
-   ```
-
-   First publish only: the `@alexgreensh` scope must belong to the publishing npm account (user or org named `alexgreensh`).
-
-   Provenance: `npm publish --provenance` only works from a supported CI runner with an OIDC identity (GitHub Actions with `permissions: id-token: write`); from a laptop npm refuses it. There is no publish workflow today, so local releases publish without provenance, and the protection is the 2FA account plus a single-package token revoked right after. Adding provenance means a release-only workflow that runs `npm publish <tgz> --provenance --access public` with an `NPM_TOKEN` secret; that is Alex's call (it puts a publish credential in the repo's secrets).
+   Manual fallback (only if the workflow is down): `npm login` and `npm publish build/npm/alexgreensh-token-optimizer-<version>.tgz --access public` in a real terminal.
 
 4. Gate: prove the version is on npm with the exact bytes from step 1. The release is not done until this passes:
 
@@ -32,7 +23,7 @@ Publish the npm package with every plugin release, from the release commit, afte
    python3 skills/token-optimizer/scripts/measure.py cloud-setup-script
    ```
 
-   The first command is the same check as `npm view @alexgreensh/token-optimizer@<version> dist.integrity` and exits 1 when the version is missing or its sha512 differs. The second reads the registry too and fails loudly if the version is not there. Publish to npm BEFORE `gh release create`: the Sign release workflow runs the same gate as its last step (after the CHECKSUMS.sha256 upload, so the script installer is never held hostage) and goes red for a release whose npm package is missing.
+   The first command is the same check as `npm view @alexgreensh/token-optimizer@<version> dist.integrity` and exits 1 when the version is missing or its sha512 differs. The second reads the registry too and fails loudly if the version is not there. The Sign release workflow publishes, then runs the same gate as its last step (after the CHECKSUMS.sha256 upload, so the script installer is never held hostage) and goes red for a release whose npm package is missing.
 
 5. Revoke the token. Update the setup script in any cloud environment you run, then start a session there and run `cloud-doctor` (see docs-site install/claude-code-cloud).
 

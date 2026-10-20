@@ -1,4 +1,4 @@
-"""`measure.py session-cost`: "what did the Navina session yesterday cost?"
+"""`measure.py session-cost`: "what did the Garden session yesterday cost?"
 
 Users ask in plain words; Claude runs this command through the token-dashboard
 skill. It must find the right trends.db on every layout, never write to it,
@@ -10,7 +10,7 @@ Expected dollars are worked by hand from pricing/prices.json (anthropic cards):
   claude-haiku-5-5 (haiku_5_5): $0.10 in, $0.50 out, $0.01 cache read
   The opus FAMILY card is $5 / $25 / $0.50 / $6.25: a session priced there is wrong.
 
-Navina session (yesterday, noon): 3 parent calls on Opus 5.5, each
+Garden session (yesterday, noon): 3 parent calls on Opus 5.5, each
   1,000 in + 2,000 out + 100,000 cache read + 10,000 cache write
   = 1000*4 + 2000*20 + 100000*0.2 + 10000*5 = 114,000 / 1e6 = $0.114 per call
   -> main thread 3 * 0.114 = $0.342
@@ -41,15 +41,15 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
 MEASURE = SCRIPTS / "measure.py"
 
-SID_NAVINA = "1a2b3c4d-0000-4000-8000-000000000001"
+SID_GARDEN = "1a2b3c4d-0000-4000-8000-000000000001"
 SID_SYNC = "2b3c4d5e-0000-4000-8000-000000000002"
 SID_TRENDS = "3c4d5e6f-0000-4000-8000-000000000003"
 SID_HEBREW = "4d5e6f70-0000-4000-8000-000000000004"
 SID_LATE = "5e6f7081-0000-4000-8000-000000000005"
 
-NAVINA_MAIN = 3 * 0.114
-NAVINA_SUBS = 2 * 0.0012
-NAVINA_TOTAL = NAVINA_MAIN + NAVINA_SUBS  # $0.3444
+GARDEN_MAIN = 3 * 0.114
+GARDEN_SUBS = 2 * 0.0012
+GARDEN_TOTAL = GARDEN_MAIN + GARDEN_SUBS  # $0.3444
 # Sync session: 2 Opus 5.5 calls of 1,000 in + 1,000 out = (4000 + 20000)/1e6 each.
 SYNC_TOTAL = 2 * 0.024
 
@@ -75,11 +75,11 @@ def _transcript(path, topic, records, sidechain=False):
 def build_history(projects):
     """The synthetic user every test asks about."""
     nav = _noon(1)
-    _transcript(projects / "-Users-u-work-navina-site" / f"{SID_NAVINA}.jsonl",
-                "Navina site doodles for the homepage",
+    _transcript(projects / "-Users-u-work-garden-site" / f"{SID_GARDEN}.jsonl",
+                "Garden site doodles for the homepage",
                 [_assistant(f"nav-{i}", nav + timedelta(minutes=i), model="claude-opus-5-5",
                             inp=1000, out=2000, cr=100_000, cc=10_000) for i in range(3)])
-    _transcript(projects / "-Users-u-work-navina-site" / SID_NAVINA / "subagents" / "agent-a1.jsonl",
+    _transcript(projects / "-Users-u-work-garden-site" / SID_GARDEN / "subagents" / "agent-a1.jsonl",
                 "Explore the repo",
                 [_assistant(f"navsub-{i}", nav + timedelta(minutes=1, seconds=10 * (i + 1)),
                             model="claude-haiku-5-5", inp=2000, out=1000, cr=50_000)
@@ -121,11 +121,11 @@ def _ids(res):
 # Matching
 # --------------------------------------------------------------------------- #
 
-def test_plain_words_and_yesterday_find_the_navina_session(history):
-    res = _q(history, "what", "did", "the", "Navina", "session", "yesterday", "cost?")
-    assert res["query"]["words"] == ["navina"]
+def test_plain_words_and_yesterday_find_the_garden_session(history):
+    res = _q(history, "what", "did", "the", "Garden", "session", "yesterday", "cost?")
+    assert res["query"]["words"] == ["garden"]
     assert res["query"]["date"] == (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
-    assert _ids(res) == [SID_NAVINA]
+    assert _ids(res) == [SID_GARDEN]
 
 
 def test_all_words_must_match_and_short_words_are_whole_tokens(history):
@@ -138,26 +138,26 @@ def test_all_words_must_match_and_short_words_are_whole_tokens(history):
 def test_today_word_and_date_flag(history):
     assert set(_ids(_q(history, "today"))) == {SID_SYNC, SID_TRENDS}
     assert set(_ids(_q(history, "--date", "today"))) == {SID_SYNC, SID_TRENDS}
-    assert _ids(_q(history, "navina", "--date", "today")) == []
+    assert _ids(_q(history, "garden", "--date", "today")) == []
 
 
 def test_id_prefix_and_full_id(history):
-    assert _ids(_q(history, SID_NAVINA[:8])) == [SID_NAVINA]
-    assert _ids(_q(history, "--id", SID_NAVINA)) == [SID_NAVINA]
+    assert _ids(_q(history, SID_GARDEN[:8])) == [SID_GARDEN]
+    assert _ids(_q(history, "--id", SID_GARDEN)) == [SID_GARDEN]
     assert _ids(_q(history, "cost", "of", "session", SID_SYNC[:13])) == [SID_SYNC]
 
 
 def test_unicode_hebrew_and_case_insensitive(history):
     assert _ids(_q(history, "נבינה")) == [SID_HEBREW]
-    assert _ids(_q(history, "NAVINA", "Site")) == [SID_NAVINA]
+    assert _ids(_q(history, "GARDEN", "Site")) == [SID_GARDEN]
 
 
 def test_no_match_says_so_and_offers_the_closest(history):
-    res = _q(history, "navina", "zebra")
+    res = _q(history, "garden", "zebra")
     assert res["match_count"] == 0 and res["sessions"] == []
     assert res["note"] and "collected" in res["note"]
     # The session matching one of the two words comes first.
-    assert res["closest"][0]["session_id"] == SID_NAVINA
+    assert res["closest"][0]["session_id"] == SID_GARDEN
 
 
 def test_session_not_collected_yet_is_explained(history, tmp_path):
@@ -173,12 +173,12 @@ def test_session_not_collected_yet_is_explained(history, tmp_path):
 # Pricing: hand-worked, and identical to the dashboard's own number
 # --------------------------------------------------------------------------- #
 
-def test_navina_cost_matches_the_hand_worked_dollars(history):
-    (s,) = _q(history, "navina", "yesterday")["sessions"]
+def test_garden_cost_matches_the_hand_worked_dollars(history):
+    (s,) = _q(history, "garden", "yesterday")["sessions"]
     c = s["cost_usd"]
-    assert c["total"] == pytest.approx(NAVINA_TOTAL, abs=1e-6)
-    assert c["main_thread"] == pytest.approx(NAVINA_MAIN, abs=1e-6)
-    assert c["subagents"] == pytest.approx(NAVINA_SUBS, abs=1e-6)
+    assert c["total"] == pytest.approx(GARDEN_TOTAL, abs=1e-6)
+    assert c["main_thread"] == pytest.approx(GARDEN_MAIN, abs=1e-6)
+    assert c["subagents"] == pytest.approx(GARDEN_SUBS, abs=1e-6)
     assert c["input"] == pytest.approx(0.0124, abs=1e-6)
     assert c["output"] == pytest.approx(0.121, abs=1e-6)
     assert c["cache_read"] == pytest.approx(0.061, abs=1e-6)
@@ -188,7 +188,7 @@ def test_navina_cost_matches_the_hand_worked_dollars(history):
                            "cache_read": 3 * 100_000 + 2 * 50_000, "cache_write": 3 * 10_000}
     assert s["api_calls"] == 3 and s["subagents"]["included"]
     assert {m["model"] for m in s["models"]} == {"claude-opus-5-5", "claude-haiku-5-5"}
-    assert "not a bill" in _q(history, "navina")["basis"]
+    assert "not a bill" in _q(history, "garden")["basis"]
 
 
 def test_a_multi_day_session_gives_the_asked_days_share(history, tmp_path):
@@ -203,7 +203,7 @@ def test_a_multi_day_session_gives_the_asked_days_share(history, tmp_path):
     assert len(s["days"]) == 2
     assert s["cost_usd"]["total"] == pytest.approx(0.048, abs=1e-6)
     assert s["cost_usd"]["on_date"] == pytest.approx(0.024, abs=1e-6)
-    (one_day,) = _q(history, "navina", "yesterday")["sessions"]
+    (one_day,) = _q(history, "garden", "yesterday")["sessions"]
     assert "on_date" not in one_day["cost_usd"]
 
 
@@ -219,7 +219,7 @@ def test_same_number_as_the_dashboard(history):
     assert set(ours) == set(dash) and len(ours) == res["match_count"] == 4
     for sid, usd in ours.items():
         assert usd == pytest.approx(dash[sid], abs=1e-4), sid
-    assert dash[SID_NAVINA] == pytest.approx(NAVINA_TOTAL, abs=1e-4)
+    assert dash[SID_GARDEN] == pytest.approx(GARDEN_TOTAL, abs=1e-4)
 
 
 def test_a_session_stored_twice_counts_once(history):
@@ -228,12 +228,12 @@ def test_a_session_stored_twice_counts_once(history):
     conn.execute(
         f"INSERT INTO session_log ({', '.join(cols)}) SELECT "
         + ", ".join("jsonl_path || '.copy'" if c == "jsonl_path" else c for c in cols)
-        + " FROM session_log WHERE session_uuid = ?", (SID_NAVINA,))
+        + " FROM session_log WHERE session_uuid = ?", (SID_GARDEN,))
     conn.commit()
     conn.close()
-    res = _q(history, "navina")
-    assert _ids(res) == [SID_NAVINA]
-    assert res["total_cost_usd"] == pytest.approx(NAVINA_TOTAL, abs=1e-6)
+    res = _q(history, "garden")
+    assert _ids(res) == [SID_GARDEN]
+    assert res["total_cost_usd"] == pytest.approx(GARDEN_TOTAL, abs=1e-6)
 
 
 # --------------------------------------------------------------------------- #
@@ -292,12 +292,12 @@ def _plugin_layout(history, root):
 
 def test_finds_the_plugin_data_db_not_a_legacy_one(history, tmp_path):
     home, _db = _plugin_layout(history, tmp_path / "m")
-    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "navina", "yesterday", "--json")
+    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "garden", "yesterday", "--json")
     assert proc.returncode == 0, proc.stderr + proc.stdout
     res = json.loads(proc.stdout)
     assert "plugins/data/token-optimizer-" in res["db"].replace("\\", "/"), res["db"]
-    assert [s["session_id"] for s in res["sessions"]] == [SID_NAVINA]
-    assert res["sessions"][0]["cost_usd"]["total"] == pytest.approx(NAVINA_TOTAL, abs=1e-6)
+    assert [s["session_id"] for s in res["sessions"]] == [SID_GARDEN]
+    assert res["sessions"][0]["cost_usd"]["total"] == pytest.approx(GARDEN_TOTAL, abs=1e-6)
 
 
 def test_finds_the_db_under_claude_config_dir(history, tmp_path):
@@ -325,7 +325,7 @@ def test_never_writes_the_db_even_while_a_writer_holds_the_lock(history, tmp_pat
 
     # No writer attached: lock-free read, and not one file created or touched.
     before = _fingerprint(db.parent)
-    proc = _run(env, "navina", "--json")
+    proc = _run(env, "garden", "--json")
     assert proc.returncode == 0, proc.stderr
     modes = [json.loads(proc.stdout)["read_mode"]]
     assert _fingerprint(db.parent) == before
@@ -335,18 +335,18 @@ def test_never_writes_the_db_even_while_a_writer_holds_the_lock(history, tmp_pat
     writer = sqlite3.connect(str(db), timeout=0.2)
     writer.execute("PRAGMA journal_mode=WAL")
     writer.execute("PRAGMA wal_autocheckpoint=0")
-    writer.execute("UPDATE session_log SET topic = 'Navina, committed in the WAL' WHERE session_uuid = ?",
-                   (SID_NAVINA,))
+    writer.execute("UPDATE session_log SET topic = 'Garden, committed in the WAL' WHERE session_uuid = ?",
+                   (SID_GARDEN,))
     writer.commit()
     writer.execute("BEGIN IMMEDIATE")
-    writer.execute("UPDATE session_log SET topic = 'uncommitted' WHERE session_uuid = ?", (SID_NAVINA,))
+    writer.execute("UPDATE session_log SET topic = 'uncommitted' WHERE session_uuid = ?", (SID_GARDEN,))
     main_before = _db_bytes(db)
-    proc = _run(env, "navina", "--json")
+    proc = _run(env, "garden", "--json")
     assert proc.returncode == 0, proc.stderr
     res = json.loads(proc.stdout)
     modes.append(res["read_mode"])
     # Sees the committed WAL row, not the open transaction.
-    assert [s["topic"] for s in res["sessions"]] == ["Navina, committed in the WAL"]
+    assert [s["topic"] for s in res["sessions"]] == ["Garden, committed in the WAL"]
     assert _db_bytes(db) == main_before
     writer.commit()  # the reader never blocked the writer
     writer.close()
@@ -375,7 +375,7 @@ def test_read_only_run_leaves_db_bytes_and_mtime_alone(history, tmp_path):
     st = db.stat()
     digest = hashlib.sha256(db.read_bytes()).hexdigest()
     names = sorted(p.name for p in db.parent.iterdir())
-    for argv in (("navina", "yesterday"), ("zebra",), ("--id", SID_SYNC), ("--days", "7", "--json")):
+    for argv in (("garden", "yesterday"), ("zebra",), ("--id", SID_SYNC), ("--days", "7", "--json")):
         proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), *argv)
         assert proc.returncode == 0, (argv, proc.stderr)
     assert db.stat().st_mtime_ns == st.st_mtime_ns and db.stat().st_size == st.st_size
@@ -398,16 +398,16 @@ def test_an_older_install_db_is_read_as_is_never_migrated(tmp_path):
                  "model_usage_json TEXT, topic TEXT)")
     conn.execute("INSERT INTO session_log (jsonl_path, date, project, input_tokens, output_tokens, "
                  "cache_hit_rate, model_usage_json, topic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                 (f"/old/-Users-u-navina/{SID_NAVINA}.jsonl", datetime.now().strftime("%Y-%m-%d"),
-                  "-Users-u-navina", 1_000_000, 100_000, 0.0,
-                  json.dumps({"claude-opus-5-5": 1_100_000}), "Navina old install"))
+                 (f"/old/-Users-u-garden/{SID_GARDEN}.jsonl", datetime.now().strftime("%Y-%m-%d"),
+                  "-Users-u-garden", 1_000_000, 100_000, 0.0,
+                  json.dumps({"claude-opus-5-5": 1_100_000}), "Garden old install"))
     conn.commit()
     conn.close()
     before = _fingerprint(data)
-    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "navina", "--json")
+    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "garden", "--json")
     assert proc.returncode == 0, proc.stderr + proc.stdout
     (s,) = json.loads(proc.stdout)["sessions"]
-    assert s["session_id"] == SID_NAVINA
+    assert s["session_id"] == SID_GARDEN
     assert s["cost_usd"]["total"] == pytest.approx(6.00, abs=1e-6)
     assert s["cost_usd"]["input"] == pytest.approx(4.00, abs=1e-6)
     assert s["cost_usd"]["output"] == pytest.approx(2.00, abs=1e-6)
@@ -452,22 +452,22 @@ def test_skill_preamble_plus_command_answers_the_question(history, tmp_path):
     os.symlink(REPO / "skills" / "token-optimizer", skills / "token-optimizer")
     _text, preamble, ask = _skill_blocks()
     assert "<the user's words>" in ask
-    script = preamble + "\n" + ask.replace("<the user's words>", "navina yesterday") + "\n"
+    script = preamble + "\n" + ask.replace("<the user's words>", "garden yesterday") + "\n"
     env = _env(home, CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="cli")
     proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=120, cwd=str(tmp_path))
     assert proc.returncode == 0, proc.stderr + proc.stdout
     res = json.loads(proc.stdout)
-    assert [s["session_id"] for s in res["sessions"]] == [SID_NAVINA]
-    assert res["sessions"][0]["cost_usd"]["total"] == pytest.approx(NAVINA_TOTAL, abs=1e-6)
+    assert [s["session_id"] for s in res["sessions"]] == [SID_GARDEN]
+    assert res["sessions"][0]["cost_usd"]["total"] == pytest.approx(GARDEN_TOTAL, abs=1e-6)
 
 
 def test_text_output_reads_like_an_answer(history, tmp_path):
     home, _db = _plugin_layout(history, tmp_path / "m")
-    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "navina", "yesterday")
+    proc = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "garden", "yesterday")
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
-    assert "Navina site doodles" in out
+    assert "Garden site doodles" in out
     assert "Total:  $0.3444  (main thread $0.3420 + subagents $0.0024)" in out
     assert "not a bill" in out
     bad = _run(_env(home, TOKEN_OPTIMIZER_RUNTIME="claude"), "--date", "someday")
