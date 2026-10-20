@@ -66,7 +66,11 @@ def test_runner_deadline_is_armed_in_the_real_layout(tmp_path, plugin_root, runn
     hooks = plugin_root / "hooks"
     if not (hooks / f"{runner}.py").is_file():
         pytest.skip(f"{runner} not shipped in {plugin_root.name}")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("TOKEN_OPTIMIZER_")}
+    # Keep the cold-compile wait conftest sets on Windows CI: with a fresh
+    # PYTHONPYCACHEPREFIX the hook must wait for the first compile, not fail
+    # open (#264), or this probe has nothing to read.
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("TOKEN_OPTIMIZER_") or k == "TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S"}
     env["PYTHONPYCACHEPREFIX"] = str(tmp_path / "pyc")
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE.format(hooks=str(hooks)), str(hooks), runner],
