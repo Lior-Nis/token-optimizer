@@ -1,6 +1,6 @@
 ---
 name: token-dashboard
-description: Answers what a past session cost ("the Navina session yesterday", a session id) with a priced number, and opens the Token Optimizer dashboard when asked to see it.
+description: Answers what a past session cost ("the Garden session yesterday", a session id) with a priced number, and opens the Token Optimizer dashboard when asked to see it.
 ---
 
 # Token Optimizer Dashboard
@@ -62,11 +62,11 @@ if [ -z "$MEASURE_PY" ]; then echo "[Error] measure.py not found. Is Token Optim
 export TOKEN_OPTIMIZER_RUNTIME="$RUNTIME"
 ```
 
-2. **A cost question** ("what did the Navina session yesterday cost?", "how much were my TR sync sessions?", "cost of session <id>"): run this instead of steps 3-4.
+2. **A cost question** ("what did the Garden session yesterday cost?", "how much were my TR sync sessions?", "cost of session <id>"): run this instead of steps 3-4.
 ```bash
 python3 "$MEASURE_PY" session-cost <the user's words> --json
 ```
-   - Pass the user's own words (`navina yesterday`, `tr sync`, an id or its first 8 characters). Names match topic, slug and project, case-insensitively, and all of them must match; `today`, `yesterday` and `YYYY-MM-DD` set the day. Add `--days N` for "this week" (default 30), `--limit N` to list more.
+   - Pass the user's own words (`garden yesterday`, `tr sync`, an id or its first 8 characters). Names match topic, slug and project, case-insensitively, and all of them must match; `today`, `yesterday` and `YYYY-MM-DD` set the day. Add `--days N` for "this week" (default 30), `--limit N` to list more.
    - Answer from `sessions[]`: date, topic, `cost_usd.total`, the main-thread and subagent split when subagents ran, `cost_usd.on_date` when a day was asked and the session ran over several days, and `partial_reason` when set. Several matches: give `total_cost_usd` and list them, asking which one only when it changes the answer.
    - State `basis` in one line: API list prices, so on a subscription it is what the work would have cost, not a bill.
    - No match: say so, show `closest[]`, and pass on `note` (a session is collected when it ends).

@@ -25956,7 +25956,7 @@ def _price_session_row(sr, pricing_tier):
 
 
 # ---------------------------------------------------------------------------
-# session-cost: "what did the Navina session yesterday cost?" answered from
+# session-cost: "what did the Garden session yesterday cost?" answered from
 # trends.db, priced by _price_session_row (the dashboard's own number). Strictly
 # read-only: the DB is opened mode=ro (WAL readers never block a writer) and,
 # only if that open fails, immutable=1. Nothing here creates, migrates or
@@ -59324,7 +59324,7 @@ if __name__ == "__main__":
         quiet = "--quiet" in args or "-q" in args
         archive_result(quiet=quiet)
     elif args[0] == "session-cost":
-        # "What did the Navina session yesterday cost?" Read-only; see session_cost_main.
+        # "What did the Garden session yesterday cost?" Read-only; see session_cost_main.
         sys.exit(session_cost_main(args[1:]))
     elif args[0] == "expand":
         # Retrieve archived tool result
@@ -59507,7 +59507,7 @@ if __name__ == "__main__":
         print("  python3 measure.py attention-optimize --apply        # Apply reordering (backup + write)")
         print("  python3 measure.py archive-result                        # PostToolUse hook: archive large tool results")
         print("  python3 measure.py archive-result --quiet                 # Silent mode (suppress stderr)")
-        print("  python3 measure.py session-cost navina --date yesterday   # What a session cost, in your words (read-only)")
+        print("  python3 measure.py session-cost garden --date yesterday   # What a session cost, in your words (read-only)")
         print("  python3 measure.py session-cost --id UUID --json          # One session by id, machine-readable")
         print("  python3 measure.py expand TOOL_USE_ID                     # Retrieve archived tool result")
         print("  python3 measure.py expand TOOL_USE_ID --session SID       # Retrieve from specific session")
