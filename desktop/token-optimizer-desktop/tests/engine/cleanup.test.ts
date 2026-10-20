@@ -1,8 +1,8 @@
 // Clean up's outcome through register.tsx inside the engine (#207): "Cleaned up." only
 // on evidence that a compaction happened, never from the words of /compact's reply.
-import { expect, test, type Engine } from 'claude-code/testing'
+import { expect, type Engine } from 'claude-code/testing'
 
-import { BAND, START, stub, type World } from './world.ts'
+import { BAND, START, stub, type World, test } from './world.ts'
 
 const has = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }, text: string) =>
   (await ui.findAll({ type: 'Text' })).some(t => t.text.includes(text))

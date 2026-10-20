@@ -1,8 +1,8 @@
 // The band as drawn: Clawd, the sentence, five marks, hover cards and
 // the unfolding row on desktop; nothing on the terminal or when switched off.
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
-import { BAND, START, quality, stub, type World } from './world.ts'
+import { BAND, START, quality, stub, type World, test } from './world.ts'
 
 /** Sags the session's quality below the floor, so the row's clean-up buttons are called for. */
 function sag(w: World): void {
@@ -343,7 +343,7 @@ test('a reduced window with unknown tokens never shows the old quality-cache fil
     context: { window: 1_000_000, percent: 18 },
   })
   const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
-  const q = JSON.parse(w.files[key][1])
+  const q = JSON.parse(w.files[key]![1])
   w.files[key] = [1, JSON.stringify({ ...q, fill_pct: 18 })]
   await $.session.start(START)
   await w.clock.settle()

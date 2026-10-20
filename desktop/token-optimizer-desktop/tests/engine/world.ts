@@ -1,7 +1,7 @@
 // A session as the band sees it, for the engine tests: every noun the mod
 // calls answered from memory beneath the plugin. Not a test file itself.
 import type { On } from 'claude-code'
-import { mock } from 'claude-code/testing'
+import { mock, test as kitTest, type Engine } from 'claude-code/testing'
 
 export const HOME = '/home/me'
 export const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
@@ -15,6 +15,55 @@ export const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
+
+/**
+ * A world's waits still held, each with what lets it go at once.
+ *
+ * A wait the test world holds on the mocked clock (a hung compaction, a slow save) and the
+ * test never advances past is let go by the kit after a hook's budget, ten seconds of real
+ * time, while a later test runs; the band's work behind it then lands in that test, which
+ * fails (a press lost, "Cleaning up." from nowhere, about 1 run in 4; #263's follow-up).
+ * Every engine test ends by letting its own held waits go (`test` below), so their work
+ * lands in the test that started it.
+ */
+const held = new Set<() => void>()
+
+/** The mocked clock's sleep, which the end of its test can let go early. */
+function holdable(sleep: (ms: number) => Promise<void>): (ms: number) => Promise<void> {
+  return ms =>
+    new Promise<void>(resolve => {
+      const done = () => {
+        if (!held.delete(done)) return
+        resolve()
+      }
+      held.add(done)
+      void sleep(ms).then(done, done)
+    })
+}
+
+/** Worlds stubbed in the running test, settled again once its held waits are let go. */
+const settling: Array<() => Promise<void>> = []
+
+/**
+ * The kit's `test`, ending each test by letting the waits its world still holds go and
+ * settling what they started, inside the test, failing or not. Engine tests import `test`
+ * from here, never from the kit.
+ */
+type Body = ($: Engine, on: On) => unknown
+export function test(name: string, ...rest: [Body] | [Parameters<typeof kitTest>[1], Body]): void {
+  const body = rest[rest.length - 1] as Body
+  const wrapped: Body = async ($, on) => {
+    try {
+      return await body($, on)
+    } finally {
+      for (const done of [...held]) done()
+      for (const settle of settling.splice(0)) await settle()
+      held.clear()
+    }
+  }
+  if (rest.length === 1) kitTest(name, wrapped)
+  else kitTest(name, rest[0] as never, wrapped)
+}
 
 /**
  * The kit's settle runs what is due on the mocked clock, but work a timer starts can go on
@@ -37,6 +86,8 @@ function steady<C extends { settle: () => Promise<void> }>(clock: C): C {
     out[key] = typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(clock) : value
   }
   out.settle = steadySettle
+  out.sleep = holdable((out.sleep as (ms: number) => Promise<void>))
+  settling.push(steadySettle)
   return out as C
 }
 

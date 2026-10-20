@@ -1,9 +1,9 @@
 // The slim band: one line with a tiny Clawd, the + button and the five marks,
 // its right end decided by the sentence; the user's size kept in $.store, with
 // TOKEN_OPTIMIZER_STATUS_BAR_SIZE as the default when nothing is stored.
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
-import { BAND, START, stub, type World } from './world.ts'
+import { BAND, START, stub, type World, test } from './world.ts'
 
 type Finder = { findAll: (q: { type: string; text?: string }) => Promise<{ text: string; props: Record<string, unknown> }[]> }
 
@@ -157,7 +157,7 @@ test('the unfolded row opens under the slim line and follows the user across siz
 test('a sentence with a button shows its icon and that button on the slim line, nothing else', async ($, on) => {
   const w = stub(on)
   const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
-  w.files[key] = [1, JSON.stringify({ ...JSON.parse(w.files[key][1]), resource_health: 60 })]
+  w.files[key] = [1, JSON.stringify({ ...JSON.parse(w.files[key]![1]), resource_health: 60 })]
   await $.session.start(START)
   await w.clock.settle()
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })

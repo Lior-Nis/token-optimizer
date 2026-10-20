@@ -1,9 +1,9 @@
 // The band shares AbovePrompt (#263): another mod's band later in the chain is drawn
 // beneath ours, in both sizes; with nothing beneath, ours is drawn alone, as before.
 import type { On } from 'claude-code'
-import { expect, test, type Engine } from 'claude-code/testing'
+import { expect, type Engine } from 'claude-code/testing'
 
-import { BAND, START, stub } from './world.ts'
+import { BAND, START, stub, test } from './world.ts'
 
 type Drawn = { type: string; props?: Record<string, unknown>; part?: { plugin: string }; children?: Drawn[] }
 

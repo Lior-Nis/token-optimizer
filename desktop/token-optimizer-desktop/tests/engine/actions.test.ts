@@ -1,8 +1,8 @@
 // The three buttons: Clean up, Start fresh and Keep warm through
 // register.tsx inside the engine, every guard on the mocked clock.
-import { expect, test, type Engine } from 'claude-code/testing'
+import { expect, type Engine } from 'claude-code/testing'
 
-import { BAND, NOW_MS, START, stub } from './world.ts'
+import { BAND, NOW_MS, START, stub, test } from './world.ts'
 
 const sentenceOf = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) =>
   (await ui.findAll({ type: 'Text' })).map(t => t.text)
