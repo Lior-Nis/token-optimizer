@@ -115,6 +115,8 @@ class Bench:
             "XDG_DATA_HOME": str(self.home / ".local" / "share"),
             "XDG_STATE_HOME": str(self.home / ".local" / "state"),
             "LOCALAPPDATA": str(self.home / "AppData" / "Local"),
+            # The runners bootstrap config (ensure-health): pin it to the fixture.
+            "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
             "CLAUDE_PLUGIN_ROOT": str(REPO),
             "TOKEN_OPTIMIZER_NO_PROC_SCAN": "1",
             # What the Claude desktop app sets (#264).
