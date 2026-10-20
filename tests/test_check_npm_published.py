@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import http.server
 import os
+import re
 import json
 import subprocess
 import sys
@@ -136,7 +137,8 @@ def test_gate_is_wired_into_the_release():
     the script installer) and the documented publish steps."""
     wf = (REPO / ".github" / "workflows" / "sign-release.yml").read_text(encoding="utf-8")
     assert "scripts/check_npm_published.py" in wf
-    assert wf.index("bash scripts/sign-release.sh") < wf.index("scripts/check_npm_published.py")
+    assert wf.index("bash scripts/sign-release.sh") < wf.index(
+        "- name: Check the cloud npm package for this release is published")
     releasing = (REPO / "packaging" / "npm" / "RELEASING.md").read_text(encoding="utf-8")
     assert "scripts/check_npm_published.py --expect-integrity" in releasing
 
@@ -170,3 +172,31 @@ def test_sign_release_gate_skips_tags_that_predate_the_script(tmp_path):
     new = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), capture_output=True, text=True,
                          env={"PATH": os.environ.get("PATH", ""), "TAG": "v9.9.9"}, timeout=30)
     assert new.returncode == 1 and "GATE" in new.stdout and "v9.9.9" in new.stdout
+
+
+def _npm_job() -> str:
+    wf = (REPO / ".github" / "workflows" / "sign-release.yml").read_text(encoding="utf-8")
+    return wf[wf.index("\n  npm:\n"):wf.index("\n  sign:\n")]
+
+
+def test_release_publishes_npm_with_trusted_publishing_not_a_token():
+    """Every release publishes the npm package from CI through npm trusted
+    publishing (GitHub OIDC), so no publish token sits in the repo and nobody
+    answers a 2FA prompt per release."""
+    job = _npm_job()
+    assert "id-token: write" in job
+    assert "environment: npm-publish" in job  # npmjs.com trusts this env, tags only
+    assert "npm publish " in job and "--access public" in job
+    assert "NPM_TOKEN" not in job and "NODE_AUTH_TOKEN" not in job
+    # Trusted publishing needs npm >= 11.5.1; Node 24 ships older.
+    m = re.search(r"npm install -g npm@(\d+)\.(\d+)\.(\d+)", job)
+    assert m and tuple(map(int, m.groups())) >= (11, 5, 1), job
+    # The published bytes are proven against the tagged tree before success.
+    assert job.index("npm publish ") < job.index("check_npm_published.py")
+    assert "--match-tree" in job
+
+
+def test_npm_publish_is_idempotent_for_a_retried_release():
+    """A version's bytes never change once published: a re-run must skip."""
+    job = _npm_job()
+    assert job.index("npm view") < job.index("npm publish ")
