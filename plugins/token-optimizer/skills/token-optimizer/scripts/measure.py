@@ -26243,7 +26243,7 @@ def _session_cost_entry(row, tier, date_filter=None, current_id=None):
     if abs(adjustment) >= 0.0001:
         entry["cost_usd"]["long_context_adjustment"] = round(adjustment, 4)
     if date_filter and len(entry["days"]) > 1:
-        entry["cost_usd"]["on_" + date_filter] = round(
+        entry["cost_usd"]["on_date"] = round(
             sum(sl[1] for sl in priced["slices"] if sl[0] == date_filter), 4)
     return entry
 
@@ -26395,7 +26395,7 @@ def _usd(v):
     return f"${v:,.2f}" if abs(v) >= 1 else f"${v:.4f}"
 
 
-def _print_session_cost_entry(n, e):
+def _print_session_cost_entry(n, e, date_filter=None):
     title = e["topic"] or e["slug"] or "(untitled session)"
     days = e["days"]
     when = days[0] if len(days) == 1 else f"{days[0]} to {days[-1]}"
@@ -26424,9 +26424,8 @@ def _print_session_cost_entry(n, e):
     elif sub["count"]:
         split = "  (main thread only; subagents are added on the next collection)"
     print(f"   Total:  {_usd(c['total'])}{split}")
-    for k, v in c.items():
-        if k.startswith("on_"):
-            print(f"   Of which on {k[3:]}: {_usd(v)}")
+    if "on_date" in c:
+        print(f"   Of which on {date_filter}: {_usd(c['on_date'])}")
     if e["partial"]:
         print(f"   Partial: {e['partial_reason']} (figures as of {e['collected_at']}).")
 
@@ -26460,7 +26459,7 @@ def session_cost_main(argv):
             print(f"(showing the newest {res['shown']}; --limit N shows more)")
         print()
         for i, e in enumerate(res["sessions"], 1):
-            _print_session_cost_entry(i, e)
+            _print_session_cost_entry(i, e, q["date"])
             print()
     else:
         print(f"Session cost: no session matches {scope_txt}.")
@@ -26471,7 +26470,7 @@ def session_cost_main(argv):
             print("Closest sessions:")
             print()
             for i, e in enumerate(res["closest"], 1):
-                _print_session_cost_entry(i, e)
+                _print_session_cost_entry(i, e, q["date"])
                 print()
     print(f"Basis: {res['basis']}")
     if res.get("read_mode") == "snapshot":

@@ -191,6 +191,22 @@ def test_navina_cost_matches_the_hand_worked_dollars(history):
     assert "not a bill" in _q(history, "navina")["basis"]
 
 
+def test_a_multi_day_session_gives_the_asked_days_share(history, tmp_path):
+    """Two Opus 5.5 calls of 1,000 in + 1,000 out ($0.024 each), one two days
+    ago and one yesterday: total $0.048, of which yesterday $0.024."""
+    _transcript(tmp_path / "claude_home" / "projects" / "-Users-u-longrun" / f"{SID_LATE}.jsonl",
+                "Longrun accelerator work",
+                [_assistant("long-0", _noon(2), model="claude-opus-5-5", inp=1000, out=1000),
+                 _assistant("long-1", _noon(1), model="claude-opus-5-5", inp=1000, out=1000)])
+    history.collect_sessions(days=30, quiet=True)
+    (s,) = _q(history, "longrun", "yesterday")["sessions"]
+    assert len(s["days"]) == 2
+    assert s["cost_usd"]["total"] == pytest.approx(0.048, abs=1e-6)
+    assert s["cost_usd"]["on_date"] == pytest.approx(0.024, abs=1e-6)
+    (one_day,) = _q(history, "navina", "yesterday")["sessions"]
+    assert "on_date" not in one_day["cost_usd"]
+
+
 def test_same_number_as_the_dashboard(history):
     """Call both: the dashboard's session_cost_usd and session-cost's total."""
     res = _q(history, "--days", "30")

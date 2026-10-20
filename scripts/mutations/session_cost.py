@@ -22,6 +22,7 @@ OLD_DB = T + "::test_an_older_install_db_is_read_as_is_never_migrated"
 WORDS = T + "::test_all_words_must_match_and_short_words_are_whole_tokens"
 FRONT = T + "::test_skill_frontmatter_lets_claude_pick_it_for_cost_questions"
 ENTRY = T + "::test_skill_preamble_plus_command_answers_the_question"
+DAY = T + "::test_a_multi_day_session_gives_the_asked_days_share"
 
 MUTATIONS = [
     ("Opus 5.5 billed at the opus family card, not its generation card",
@@ -81,4 +82,9 @@ MUTATIONS = [
      SKILL,
      [("python3 \"$MEASURE_PY\" session-cost <the user's words> --json",
        "python3 \"$MEASURE_PY\" session-costs <the user's words> --json")]),
+    ("a multi-day session's 'yesterday' share is the whole session",
+     [DAY],
+     MEASURE,
+     [("            sum(sl[1] for sl in priced[\"slices\"] if sl[0] == date_filter), 4)",
+       "            sum(sl[1] for sl in priced[\"slices\"]), 4)")]),
 ]

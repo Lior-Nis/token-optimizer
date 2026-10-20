@@ -67,7 +67,7 @@ export TOKEN_OPTIMIZER_RUNTIME="$RUNTIME"
 python3 "$MEASURE_PY" session-cost <the user's words> --json
 ```
    - Pass the user's own words (`navina yesterday`, `tr sync`, an id or its first 8 characters). Names match topic, slug and project, case-insensitively, and all of them must match; `today`, `yesterday` and `YYYY-MM-DD` set the day. Add `--days N` for "this week" (default 30), `--limit N` to list more.
-   - Answer from `sessions[]`: date, topic, `cost_usd.total`, the main-thread and subagent split when subagents ran, and `partial_reason` when set. Several matches: give `total_cost_usd` and list them, asking which one only when it changes the answer.
+   - Answer from `sessions[]`: date, topic, `cost_usd.total`, the main-thread and subagent split when subagents ran, `cost_usd.on_date` when a day was asked and the session ran over several days, and `partial_reason` when set. Several matches: give `total_cost_usd` and list them, asking which one only when it changes the answer.
    - State `basis` in one line: API list prices, so on a subscription it is what the work would have cost, not a bill.
    - No match: say so, show `closest[]`, and pass on `note` (a session is collected when it ends).
    - Never query trends.db or price tokens yourself: this is the dashboard's own number, read without writing.
