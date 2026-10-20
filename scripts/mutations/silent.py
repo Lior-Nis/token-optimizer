@@ -49,7 +49,7 @@ MUTATIONS = [
      [REAL_LAYOUT + "::test_runner_deadline_is_armed_in_the_real_layout[posttooluse_runner-4.5-canonical]",
       POST_HOOK],
      MODULE_RUNNER,
-     [("            sys.path.append(_plugin_scripts)\n", "            pass\n")]),
+     [("        sys.path.append(_plugin_scripts)\n", "        pass\n")]),
 
     # #253: the before-compact capture was cut off by its budget and the hook
     # still exited 0; no checkpoint, the restore used an older one.
