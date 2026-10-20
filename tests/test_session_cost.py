@@ -266,7 +266,7 @@ def _env(home, **extra):
 
 def _run(env, *argv, cwd=None):
     proc = subprocess.run([sys.executable, str(MEASURE), "session-cost", *argv], env=env,
-                          capture_output=True, text=True, timeout=120, cwd=cwd)
+                          capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=cwd)
     return proc
 
 
@@ -455,7 +455,7 @@ def test_skill_preamble_plus_command_answers_the_question(history, tmp_path):
     script = preamble + "\n" + ask.replace("<the user's words>", "navina yesterday") + "\n"
     env = _env(home, CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="cli")
     proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True,
-                          timeout=120, cwd=str(tmp_path))
+                          encoding="utf-8", timeout=120, cwd=str(tmp_path))
     assert proc.returncode == 0, proc.stderr + proc.stdout
     res = json.loads(proc.stdout)
     assert [s["session_id"] for s in res["sessions"]] == [SID_NAVINA]
