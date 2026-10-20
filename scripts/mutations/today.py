@@ -110,4 +110,9 @@ MUTATIONS = [
        "")]),
     # The 5.13.50 cwd-warning-to-stdout regression is in the core list of
     # check_regression_guards.py ("cwd/project mismatch warning printed to stdout").
+    ("deadline remaining() can exceed its own length by float rounding (Windows CI, 5.13.51)",
+     ["tests/test_cloud_parity.py::test_deadline_remaining_never_exceeds_its_length"],
+     "skills/token-optimizer/scripts/hook_runtime.py",
+     [("        return min(self.seconds, max(0.0, self.end - time.monotonic()))",
+       "        return max(0.0, self.end - time.monotonic())")]),
 ]

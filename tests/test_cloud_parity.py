@@ -1370,3 +1370,16 @@ def test_redirected_home_refuses_every_scheduler_write(tmp_path):
     assert out["kw_heal"] is False and out["win_heal"] is False
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
     assert calls == "", f"scheduler commands ran from a redirected HOME:\n{calls}"
+
+
+def test_deadline_remaining_never_exceeds_its_length(monkeypatch):
+    """Windows CI (5.13.51): remaining() read in the same clock tick as start
+    returned 10.000000000000028 for a 10 s deadline (float rounding of
+    (t0 + s) - t0 at a large monotonic t0), and the inline flush budget then
+    overran its share by that much."""
+    import hook_runtime
+    t0 = 1234567.891  # a large monotonic value, as on a long-running host
+    monkeypatch.setattr(hook_runtime.time, "monotonic", lambda: t0)
+    for seconds in (10, 10.0, 13.0, 4.5, 0.1):
+        d = hook_runtime.HookDeadline(seconds)
+        assert d.remaining() <= seconds, (seconds, d.remaining())
