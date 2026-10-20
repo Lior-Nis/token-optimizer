@@ -189,6 +189,15 @@ class Bench:
                              for a in r["argv"][:2])}
         return [r for r in self.rows() if r["kind"] == "exit" and r["pid"] in hook_pids]
 
+    def wait_for_lock_release(self, timeout=30.0):
+        lock = self.measure_pyc().parent / ".token-optimizer-compile.lock"
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if not lock.exists():
+                return True
+            time.sleep(0.1)
+        return False
+
     def wait_for_pyc(self, timeout=150.0):
         end = time.monotonic() + timeout
         while time.monotonic() < end:
@@ -243,7 +252,9 @@ def test_slow_cold_compile_runs_once_in_the_background_and_hooks_fail_open(bench
     assert len(bench.compiler_boots()) == 1, (
         f"{len(bench.compiler_boots())} background compiles for 4 concurrent cold hooks")
     assert bench.wait_for_pyc(), f"no fresh measure .pyc under the prefix: {bench.measure_pyc()}"
-    assert not (bench.measure_pyc().parent / ".token-optimizer-compile.lock").exists()
+    # The compiler writes the .pyc, then releases its lock: wait for the
+    # release instead of racing it (a slow runner lost that race in CI).
+    assert bench.wait_for_lock_release(), "the compile lock was never released"
 
     bench.clear_log()
     rc, out, err, elapsed = bench.fire(**slow)
