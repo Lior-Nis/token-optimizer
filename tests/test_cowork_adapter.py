@@ -220,6 +220,11 @@ _RUNTIME_ENV_TO_CLEAR = (
     "CLAUDE_PLUGIN_ROOT",
     "CLAUDE_PLUGIN_DATA",
     "CLAUDE_CODE_CONTAINER_ID",
+    "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE",
+    "TOKEN_OPTIMIZER_REMOTE_HOST",
+    "TOKEN_OPTIMIZER_CLOUD_KIT_VERSION",
 )
 
 
@@ -262,29 +267,33 @@ def test_cowork_container_is_still_the_claude_runtime(monkeypatch):
         _cache_clear(runtime_env.detect_runtime)
 
 
-def test_cowork_signal_true_under_container_id(monkeypatch):
-    # Spec item 4: with CLAUDE_CODE_CONTAINER_ID set, runtime_env reports the
-    # cowork signal true (and false without it). Skips until the surface lands.
+def test_cowork_signal_true_under_synced_plugin_root(monkeypatch):
+    # Spec item 4, revised 2026-10-19: CLAUDE_CODE_CONTAINER_ID or a synced
+    # plugin root marks Cowork only without cloud evidence (the cloud VM sets
+    # both, always with its session id). Skips until the surface lands.
     import runtime_env  # noqa: E402
 
     name, fn = _find_cowork_signal(runtime_env)
     if fn is None:
         pytest.skip(
             "cowork detection surface not yet landed in runtime_env "
-            f"(probed: {', '.join(COWORK_SIGNAL_CANDIDATES)}). "
-            "build/findings/core-parity.md was absent, so the public name could "
-            "not be confirmed; extend COWORK_SIGNAL_CANDIDATES once the core "
-            "lane documents it."
+            f"(probed: {', '.join(COWORK_SIGNAL_CANDIDATES)})."
         )
 
     _reset_runtime_env(monkeypatch, runtime_env)
     _cache_clear(fn)
-    assert not fn(), f"{name}() should be False without CLAUDE_CODE_CONTAINER_ID"
-
+    assert not fn(), f"{name}() should be False with no Cowork marker"
     monkeypatch.setenv("CLAUDE_CODE_CONTAINER_ID", "cowork-container-xyz789")
+    assert fn(), f"{name}() should be True on CLAUDE_CODE_CONTAINER_ID without cloud evidence"
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01X")
+    assert not fn(), f"{name}() must be False when the cloud session id is present"
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE_SESSION_ID")
+    monkeypatch.delenv("CLAUDE_CODE_CONTAINER_ID")
+
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/root/.claude/plugins/synced/acct/token-optimizer-cowork")
     _cache_clear(fn)
     _cache_clear(runtime_env.detect_runtime)
-    assert fn(), f"{name}() should be True when CLAUDE_CODE_CONTAINER_ID is set"
+    assert fn(), f"{name}() should be True under a synced plugin root"
     # And the runtime is still claude while the cowork signal is up.
     assert runtime_env.detect_runtime() == "claude"
     _cache_clear(runtime_env.detect_runtime)

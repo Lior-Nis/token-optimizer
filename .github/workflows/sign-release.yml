@@ -93,3 +93,29 @@ jobs:
           echo "Verifying the tagged tree against the released manifest..."
           sha256sum -c /tmp/released.sha256 --quiet
           echo "OK: $(wc -l < /tmp/released.sha256) entries verified."
+
+      # Release gate for the Claude Code cloud package. Cloud setup scripts
+      # install @alexgreensh/token-optimizer@<this version> from npm; a release
+      # without it hands every cloud user a script that installs nothing. This
+      # runs LAST, after the CHECKSUMS.sha256 upload and its verification, so a
+      # missing npm package turns this workflow red without also breaking the
+      # script installer. Same answer as `npm view <pkg>@<ver> dist.integrity`.
+      # Retries cover registry propagation when npm publish ran moments before
+      # the release was created. Tags that predate the gate (a workflow_dispatch
+      # backfill of an old tag checks out a tree without the script) or
+      # packaging/npm are skipped, never failed.
+      - name: Check the cloud npm package for this release is published
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/check_npm_published.py ]; then
+            echo "skipped: $TAG predates scripts/check_npm_published.py"
+            exit 0
+          fi
+          # --match-tree: the tarball must equal this tag's shipped files, not
+          # just exist (5.13.50 was on npm from an earlier commit than its git
+          # release). Older tags whose gate predates the flag run without it.
+          match=""
+          if grep -q -- '--match-tree' scripts/check_npm_published.py; then match="--match-tree"; fi
+          python3 scripts/check_npm_published.py --tag "$TAG" --attempts 4 --wait 30 $match

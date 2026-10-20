@@ -8,6 +8,8 @@ Usage:
     python3 measure.py quick              # Quick scan: overhead + degradation risk + top offenders
     python3 measure.py quick --json       # Machine-readable quick scan
     python3 measure.py doctor             # Health check: verify all components
+    python3 measure.py cloud-setup-script # Claude Code cloud: print the environment setup script (see --help)
+    python3 measure.py cloud-doctor       # Claude Code cloud: check the in-VM install
     python3 measure.py drift              # Drift report: compare against last snapshot
     python3 measure.py report             # Full standalone report
     python3 measure.py snapshot before    # Save pre-optimization snapshot
@@ -70,6 +72,7 @@ import errno
 import hashlib
 import heapq
 import hmac
+import io
 import json
 import math
 import os
@@ -99,6 +102,53 @@ try:
 except ImportError:  # pragma: no cover - Python < 3.11 fallback
     tomllib = None
 
+
+def _redirect_bytecode_out_of_repo():
+    """Keep ``__pycache__`` out of a repo when measure.py is run by hand.
+
+    Hooks get this from hooks/run.py (it exports PYTHONPYCACHEPREFIX to every
+    hook child). A direct ``python3 measure.py expand ...`` from the model's
+    Bash tool does not go through run.py, so the same rule is applied here,
+    BEFORE the sibling imports below would write bytecode beside this file:
+    in a hosted VM, or when the scripts dir sits inside a git work tree, send
+    bytecode to the per-user cache (same dir run.py uses). Never raises."""
+    try:
+        if getattr(sys, "pycache_prefix", None) or os.environ.get("PYTHONPYCACHEPREFIX", "").strip():
+            return
+        remote = (
+            os.environ.get("CLAUDE_CODE_REMOTE", "").strip().lower() in ("1", "true", "yes", "on")
+            or bool(os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "").strip())
+            or bool(os.environ.get("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "").strip())
+            or os.environ.get("TOKEN_OPTIMIZER_REMOTE_HOST", "").strip().lower() in ("cloud", "cowork")
+        )
+        if not remote:
+            here = Path(__file__).resolve().parent
+            for candidate in (here, *here.parents):
+                if (candidate / ".git").exists():
+                    remote = True
+                    break
+        if not remote:
+            return
+        base = None
+        raw = os.environ.get("LOCALAPPDATA" if os.name == "nt" else "XDG_CACHE_HOME", "").strip()
+        if raw and os.path.isabs(raw):
+            base = Path(raw)
+        if base is None:
+            base = Path.home() / ".cache"
+        prefix = str(base / "token-optimizer" / "pycache")
+        sys.pycache_prefix = prefix
+        os.environ["PYTHONPYCACHEPREFIX"] = prefix
+    except Exception:
+        pass
+
+
+# Only for a direct CLI run: an importing process (a hook runner, the test
+# suite) already chose its bytecode location, and must not have its
+# environment rewritten by an import. (Spelled as a tuple test: the plain
+# main-guard line must appear only once in this file, see below.)
+if __name__ in ("__main__",):
+    _redirect_bytecode_out_of_repo()
+
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from hook_runtime import (
     HookDeadline,
@@ -118,6 +168,7 @@ from plugin_env import (
 from utf8_io import enforce_utf8_io, reexec_in_utf8_mode
 from runtime_env import (
     _safe_home, claude_home, consume_runtime_flag, detect_runtime, hint_python, is_cowork,
+    is_claude_code_cloud, project_config_value, run_origin,
     runtime_home, runtime_name_for_humans, shell_path, _windows_hints,
 )
 
@@ -508,14 +559,311 @@ else:
     _CONFIG_BASE = None  # resolved below after constants
 
 
-def _daemon_snapshot_sandboxed():
-    """True when session data was explicitly redirected for tests/sandboxes.
+def _windows_profile_dir():
+    """The Windows account's profile dir as the OS records it, independent of
+    the USERPROFILE / HOME environment variables (Path.home() reads those):
+    SHGetKnownFolderPath(FOLDERID_Profile). None off Windows or on any failure,
+    never a guess such as %SystemDrive%\\Users\\%USERNAME% (profiles can live
+    on another drive, and a wrong guess would refuse a real user's scheduler)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
 
-    A sandbox snapshot must never mutate the machine-wide daemon identity.
-    The value is frozen with SNAPSHOT_DIR at import so later environment drift
-    cannot separate the guard from the paths it protects.
+        class _GUID(ctypes.Structure):
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                        ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+        raw = uuid.UUID("{5E6C858F-0E22-4760-9AFE-EA3317B67173}").bytes_le  # FOLDERID_Profile
+        guid = _GUID.from_buffer_copy(raw)
+        out = ctypes.c_wchar_p()
+        shell32 = ctypes.windll.shell32
+        hr = shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out))
+        try:
+            value = out.value if hr == 0 else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(out)
+        return Path(value) if value else None
+    except Exception:
+        return None
+
+
+_ACCOUNT_HOME_IS_WINDOWS = os.name == "nt"  # module attr so tests can drive both branches
+
+
+def _real_account_home():
+    """The OS account's own home directory, never read from HOME/USERPROFILE:
+    the pwd entry for this uid on POSIX, the profile folder the OS records on
+    Windows. None where it cannot be known (no pwd entry, API failure)."""
+    if _ACCOUNT_HOME_IS_WINDOWS:
+        return _windows_profile_dir()
+    try:
+        import pwd  # POSIX only
+        raw = pwd.getpwuid(os.getuid()).pw_dir
+        return Path(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _same_path(a, b):
+    """True when two paths name the same directory: equal as typed (case-folded
+    on Windows), equal once symlinks resolve, or the same inode. HPC/NFS homes
+    often reach one directory through an automount symlink and a real mount
+    path, so no single comparison is enough on its own."""
+    try:
+        if os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b))):
+            return True
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        if Path(a).resolve() == Path(b).resolve():
+            return True
+    except (OSError, RuntimeError, ValueError):
+        pass
+    try:
+        return os.path.samefile(str(a), str(b))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _is_under(child, parent):
+    """``child`` is ``parent`` or inside it, compared resolved and as typed."""
+    try:
+        Path(child).resolve().relative_to(Path(parent).resolve())
+        return True
+    except (ValueError, OSError, RuntimeError):
+        pass
+    try:
+        Path(os.path.normcase(os.path.abspath(str(child)))).relative_to(
+            os.path.normcase(os.path.abspath(str(parent))))
+        return True
+    except (ValueError, OSError, RuntimeError, TypeError):
+        return False
+
+
+_FOREIGN_HOME_OVERRIDE_ENV = "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER"
+
+
+def _foreign_home_override():
+    return os.environ.get(_FOREIGN_HOME_OVERRIDE_ENV, "").strip() == "1"
+
+
+def _compute_home_redirected():
+    """True when the home this process derives its paths from (HOME on POSIX,
+    USERPROFILE on Windows, via Path.home()) is not the account's own home: a
+    test sandbox, a scratch e2e run, a second HOME on one account.
+
+    launchd / systemd --user / Task Scheduler jobs are per ACCOUNT, not per
+    HOME, and TO's labels are fixed (com.token-optimizer.dashboard, ...). A
+    redirected-HOME run that installs or restarts one of them re-points the
+    user's LIVE job at the throwaway home (seen 2026-10-19: an e2e run's
+    SessionStart re-bootstrapped the real dashboard agent to a scratch dir).
+
+    The Claude home is NOT compared: Claude Code supports CLAUDE_CONFIG_DIR
+    anywhere (claude_home()), and a real user with HOME at home and the config
+    on /opt or a volume must keep their dashboard, keep-warm, restart and
+    uninstall. The case that guard used to cover (real HOME, scratch
+    CLAUDE_CONFIG_DIR) is caught instead by _scheduler_job_points_elsewhere():
+    refuse only when an existing job belongs to a different install.
+
+    TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 is the explicit escape hatch
+    for a setup that really does run the daemon from a relocated home."""
+    if _foreign_home_override():
+        return False
+    real = _real_account_home()
+    if real is None:
+        return False
+    try:
+        return not _same_path(HOME, real)
+    except Exception:
+        return False
+
+
+# Frozen at import, like _SNAPSHOT_DIR_OVERRIDE, so later env drift cannot
+# separate the guard from the paths it protects.
+_HOME_REDIRECTED = _compute_home_redirected()
+
+def _daemon_snapshot_sandboxed():
+    """True when this process must not touch the per-account scheduler jobs
+    (dashboard daemon, keep-warm agent) AT ALL, uninstall included:
+
+      * an explicit TOKEN_OPTIMIZER_SNAPSHOT_DIR override (tests, sandboxes);
+      * HOME / USERPROFILE is not the account's real home (see
+        _compute_home_redirected). Removal goes by fixed label
+        (``launchctl bootout gui/<uid>/<label>``, ``schtasks /Delete /TN``,
+        ``systemctl --user disable``), so a scratch-HOME "uninstall" would kill
+        the user's live job just as surely as an install re-points it.
+
+    Uninstall and status paths check only this. Every path that writes,
+    reloads or restarts a job checks _scheduler_install_refused(), which adds
+    the existing-job check. Both inputs are frozen at import so later env
+    drift cannot separate the guard from the paths it protects.
     """
-    return bool(_SNAPSHOT_DIR_OVERRIDE)
+    return bool(_SNAPSHOT_DIR_OVERRIDE) or _HOME_REDIRECTED
+
+
+def _scheduler_install_refused():
+    """True when an install / restart / revive / repair must not run: the
+    process is sandboxed (above), or, from the account's real home, a job
+    already registered for this account points at a different install than
+    this process (another CLAUDE_CONFIG_DIR or data dir), so writing ours would
+    re-point it. A CLAUDE_CONFIG_DIR outside the home is fine on its own: with
+    no job, or with a job that is this install's, nothing is refused.
+    TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 lifts the job check."""
+    if _daemon_snapshot_sandboxed():
+        return True
+    if _foreign_home_override():
+        return False
+    return bool(_scheduler_job_points_elsewhere())
+
+
+_SCHEDULER_REFUSAL = (
+    "refused: HOME is redirected away from this account's real home, or this "
+    "account's existing Token Optimizer job belongs to a different install "
+    "(another CLAUDE_CONFIG_DIR or data dir); scheduler jobs are per account. "
+    "Run `setup-daemon --uninstall` from the install that owns it first, or set "
+    "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1 to override"
+)
+
+# Windows only: the task is read with a `schtasks /Query` (~0.1 s), and several
+# SessionStart paths consult the guard, so its answer is reused for a short
+# while. Keyed on the reader itself so a test that swaps it is never served a
+# stale answer. File-based jobs (plist, systemd unit) are re-read every time.
+_WINDOWS_TASK_PATHS_CACHE = {}
+_WINDOWS_TASK_PATHS_TTL_S = 30.0
+
+
+def _reset_job_guard_cache():
+    _WINDOWS_TASK_PATHS_CACHE.clear()
+
+
+def _windows_task_job_paths_cached():
+    key = (_windows_task_job_paths, WINDOWS_TASK_NAME)
+    hit = _WINDOWS_TASK_PATHS_CACHE.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _WINDOWS_TASK_PATHS_TTL_S:
+        return hit[1]
+    paths = _windows_task_job_paths()
+    _WINDOWS_TASK_PATHS_CACHE.clear()
+    _WINDOWS_TASK_PATHS_CACHE[key] = (now, paths)
+    return paths
+
+
+def _this_install_roots():
+    roots = []
+    for value in (CLAUDE_DIR, RUNTIME_DIR, SNAPSHOT_DIR, _RESOLVED_PLUGIN_DATA,
+                  Path(__file__).resolve().parents[3]):
+        if value:
+            roots.append(Path(value))
+    return roots
+
+
+def _plist_job_paths(path):
+    import plistlib
+    try:
+        with open(path, "rb") as fh:
+            data = plistlib.load(fh)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = [a for a in (data.get("ProgramArguments") or [])[1:] if isinstance(a, str)]
+    out += [data.get(k) for k in ("StandardOutPath", "StandardErrorPath", "WorkingDirectory")
+            if isinstance(data.get(k), str)]
+    return out
+
+
+def _systemd_unit_job_paths(path):
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in ("ExecStart", "WorkingDirectory"):
+            out.append(value.strip('"').split('" ', 1)[0].strip('"'))
+        elif key in ("StandardOutput", "StandardError") and value.startswith(("append:", "file:")):
+            out.append(value.split(":", 1)[1])
+    return out
+
+
+def _windows_task_job_paths():
+    """<Command> (when it is not just an interpreter), <Arguments> tokens and
+    <WorkingDirectory> of this runtime's registered task. Read-only query."""
+    try:
+        query = subprocess.run(
+            ["schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML", "ONE"],
+            capture_output=True, text=True, errors="replace", timeout=10,
+            creationflags=_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError, NameError):
+        return []
+    if query.returncode != 0:
+        return []
+    raw = (query.stdout or "").replace("\x00", "")
+    out = []
+    for tag in ("Command", "Arguments", "WorkingDirectory"):
+        m = re.search(r"<%s>(.*?)</%s>" % (tag, tag), raw, re.S | re.I)
+        if not m:
+            continue
+        value = m.group(1).strip()
+        if tag == "Command" and re.split(r"[\\/]", value.strip('"'))[-1].lower().startswith("python"):
+            continue
+        out += [t.strip('"') for t in re.findall(r'"[^"]*"|\S+', value)] if tag == "Arguments" \
+            else [value.strip('"')]
+    return [p for p in out if re.match(r"^([A-Za-z]:[\\/]|[\\/])", p)]
+
+
+def _scheduler_job_paths():
+    """{artifact: [absolute paths it runs or writes]} for every per-account job
+    this process could touch, read from where this process would write them."""
+    jobs = {}
+    system = _normalized_platform()
+    if system == "Darwin":
+        for plist in (PLIST_PATH, _keepwarm_scheduler_plist_path()):
+            if plist.is_file():
+                jobs[str(plist)] = _plist_job_paths(plist)
+    elif system == "Linux":
+        unit = _systemd_user_unit_path()
+        if unit.is_file():
+            jobs[str(unit)] = _systemd_unit_job_paths(unit)
+    elif system == "Windows":
+        paths = _windows_task_job_paths_cached()
+        if paths:
+            jobs["task:" + WINDOWS_TASK_NAME] = paths
+    return jobs
+
+
+def _scheduler_job_points_elsewhere():
+    """The first per-account job that belongs to a different install (none of
+    its paths sit under this process's Claude home, runtime home, data dirs or
+    plugin root) while at least one of them still exists, as
+    ``"<artifact> -> <existing path>"``; '' when there is none, when no job
+    exists, when the job only points at paths that are gone (a stale job is
+    repaired, not protected), or when it cannot be read (fail open)."""
+    answer = ""
+    try:
+        roots = _this_install_roots()
+        for artifact, paths in _scheduler_job_paths().items():
+            paths = [p for p in paths if p]
+            if not paths or any(_is_under(p, r) for p in paths for r in roots):
+                continue
+            # A job is another install's only while that install still exists:
+            # at least one path it runs or writes is on disk. A dead job (account
+            # renamed by Migration Assistant, CLAUDE_CONFIG_DIR moved, old data
+            # dir deleted) points at nothing, and refusing to repair it would
+            # leave the dashboard broken forever with nobody to own it.
+            live = [p for p in paths if os.path.exists(p)]
+            if live:
+                answer = "%s -> %s" % (artifact, live[0])
+                break
+    except Exception:
+        answer = ""
+    return answer
 
 
 # Cowork dual-write: the per-session state dirs -- QUALITY_CACHE_DIR
@@ -539,6 +887,33 @@ if (
     _STATE_BASE = _RESOLVED_PLUGIN_DATA
 else:
     _STATE_BASE = RUNTIME_DIR
+
+
+def _remote_lean_profile():
+    """True when this process runs in a Claude Code cloud VM and should skip
+    the work that cannot help there.
+
+    A cloud session is an ephemeral Ubuntu VM (root, no status line, no browser,
+    no launchd/systemd user bus, thrown away when the session is reclaimed). In
+    that host TO skips: the dashboard daemon install/revive/auto-update and the
+    background dashboard regen, keep-warm arm + scheduler repair, the status
+    line and hook self-heal writes into ~/.claude/settings.json, the
+    cleanupPeriodDays write, the script-install auto-updater, the marketplace
+    auto-update tip and the first-run welcome (a fresh VM is a "first run" every
+    session). The session-end flush runs inline instead of detached so the data
+    lands before the VM can go away. In-session features (compression, read
+    dedup, archive/expand, checkpoints, trends.db) are untouched.
+
+    ``TOKEN_OPTIMIZER_REMOTE_LEAN=0`` turns the profile off (debugging, or a
+    long-lived self-hosted VM that does have a desktop). Never raises.
+    """
+    try:
+        if os.environ.get("TOKEN_OPTIMIZER_REMOTE_LEAN", "").strip().lower() in ("0", "false", "no", "off"):
+            return False
+        return is_claude_code_cloud()
+    except Exception:
+        return False
+
 
 DASHBOARD_PATH = SNAPSHOT_DIR / "dashboard.html"
 # Headline-shape marker for the current dashboard data contract. Bumped only when the data
@@ -1307,15 +1682,13 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
 def _load_pricing_tier():
-    """Load pricing tier preference from config. Defaults to 'anthropic'."""
+    """Load pricing tier preference from config (user, then the project
+    layer via _read_config_flag). Defaults to 'anthropic'."""
     try:
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            tier = cfg.get("pricing_tier", "anthropic")
-            if tier in PRICING_TIERS:
-                return tier
-    except (json.JSONDecodeError, OSError):
+        tier = _read_config_flag("pricing_tier", "anthropic")
+        if isinstance(tier, str) and tier in PRICING_TIERS:
+            return tier
+    except Exception:
         pass
     return "anthropic"
 
@@ -1883,7 +2256,10 @@ def find_projects_dir():
             return 0
 
     result = max(dirs, key=_safe_mtime)
-    print(f"  [Warning] Could not match cwd to project dir. Using most recent: {result.name}")
+    # stderr, never stdout: this runs inside hooks (SessionStart's ensure-health
+    # path among them), where stdout becomes the model's additionalContext.
+    print(f"  [Warning] Could not match cwd to project dir. Using most recent: {result.name}",
+          file=sys.stderr)
     return result
 
 
@@ -4571,10 +4947,12 @@ def doctor(as_json=False):
     # 4. SessionEnd hook (plugin hooks.json auto-installs these, so check for plugin too)
     total += 1
     settings, _ = _read_settings_json()
-    if _is_hook_installed(settings):
+    # The label names where the hook really comes from: _is_hook_installed alone
+    # also counts the plugin's hooks.json, which is not settings.json.
+    if _is_hook_installed(settings, settings_only=True):
         checks.append(("OK", "SessionEnd hook", "active (settings.json)"))
         score += 1
-    elif _is_plugin_installed():
+    elif _is_plugin_installed() or _is_hook_installed(settings):
         checks.append(("OK", "SessionEnd hook", "active (plugin hooks.json)"))
         score += 1
     else:
@@ -4605,8 +4983,24 @@ def doctor(as_json=False):
     # 6. Quality bar
     total += 1
     qb = _is_quality_bar_installed(settings)
-    if qb["statusline"] and qb["hook"]:
-        checks.append(("OK", "Quality bar", "status line + hook active"))
+    # Which statusline.js the status line really runs: a missing file shows a
+    # blank status line, and another checkout runs other code than this one.
+    _qb_sl_path = None
+    try:
+        _found = _statusline_js_in_command(((settings or {}).get("statusLine") or {}).get("command") or "")
+        _qb_sl_path = _found[2] if _found else None
+    except Exception:
+        _qb_sl_path = None
+    _qb_ours = _get_statusline_path()
+    if qb["statusline"] and _qb_sl_path and not Path(_qb_sl_path).expanduser().is_file():
+        checks.append(("!!", "Quality bar", _hint(
+            f"status line runs a missing file: {_qb_sl_path} "
+            "(fix: start a new session, it re-points it; or python3 measure.py setup-quality-bar --force)")))
+    elif qb["statusline"] and qb["hook"]:
+        _qb_note = ""
+        if _qb_sl_path and os.path.normcase(os.path.abspath(_qb_sl_path)) != os.path.normcase(os.path.abspath(_qb_ours)):
+            _qb_note = f" (runs another Token Optimizer copy: {_qb_sl_path})"
+        checks.append(("OK", "Quality bar", "status line + hook active" + _qb_note))
         score += 1
     else:
         missing = []
@@ -4717,9 +5111,18 @@ def doctor(as_json=False):
                            f"self-heal disabled by a permanent install failure "
                            f"({_mk or 'reason unknown'}) "
                            f"(fix: {_measure_cli()} setup-daemon)"))
+        elif _daemon_snapshot_sandboxed():
+            checks.append(("OK", "Dashboard daemon",
+                           "not managed from this process (HOME or data dir redirected: sandbox)"))
+            score += 1
         elif _daemon_resurrection_blocked() is not None:
             checks.append(("OK", "Dashboard daemon", "disabled by user (opt-out honored)"))
             score += 1
+        elif (_foreign_job := _scheduler_job_points_elsewhere()):
+            checks.append(("!!", "Dashboard daemon",
+                           f"owned by another install: {_foreign_job} "
+                           f"(this install will not re-point it; run `setup-daemon --uninstall` "
+                           f"from that install, or set TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER=1)"))
         elif _verify_daemon_port(timeout_seconds=1, retries=1, retry_sleep=0):
             checks.append(("OK", "Dashboard daemon",
                            f"running at http://localhost:{DAEMON_PORT}/token-optimizer"))
@@ -8211,12 +8614,17 @@ def _session_refresh_due(min_interval_seconds=120):
         return True
 
 
-def _run_session_end_flush_worker(args):
-    """Run heavyweight Stop-hook work outside Codex's visible hook budget."""
+def _run_session_end_flush_worker(args, budget_seconds=20):
+    """Run heavyweight Stop-hook work outside Codex's visible hook budget.
+
+    ``budget_seconds`` bounds the whole flush; the inline cloud path passes what
+    is left of the calling hook's own deadline so the flush can never outlive
+    the hook timeout."""
     lock_dir = _acquire_session_end_flush_lock()
     if lock_dir is None:
         return
-    old_budget = _install_hook_budget(20)
+    _lean = _remote_lean_profile()
+    old_budget = _install_hook_budget(budget_seconds)
     try:
         if _session_refresh_due():
             try:
@@ -8265,7 +8673,9 @@ def _run_session_end_flush_worker(args):
             except Exception:
                 pass
             try:
-                if not (_dashboard_hook_backoff_active() or _dashboard_selfheal_inflight()):
+                # No browser in a cloud VM: the 4 MB dashboard rebuild is skipped
+                # there (an explicit /token-dashboard still builds it on demand).
+                if not _lean and not (_dashboard_hook_backoff_active() or _dashboard_selfheal_inflight()):
                     generate_standalone_dashboard(days=30, quiet=True)
             except _HookTimeout:
                 # Gap 4: the bounded SessionEnd regen was killed by the 20s budget
@@ -8532,7 +8942,7 @@ def _defer_session_end_flush(args):
         pass
 
 
-def _dispatch_session_end_flush(args):
+def _dispatch_session_end_flush(args, budget_seconds=None):
     """Route the `session-end-flush` CLI entry.
 
     Defer by DEFAULT so a legacy bare `session-end-flush` hook fossilized in
@@ -8544,8 +8954,43 @@ def _dispatch_session_end_flush(args):
     if "--no-defer" in args:
         _run_session_end_flush_worker(args)
         return "inline"
+    if _remote_lean_profile():
+        # Claude Code cloud: a detached worker can be cut off when the VM is
+        # reclaimed right after the session ends, losing the session's rows.
+        # Run the flush in this process instead, bounded by what is left of the
+        # hook's own deadline (Stop 13 s, SessionEnd 58 s) so it never runs past
+        # the hook timeout. A flush that does not fit resumes on the next Stop.
+        # The Stop runner shares ONE deadline across its subcommands and passes
+        # this one's fair share (``budget_seconds``); taking the whole remainder
+        # instead let the flush overrun into keepwarm-arm's slice, the shared
+        # HookDeadline then fired os._exit(0) and the runner's buffered stdout
+        # was lost (review #9).
+        _run_session_end_flush_worker(args, budget_seconds=_inline_flush_budget_seconds(cap=budget_seconds))
+        return "inline-remote"
     _defer_session_end_flush(args)
     return "deferred"
+
+
+def _inline_flush_budget_seconds(default=8.0, margin=0.5, cap=None):
+    """Seconds the inline (cloud) session-end flush may use: the remaining time
+    on the active hook deadline minus a margin, or ``default`` without one, and
+    never more than ``cap`` (the caller's fair share of a shared deadline)
+    minus the margin. Floor 0.1 s: a spent share gets a token attempt that
+    the flush lock and the budget cut short, never an overrun."""
+    budget = default
+    try:
+        from hook_runtime import current_deadline
+        deadline = current_deadline()
+        if deadline is not None:
+            budget = min(20.0, deadline.remaining() - margin)
+    except Exception:
+        pass
+    if cap is not None:
+        try:
+            budget = min(budget, float(cap) - margin)
+        except (TypeError, ValueError):
+            pass
+    return max(0.1, budget)
 
 
 def _dispatch_collect(args):
@@ -12302,7 +12747,8 @@ CREATE TABLE IF NOT EXISTS session_log (
     reported_input_tokens INTEGER,
     reported_output_tokens INTEGER,
     reported_model_usage_json TEXT,
-    daily_usage_json TEXT
+    daily_usage_json TEXT,
+    origin TEXT
 );
 
 -- Transcript copies of a session that lost dedupe to a more complete copy
@@ -12800,6 +13246,20 @@ class _SkipMigration(Exception):
     """Nothing to migrate; leave the step without touching the write lock."""
 
 
+def _origin_insert_parts(conn, table):
+    """(column SQL, placeholder SQL, values) that add ``origin`` to an INSERT
+    into ``table`` -- or three empties when the column is missing (a migration
+    that could not run yet), so the row still lands without it instead of the
+    whole event being lost to an "no such column" error."""
+    try:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        cols = set()
+    if "origin" in cols:
+        return ", origin", ", ?", (run_origin(),)
+    return "", "", ()
+
+
 def _init_trends_db():
     """Initialize the trends SQLite DB. Returns a connection.
     
@@ -12893,9 +13353,26 @@ def _init_trends_db():
         # its own requests and delegated work is not dropped (#200).
         if "daily_usage_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN daily_usage_json TEXT")
+        # Where the collecting process ran: 'local', 'cloud' (Claude Code cloud
+        # VM) or 'cowork'. NULL on rows collected before the column existed,
+        # which were all local. Groundwork for importing a cloud VM's rows or a
+        # teleported transcript without counting the session twice: the dedupe
+        # key stays session_uuid (the transcript's session id); origin records
+        # which side a row came from.
+        if "origin" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN origin TEXT")
         conn.commit()
     except sqlite3.Error as _e:
         _log_migration_error("session_log columns", _e)
+    # Same origin column on the per-event savings tables (NULL = legacy/local).
+    for _origin_table in ("savings_events", "compression_events"):
+        try:
+            _ocols = {r[1] for r in conn.execute(f"PRAGMA table_info({_origin_table})").fetchall()}
+            if _ocols and "origin" not in _ocols:
+                conn.execute(f"ALTER TABLE {_origin_table} ADD COLUMN origin TEXT")
+                conn.commit()
+        except sqlite3.Error as _e:
+            _log_migration_error(f"{_origin_table} origin column", _e)
     # Backfill session_uuid from jsonl_path basename stem for existing rows,
     # then create an index so joins are O(log n) instead of full-table LIKE scans.
     # Done in Python (not a single SQL UPDATE) because SQLite lacks a basename
@@ -13457,12 +13934,13 @@ def _log_savings_event(event_type, tokens_saved, session_id=None, detail=None, m
 
         conn = _init_trends_db()
         try:
+            o_col, o_mark, o_val = _origin_insert_parts(conn, "savings_events")
             conn.execute(
                 "INSERT INTO savings_events "
-                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(timestamp, event_type, tokens_saved, cost_saved_usd, session_id, session_uuid, detail, model, unjoinable"
+                + o_col + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?" + o_mark + ")",
                 (datetime.now().isoformat(), event_type, tokens_saved, cost_saved,
-                 session_id, session_uuid, detail, normalized, 1 if unjoinable else 0),
+                 session_id, session_uuid, detail, normalized, 1 if unjoinable else 0) + o_val,
             )
             conn.commit()
         finally:
@@ -13540,16 +14018,17 @@ def _log_compression_event(feature, original_text="", compressed_text="",
 
         conn = _init_trends_db()
         try:
+            o_col, o_mark, o_val = _origin_insert_parts(conn, "compression_events")
             conn.execute(
                 "INSERT INTO compression_events "
                 "(timestamp, session_id, session_uuid, feature, command_pattern, original_tokens, "
-                "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "compressed_tokens, compression_ratio, quality_preserved, verified, detail, model, tier"
+                + o_col + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?" + o_mark + ")",
                 (datetime.now().isoformat(), session_id, session_uuid, feature, command_pattern,
                  original_tokens, compressed_tokens, ratio,
                  1 if quality_preserved else 0,
                  1 if verified else 0,
-                 detail, resolved_model, tier),
+                 detail, resolved_model, tier) + o_val,
             )
             conn.commit()
         finally:
@@ -14986,6 +15465,10 @@ def write_keepwarm_arm_record(session_id, transcript_path, now=None):
     try:
         if not session_id or not transcript_path:
             return None
+        # Claude Code cloud: no local CLI to keep warm and the VM is reclaimed
+        # with the session, so an arm record can never be acted on.
+        if _remote_lean_profile():
+            return None
         # ANTI-RECURSION contract: a keep-warm ping subprocess carries
         # TOKEN_OPTIMIZER_KEEPWARM_PING=1; its own Stop hook must never arm,
         # re-arm, or refresh any record -- no self-feeding ping loops.
@@ -16092,6 +16575,10 @@ def _keepwarm_scheduler_install_macos(quiet=False):
     holds the install lock. Idempotent: bootout-then-bootstrap so a re-install
     refreshes the agent in place. Returns (ok, message).
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _scheduler_install_refused():
+        return (False, _SCHEDULER_REFUSAL)
     plist_path = _keepwarm_scheduler_plist_path()
     try:
         LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -16190,6 +16677,10 @@ def keepwarm_scheduler_uninstall(quiet=False):
     consent) intact -- only the scheduler's own plist + marker are removed.
     Returns (ok, message).
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    if _daemon_snapshot_sandboxed():
+        return (False, _SCHEDULER_REFUSAL)
     plist_path = _keepwarm_scheduler_plist_path()
     removed = []
     system = _normalized_platform()
@@ -16263,6 +16754,9 @@ def keepwarm_scheduler_repair(gate=None):
     Returns one of: 'noop-gate', 'noop-no-marker', 'noop-fresh', 'repaired',
     'repair-failed'. Does NOT touch the dashboard plist/lock/regen loop.
     """
+    # Claude Code cloud: no launchd/systemd user scheduler in the VM.
+    if _remote_lean_profile():
+        return "noop-remote"
     # Cheapest gate first: marker existence (one stat) before any gate read.
     marker = _keepwarm_read_scheduler_marker()
     if marker is None:
@@ -24939,6 +25433,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         return _collect_grok_sessions(days=days, quiet=quiet, rebuild=rebuild)
 
     conn = _init_trends_db()
+    _session_log_has_origin = bool(_origin_insert_parts(conn, "session_log")[0])
 
     # Capture the existing comparison before refreshing historical session rows.
     # The user's baseline must not move as collection catches up.
@@ -25078,12 +25573,24 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # another path (worktree dir, sandboxed-config mirror), keep whichever
         # copy is more complete instead of counting the session twice.
         session_uuid = _canonical_session_uuid(filepath)
+        # Origin of this row. A session first collected in a cloud VM keeps
+        # 'cloud' when a more complete copy (a teleported transcript) replaces
+        # it, so the one surviving row still says where the session ran.
+        row_origin = run_origin()
         if session_uuid:
             other = conn.execute(
                 "SELECT id, message_count, input_tokens, output_tokens FROM session_log "
                 "WHERE session_uuid = ? AND jsonl_path != ?",
                 (session_uuid, str(filepath)),
             ).fetchall()
+            try:
+                if conn.execute(
+                    "SELECT 1 FROM session_log WHERE session_uuid = ? AND origin = 'cloud' LIMIT 1",
+                    (session_uuid,),
+                ).fetchone():
+                    row_origin = "cloud"
+            except sqlite3.Error:
+                pass
             mine = _session_rank(parsed.get("message_count"), parsed.get("total_input_tokens"),
                                  parsed.get("total_output_tokens"))
             # A tie keeps the stored copy, matching _dedupe_session_rows.
@@ -25112,7 +25619,15 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # e.g. "claude" or "opencode") is the correct fallback.
         session_platform = parsed.get("runtime") or detect_runtime()
 
-        # Insert session_log
+        # Insert session_log. ``origin`` rides along only when the column
+        # exists: if the migration lost its busy wait, every insert naming a
+        # missing column would fail and the whole collect would store nothing
+        # (review #10). Same rule as the event writers (_origin_insert_parts).
+        if _session_log_has_origin:
+            o_col, o_mark, o_val = ", origin", ", ?", (row_origin,)
+            o_upd = ",\n               origin=COALESCE(session_log.origin, excluded.origin)"
+        else:
+            o_col, o_mark, o_val, o_upd = "", "", (), ""
         cur = conn.execute(
             """INSERT INTO session_log
                (jsonl_path, date, project, duration_minutes, input_tokens,
@@ -25123,8 +25638,8 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                     all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
                     quality_score, quality_grade, stale_waste_tokens, is_sidechain,
                     sidechain_reason, reported_input_tokens, reported_output_tokens,
-                    reported_model_usage_json, platform, session_uuid, daily_usage_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    reported_model_usage_json, platform, session_uuid, daily_usage_json""" + o_col + """)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + o_mark + """)
                ON CONFLICT(jsonl_path) DO UPDATE SET
                date=MAX(session_log.date, excluded.date),
                project=excluded.project,
@@ -25160,7 +25675,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                reported_model_usage_json=excluded.reported_model_usage_json,
                platform=excluded.platform,
                session_uuid=COALESCE(excluded.session_uuid, session_log.session_uuid),
-               daily_usage_json=excluded.daily_usage_json
+               daily_usage_json=excluded.daily_usage_json""" + o_upd + """
                WHERE session_log.collected_at IS NULL
                   OR excluded.collected_at >= session_log.collected_at""",
             (
@@ -25198,7 +25713,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 session_platform,
                 session_uuid,
                 json.dumps(daily_usage),
-            ),
+            ) + o_val,
         )
         if cur.rowcount != 1:
             continue
@@ -25321,6 +25836,646 @@ def _read_path_upkeep(conn, days):
             conn.execute("PRAGMA busy_timeout=5000")
         except sqlite3.Error:
             pass
+
+
+def _session_price_buckets(mb, pricing_tier):
+    """(priced_tokens, unpriced_tokens) for a per-model breakdown."""
+    priced = unpriced = 0
+    for model_name, parts in (mb or {}).items():
+        if not isinstance(parts, dict):
+            continue
+        model_tokens = (
+            int(parts.get("fresh_input") or 0)
+            + int(parts.get("cache_read") or 0)
+            + int(parts.get("cache_create") or 0)
+            + int(parts.get("output") or 0)
+        )
+        if _is_priced_model(model_name, tier=pricing_tier):
+            priced += model_tokens
+        else:
+            unpriced += model_tokens
+    return priced, unpriced
+
+
+def _price_session_row(sr, pricing_tier):
+    """Price one session_log row: THE per-session cost for the dashboard and
+    for `session-cost`, so the two can never disagree.
+
+    *sr* needs date, input_tokens, output_tokens, cache_hit_rate,
+    cache_create_1h_tokens, cache_create_5m_tokens, model_usage_json,
+    model_usage_breakdown_json and daily_usage_json. Every model is priced at
+    its own generation card (_get_model_cost -> _claude_price_key).
+
+    Returns a dict:
+      main_cost   parent-thread cost (stored per-model breakdown; a dominant-model
+                  estimate for rows that carry none)
+      total_cost  the whole session. With per-day usage (parent + subagents,
+                  requests merged by requestId so a shared one bills once) it is
+                  the sum of the days; without it, main_cost.
+      slices      [[date, cost, priced, unpriced, input, output], ...] every
+                  billed day, uncut by any window
+      has_daily   whether total_cost includes the subagents
+      priced_tokens / unpriced_tokens, dom_model, model_usage, breakdown,
+      daily_usage
+    """
+    inp_total = sr["input_tokens"] or 0
+    out_total = sr["output_tokens"] or 0
+    chr_val = sr["cache_hit_rate"] or 0
+    cache_read_est = _safe_int(inp_total * chr_val)
+    cache_create_1h = sr["cache_create_1h_tokens"] or 0
+    cache_create_5m = sr["cache_create_5m_tokens"] or 0
+    cache_create_total = cache_create_1h + cache_create_5m
+    uncached_est = max(0, inp_total - cache_read_est - cache_create_total)
+
+    mu = _safe_json_dict(sr["model_usage_json"])
+    dom_model = max(mu, key=mu.get) if mu else "unknown"
+    mb = _safe_json_dict(sr["model_usage_breakdown_json"])
+    du = _safe_json_dict(sr["daily_usage_json"])
+
+    if mb:
+        session_priced_tokens, session_unpriced_tokens = _session_price_buckets(mb, pricing_tier)
+    else:
+        model_tokens = inp_total + out_total
+        if _is_priced_model(dom_model, tier=pricing_tier):
+            session_priced_tokens, session_unpriced_tokens = model_tokens, 0
+        else:
+            session_priced_tokens, session_unpriced_tokens = 0, model_tokens
+    # Main-thread cost from the stored session breakdown. Used as-is for rows
+    # without per-day data (non-JSONL adapters, transcript gone).
+    split = bool(cache_create_1h or cache_create_5m)
+    session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
+                                               cache_create_1h=cache_create_1h if split else None,
+                                               cache_create_5m=cache_create_5m if split else None)
+    if session_cost == 0.0:
+        # Use the stored 1h/5m split when available; fall back to 5m-only rate otherwise.
+        if split:
+            session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total,
+                                           tier=pricing_tier, cache_create_1h=cache_create_1h, cache_create_5m=cache_create_5m)
+        else:
+            session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
+    if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
+        session_unpriced_tokens = inp_total + out_total
+
+    # Per-day slices (#200). With per-day data, each calendar day is billed for
+    # the requests that ran on it, subagents included. Without it, the whole
+    # session lands on its stored date.
+    slices = []  # (date, cost, priced, unpriced, input_tokens, output_tokens)
+    if du:
+        by_day = {}
+        undated_day = _undated_bill_day(du, sr["date"])
+        for day, day_mb in du.items():
+            if not isinstance(day_mb, dict):
+                continue
+            day = undated_day if day == UNDATED_USAGE_KEY else day
+            _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
+        for day in sorted(by_day):
+            day_mb = by_day[day].get("_", {})
+            day_cost = _cost_from_model_breakdown(day_mb, tier=pricing_tier)
+            day_priced, day_unpriced = _session_price_buckets(day_mb, pricing_tier)
+            day_in = sum(
+                int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
+                for p in day_mb.values() if isinstance(p, dict))
+            day_out = sum(int(p.get("output") or 0) for p in day_mb.values() if isinstance(p, dict))
+            slices.append([day, day_cost, day_priced, day_unpriced, day_in, day_out])
+        total_cost = sum(sl[1] for sl in slices)
+    else:
+        total_cost = session_cost
+        slices = [[sr["date"], session_cost, session_priced_tokens, session_unpriced_tokens, inp_total, out_total]]
+    return {
+        "main_cost": session_cost,
+        "total_cost": total_cost,
+        "slices": slices,
+        "has_daily": bool(du),
+        "priced_tokens": sum(sl[2] for sl in slices),
+        "unpriced_tokens": sum(sl[3] for sl in slices),
+        "dom_model": dom_model,
+        "model_usage": mu,
+        "breakdown": mb,
+        "daily_usage": du,
+    }
+
+
+# ---------------------------------------------------------------------------
+# session-cost: "what did the Navina session yesterday cost?" answered from
+# trends.db, priced by _price_session_row (the dashboard's own number). Strictly
+# read-only: the DB is opened mode=ro (WAL readers never block a writer) and,
+# only if that open fails, immutable=1. Nothing here creates, migrates or
+# writes a file.
+# ---------------------------------------------------------------------------
+
+# Filler words a plain question carries ("what did the ... session cost").
+# Dropped before matching so passing the user's own words still works.
+_SESSION_COST_STOPWORDS = frozenset("""
+a an and are at be by cost costs costed did do does for from how i in is it
+its me much my of on or price priced pricing session sessions spend spent
+that the this to was were what which with
+""".split())
+_SESSION_COST_ID_RX = re.compile(r"^[0-9a-f]{8}[0-9a-f-]*$", re.IGNORECASE)
+_SESSION_COST_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SESSION_COST_COLS = (
+    "id, jsonl_path, date, project, duration_minutes, input_tokens, output_tokens, "
+    "message_count, api_calls, cache_hit_rate, cache_create_1h_tokens, "
+    "cache_create_5m_tokens, model_usage_json, model_usage_breakdown_json, "
+    "daily_usage_json, slug, topic, session_uuid, is_sidechain, subagents_json, "
+    "collected_at, origin, platform"
+)
+SESSION_COST_BASIS = (
+    "API-equivalent list price ({tier}). On a subscription plan this is what the "
+    "work would have cost at API rates, not a bill."
+)
+
+
+def _session_cost_norm(text):
+    """Case- and form-insensitive text for matching (Hebrew/any script safe)."""
+    import unicodedata  # noqa: PLC0415 - only this command needs it
+    return unicodedata.normalize("NFKC", str(text or "")).casefold()
+
+
+def _session_cost_resolve_date(word, today=None):
+    """'today' / 'yesterday' / YYYY-MM-DD -> YYYY-MM-DD, else None."""
+    today = today or datetime.now().date()
+    w = _session_cost_norm(word).strip()
+    if w == "today":
+        return today.strftime("%Y-%m-%d")
+    if w == "yesterday":
+        return (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    if _SESSION_COST_DATE_RX.match(w):
+        try:
+            return datetime.strptime(w, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+    return None
+
+
+def _session_cost_parse_args(argv):
+    """Parse session-cost arguments. Returns (opts, error-or-None)."""
+    opts = {"words": [], "id": None, "date": None, "days": None, "limit": 5, "json": False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            opts["json"] = True
+        elif a in ("--id", "--date", "--days", "--limit"):
+            if i + 1 >= len(argv):
+                return opts, f"{a} needs a value"
+            val = argv[i + 1]
+            i += 1
+            if a == "--id":
+                opts["id"] = val.strip().lower()
+            elif a == "--date":
+                d = _session_cost_resolve_date(val)
+                if d is None:
+                    return opts, f"--date takes YYYY-MM-DD, today or yesterday (got {val!r})"
+                opts["date"] = d
+            else:
+                try:
+                    n = int(val)
+                except ValueError:
+                    return opts, f"{a} takes a whole number (got {val!r})"
+                if n < 1:
+                    return opts, f"{a} must be at least 1"
+                opts["days" if a == "--days" else "limit"] = n
+        elif a.startswith("--"):
+            return opts, f"unknown option {a}"
+        else:
+            opts["words"].append(a)
+        i += 1
+    # Plain words may carry the date or the id themselves.
+    words = []
+    for raw in opts["words"]:
+        for w in re.split(r"[\s,?!.;:]+", raw):
+            w = w.strip("\"'()[]{}<>")
+            if not w:
+                continue
+            d = _session_cost_resolve_date(w)
+            if d is not None:
+                opts["date"] = opts["date"] or d
+                continue
+            if _SESSION_COST_ID_RX.match(w) and not opts["id"]:
+                opts["id"] = w.lower()
+                continue
+            n = _session_cost_norm(w)
+            if n not in _SESSION_COST_STOPWORDS:
+                words.append(n)
+    opts["words"] = words
+    return opts, None
+
+
+def _session_cost_open_db(db_path):
+    """Open trends.db without writing a byte or blocking a writer.
+
+    trends.db runs in WAL mode. With no writer attached (no -wal, or an empty
+    one) every row is in the main file, so immutable=1 reads it with no locks
+    and creates nothing; a plain mode=ro open would create -wal/-shm files.
+    With a live writer (-wal holding data and its -shm present), mode=ro
+    joins the shared read protocol: it sees every committed row and a WAL
+    reader never blocks a writer. If that fails (an exclusive lock, or a WAL
+    with no -shm to share), immutable=1 still answers from the main file,
+    which may miss the newest rows. Returns (conn, mode) or (None, error)."""
+    db_path = Path(db_path).resolve()
+    uri_base = db_path.as_uri()
+    try:
+        wal = Path(str(db_path) + "-wal")
+        live = wal.exists() and wal.stat().st_size > 0
+        shm_ok = Path(str(db_path) + "-shm").exists()
+    except OSError:
+        live, shm_ok = True, False
+    if not live:
+        attempts = (("quiescent", "?mode=ro&immutable=1"),)
+    elif shm_ok:
+        attempts = (("shared-read", "?mode=ro"), ("snapshot", "?mode=ro&immutable=1"))
+    else:
+        attempts = (("snapshot", "?mode=ro&immutable=1"),)
+    last_err = None
+    for mode, query in attempts:
+        conn = None
+        try:
+            conn = sqlite3.connect(uri_base + query, uri=True, timeout=1.5)
+            conn.execute("PRAGMA query_only=1")
+            conn.execute("SELECT 1 FROM session_log LIMIT 1").fetchall()
+            conn.row_factory = sqlite3.Row
+            return conn, mode
+        except sqlite3.Error as exc:
+            last_err = exc
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+    return None, str(last_err)
+
+
+def _session_cost_haystack(row):
+    """Every text field a plain-words question can match: topic, slug, project
+    (raw and cleaned) and the transcript's folder name."""
+    project = row["project"] or ""
+    parts = [row["topic"], row["slug"], project, _clean_project_name(project)]
+    jp = row["jsonl_path"]
+    if jp:
+        parts.append(Path(jp).parent.name)
+    return _session_cost_norm(" ".join(str(p) for p in parts if p))
+
+
+def _session_cost_word_hits(words, row):
+    """How many of *words* match this row. A word of three characters or fewer
+    must be a whole token ('tr' never matches 'trends'); longer words match
+    anywhere (Hebrew prefixes attach to the word they modify)."""
+    hay = _session_cost_haystack(row)
+    tokens = set(re.findall(r"\w+", hay))
+    hits = 0
+    for w in words:
+        if (w in tokens) if len(w) <= 3 else (w in hay):
+            hits += 1
+    return hits
+
+
+def _session_cost_row_id(row):
+    uuid = row["session_uuid"]
+    if uuid:
+        return str(uuid)
+    jp = row["jsonl_path"] or ""
+    return Path(jp).stem if jp else f"row-{row['id']}"
+
+
+def _session_cost_components(priced, row, tier):
+    """Per-model tokens and dollars from the same buckets the total came from
+    (per-day usage when stored, else the parent breakdown, else the
+    dominant-model estimate). Returns (models, tokens, cost_parts)."""
+    buckets = {}
+    if priced["has_daily"]:
+        for day_mb in priced["daily_usage"].values():
+            if isinstance(day_mb, dict):
+                _merge_daily_usage(buckets, {"_": day_mb})
+        buckets = buckets.get("_", {})
+    elif priced["breakdown"]:
+        buckets = {m: p for m, p in priced["breakdown"].items() if isinstance(p, dict)}
+    else:
+        inp = int(row["input_tokens"] or 0)
+        cr = _safe_int(inp * (row["cache_hit_rate"] or 0))
+        cc1 = int(row["cache_create_1h_tokens"] or 0)
+        cc5 = int(row["cache_create_5m_tokens"] or 0)
+        buckets = {priced["dom_model"]: {
+            "fresh_input": max(0, inp - cr - cc1 - cc5), "cache_read": cr,
+            "cache_create": cc1 + cc5, "cache_create_1h": cc1, "cache_create_5m": cc5,
+            "output": int(row["output_tokens"] or 0)}}
+    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    parts = {"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+    models = []
+    for model, p in buckets.items():
+        fi = int(p.get("fresh_input") or 0)
+        out = int(p.get("output") or 0)
+        cr = int(p.get("cache_read") or 0)
+        cc = int(p.get("cache_create") or 0)
+        has_split = "cache_create_1h" in p or "cache_create_5m" in p
+        c1 = int(p.get("cache_create_1h") or 0) if has_split else None
+        c5 = int(p.get("cache_create_5m") or 0) if has_split else None
+        c_in = _get_model_cost(model, fi, 0, 0, 0, tier=tier)
+        c_out = _get_model_cost(model, 0, out, 0, 0, tier=tier)
+        c_cr = _get_model_cost(model, 0, 0, cr, 0, tier=tier)
+        c_cw = _get_model_cost(model, 0, 0, 0, cc, tier=tier, cache_create_1h=c1, cache_create_5m=c5)
+        for k, v in (("input", fi), ("output", out), ("cache_read", cr), ("cache_write", cc)):
+            tokens[k] += v
+        for k, v in (("input", c_in), ("output", c_out), ("cache_read", c_cr), ("cache_write", c_cw)):
+            parts[k] += v
+        models.append({"model": model, "priced": _is_priced_model(model, tier=tier),
+                       "tokens": fi + out + cr + cc,
+                       "cost_usd": round(c_in + c_out + c_cr + c_cw, 4)})
+    models.sort(key=lambda m: (-m["cost_usd"], -m["tokens"]))
+    return models, tokens, parts
+
+
+def _session_cost_entry(row, tier, date_filter=None, current_id=None):
+    """One matched session, priced, as a JSON-ready dict."""
+    priced = _price_session_row(row, tier)
+    total = float(priced["total_cost"])
+    models, tokens, parts = _session_cost_components(priced, row, tier)
+    subagents = _safe_json_dict(row["subagents_json"])
+    sub_count = sum(int(v or 0) for v in subagents.values() if isinstance(v, (int, float)))
+    main = min(float(priced["main_cost"]), total) if priced["has_daily"] else total
+    sub_cost = max(0.0, total - main) if priced["has_daily"] else 0.0
+    # Components come from the same buckets as the total; any gap is the
+    # per-request long-context card on a row with no per-day data.
+    adjustment = total - sum(parts.values())
+    days = sorted({sl[0] for sl in priced["slices"] if sl[0]})
+    sid = _session_cost_row_id(row)
+    partial = False
+    partial_reason = None
+    if current_id and sid.startswith(current_id):
+        partial, partial_reason = True, "this is the current session; it is collected again when it ends"
+    else:
+        try:
+            jp = row["jsonl_path"]
+            collected = row["collected_at"]
+            if jp and collected and os.path.exists(jp):
+                if datetime.fromtimestamp(os.stat(jp).st_mtime) > datetime.fromisoformat(str(collected)) + timedelta(seconds=60):
+                    partial, partial_reason = True, "the transcript grew after it was collected"
+        except (OSError, ValueError, TypeError):
+            pass
+    entry = {
+        "session_id": sid,
+        "date": row["date"],
+        "days": days or [row["date"]],
+        "topic": _strip_ansi(row["topic"] or "") or None,
+        "slug": _strip_ansi(row["slug"] or "") or None,
+        "project": _strip_ansi(_clean_project_name(row["project"])),
+        "kind": "delegated" if row["is_sidechain"] else "session",
+        "origin": row["origin"],
+        "duration_minutes": round(float(row["duration_minutes"] or 0), 1),
+        "api_calls": int(row["api_calls"] or 0),
+        "models": models,
+        "tokens": tokens,
+        "cost_usd": {
+            "input": round(parts["input"], 4),
+            "output": round(parts["output"], 4),
+            "cache_read": round(parts["cache_read"], 4),
+            "cache_write": round(parts["cache_write"], 4),
+            "total": round(total, 4),
+            "main_thread": round(main, 4),
+            "subagents": round(sub_cost, 4),
+        },
+        "subagents": {"count": sub_count, "types": subagents,
+                      "included": bool(priced["has_daily"]) or not sub_count},
+        "unpriced_tokens": int(priced["unpriced_tokens"]),
+        "collected_at": row["collected_at"],
+        "partial": partial,
+        "partial_reason": partial_reason,
+    }
+    if abs(adjustment) >= 0.0001:
+        entry["cost_usd"]["long_context_adjustment"] = round(adjustment, 4)
+    if date_filter and len(entry["days"]) > 1:
+        entry["cost_usd"]["on_date"] = round(
+            sum(sl[1] for sl in priced["slices"] if sl[0] == date_filter), 4)
+    return entry
+
+
+def _session_cost_uncollected(id_prefix):
+    """Transcripts on disk for an id that trends.db has no row for (read-only glob)."""
+    if not id_prefix or detect_runtime() != "claude":
+        return []
+    try:
+        base = CLAUDE_DIR / "projects"
+        if not base.is_dir():
+            return []
+        safe = re.sub(r"[^0-9a-fA-F-]", "", id_prefix)
+        return [str(p) for p in base.glob(f"*/{safe}*.jsonl")][:3] if safe else []
+    except OSError:
+        return []
+
+
+def session_cost_query(argv):
+    """Build the session-cost answer as a dict (see session_cost_main)."""
+    opts, err = _session_cost_parse_args(argv)
+    tier = _load_pricing_tier()
+    out = {
+        "db": str(TRENDS_DB),
+        "basis": SESSION_COST_BASIS.format(tier=_pricing_tier_label(tier)),
+        "query": {"words": opts["words"], "id": opts["id"], "date": opts["date"],
+                  "days": opts["days"]},
+        "sessions": [],
+        "match_count": 0,
+        "total_cost_usd": 0.0,
+        "closest": [],
+        "note": None,
+    }
+    if err:
+        out["error"] = err
+        return out
+    if not TRENDS_DB.exists():
+        out["error"] = ("No Token Optimizer history yet (no trends database at this "
+                        "path). Sessions are collected when they end.")
+        return out
+    conn, mode = _session_cost_open_db(TRENDS_DB)
+    if conn is None:
+        out["error"] = f"Could not read the trends database read-only: {mode}"
+        return out
+    out["read_mode"] = mode
+    current_id = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip().lower() or None
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(session_log)").fetchall()}
+        select = ", ".join(c if c in cols else f"NULL AS {c}"
+                           for c in (x.strip() for x in _SESSION_COST_COLS.split(",")))
+        params = []
+        where = []
+        if opts["date"]:
+            where.append("date >= ?")  # date is a session's LAST day
+            params.append(opts["date"])
+        elif not opts["id"]:
+            days = opts["days"] or 30
+            cutoff = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+            out["query"]["days"] = days
+            where.append("date >= ?")
+            params.append(cutoff)
+        sql = f"SELECT {select} FROM session_log"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        rows = conn.execute(sql + " ORDER BY date DESC, id DESC", params).fetchall()
+    except sqlite3.Error as exc:
+        conn.close()
+        out["error"] = f"Could not read the trends database: {exc}"
+        return out
+    conn.close()
+
+    # One session counts once: copies of a session (worktree, mirror) keep the
+    # most complete row, the same rule as _dedupe_session_rows.
+    best = {}
+    for r in rows:
+        key = _session_cost_row_id(r)
+        rank = _session_rank(r["message_count"], r["input_tokens"], r["output_tokens"])
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, r)
+    rows = [v[1] for v in best.values()]
+    rows.sort(key=lambda r: (str(r["date"] or ""), int(r["id"] or 0)), reverse=True)
+
+    def _days_of(r):
+        du = _safe_json_dict(r["daily_usage_json"])
+        ds = {d for d in du if d != UNDATED_USAGE_KEY}
+        ds.add(r["date"])
+        return ds
+
+    def _id_ok(r):
+        if not opts["id"]:
+            return True
+        sid = _session_cost_row_id(r).lower()
+        stem = Path(r["jsonl_path"] or "").stem.lower()
+        return sid.startswith(opts["id"]) or stem.startswith(opts["id"])
+
+    def _date_ok(r):
+        return not opts["date"] or opts["date"] in _days_of(r)
+
+    words = opts["words"]
+    scoped = [r for r in rows if _id_ok(r) and _date_ok(r)]
+    matched = [r for r in scoped if not words or _session_cost_word_hits(words, r) == len(words)]
+
+    entries = [_session_cost_entry(r, tier, opts["date"], current_id) for r in matched]
+    out["match_count"] = len(entries)
+    out["total_cost_usd"] = round(sum(e["cost_usd"]["total"] for e in entries), 4)
+    out["sessions"] = entries[:opts["limit"]]
+    out["shown"] = len(out["sessions"])
+    if entries:
+        return out
+
+    # Nothing matched: say so and offer the closest few. Sessions matching
+    # some of the words come first, then the newest in the date scope.
+    pool = scoped if (opts["date"] or opts["id"]) and scoped else rows
+    if words:
+        # Stable sort: within a hit count the newest-first order stays.
+        pool = sorted(pool, key=lambda r: -_session_cost_word_hits(words, r))
+    out["closest"] = [_session_cost_entry(r, tier, opts["date"], current_id) for r in pool[:3]]
+    if opts["id"]:
+        on_disk = _session_cost_uncollected(opts["id"])
+        if on_disk:
+            out["note"] = ("That session has a transcript but is not collected yet. "
+                           "Collection runs when a session ends; run `measure.py collect` "
+                           "to collect now, then ask again.")
+            out["uncollected_transcripts"] = on_disk
+            return out
+    out["note"] = ("No collected session matches. Collection runs when a session ends, "
+                   "so a session still open (or ended in the last minute) may not be "
+                   "here yet.")
+    return out
+
+
+def _fmt_session_cost_tokens(n):
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
+def _fmt_session_cost_duration(minutes):
+    m = int(round(float(minutes or 0)))
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def _usd(v):
+    """Dollars as people read them: cents from $1 up, four places below."""
+    v = float(v or 0)
+    return f"${v:,.2f}" if abs(v) >= 1 else f"${v:.4f}"
+
+
+def _print_session_cost_entry(n, e, date_filter=None):
+    title = e["topic"] or e["slug"] or "(untitled session)"
+    days = e["days"]
+    when = days[0] if len(days) == 1 else f"{days[0]} to {days[-1]}"
+    kind = "  [delegated session]" if e["kind"] == "delegated" else ""
+    print(f"{n}. {title}{kind}")
+    print(f"   {when} · project {e['project']} · id {e['session_id']}")
+    sub = e["subagents"]
+    sub_txt = f" · {sub['count']} subagent run{'s' if sub['count'] != 1 else ''}" if sub["count"] else ""
+    print(f"   {_fmt_session_cost_duration(e['duration_minutes'])} · {e['api_calls']} calls{sub_txt}")
+    models = " · ".join(
+        f"{m['model']} {_usd(m['cost_usd'])}" + ("" if m["priced"] else " (no price card)")
+        for m in e["models"]) or "none recorded"
+    print(f"   Models: {models}")
+    t = e["tokens"]
+    print(f"   Tokens: {_fmt_session_cost_tokens(t['input'])} input · "
+          f"{_fmt_session_cost_tokens(t['output'])} output · "
+          f"{_fmt_session_cost_tokens(t['cache_read'])} cache read · "
+          f"{_fmt_session_cost_tokens(t['cache_write'])} cache write")
+    c = e["cost_usd"]
+    print(f"   Cost:   input {_usd(c['input'])} · output {_usd(c['output'])} · "
+          f"cache read {_usd(c['cache_read'])} · cache write {_usd(c['cache_write'])}"
+          + (f" · long-context {_usd(c['long_context_adjustment'])}" if "long_context_adjustment" in c else ""))
+    split = ""
+    if (sub["count"] or c["subagents"] > 0) and sub["included"]:
+        split = f"  (main thread {_usd(c['main_thread'])} + subagents {_usd(c['subagents'])})"
+    elif sub["count"]:
+        split = "  (main thread only; subagents are added on the next collection)"
+    print(f"   Total:  {_usd(c['total'])}{split}")
+    if "on_date" in c:
+        print(f"   Of which on {date_filter}: {_usd(c['on_date'])}")
+    if e["partial"]:
+        print(f"   Partial: {e['partial_reason']} (figures as of {e['collected_at']}).")
+
+
+def session_cost_main(argv):
+    """`measure.py session-cost [words...] [--id UUID] [--date D] [--days N]
+    [--limit N] [--json]`: what a session cost, from the user's own words."""
+    res = session_cost_query(argv)
+    if "--json" in argv:
+        print(json.dumps(res, indent=2, ensure_ascii=False, default=str))
+        return 1 if res.get("error") else 0
+    if res.get("error"):
+        print(f"[Token Optimizer] {res['error']}")
+        return 1
+    q = res["query"]
+    scope = []
+    if q["words"]:
+        scope.append("“" + " ".join(q["words"]) + "”")
+    if q["id"]:
+        scope.append(f"id {q['id']}")
+    if q["date"]:
+        scope.append(f"on {q['date']}")
+    elif q.get("days"):
+        scope.append(f"in the last {q['days']} days")
+    scope_txt = " ".join(scope) or "all sessions"
+    if res["match_count"]:
+        n = res["match_count"]
+        print(f"Session cost: {n} session{'s' if n != 1 else ''} {scope_txt}"
+              + (f", {_usd(res['total_cost_usd'])} in total" if n > 1 else ""))
+        if res["shown"] < n:
+            print(f"(showing the newest {res['shown']}; --limit N shows more)")
+        print()
+        for i, e in enumerate(res["sessions"], 1):
+            _print_session_cost_entry(i, e, q["date"])
+            print()
+    else:
+        print(f"Session cost: no session matches {scope_txt}.")
+        if res.get("note"):
+            print(res["note"])
+        if res["closest"]:
+            print()
+            print("Closest sessions:")
+            print()
+            for i, e in enumerate(res["closest"], 1):
+                _print_session_cost_entry(i, e, q["date"])
+                print()
+    print(f"Basis: {res['basis']}")
+    if res.get("read_mode") == "snapshot":
+        print("Read from a lock-free snapshot; the very latest writes may be missing.")
+    return 0
 
 
 def _collect_trends_from_db(days=30):
@@ -25520,24 +26675,6 @@ def _query_trends_db(conn, days):
         (cutoff,),
     ).fetchall()
 
-    def _price_buckets(mb):
-        """(priced_tokens, unpriced_tokens) for a per-model breakdown."""
-        priced = unpriced = 0
-        for model_name, parts in (mb or {}).items():
-            if not isinstance(parts, dict):
-                continue
-            model_tokens = (
-                int(parts.get("fresh_input") or 0)
-                + int(parts.get("cache_read") or 0)
-                + int(parts.get("cache_create") or 0)
-                + int(parts.get("output") or 0)
-            )
-            if _is_priced_model(model_name, tier=pricing_tier):
-                priced += model_tokens
-            else:
-                unpriced += model_tokens
-        return priced, unpriced
-
     def _day_entry(date):
         if date not in daily:
             daily[date] = {
@@ -25560,85 +26697,20 @@ def _query_trends_db(conn, days):
         except (json.JSONDecodeError, TypeError):
             subagents = {}
 
-        # Estimate cost from stored data
+        # One pricing path for every per-session dollar figure (the dashboard
+        # here, `session-cost` for plain-language questions): _price_session_row.
         inp_total = sr["input_tokens"] or 0
         out_total = sr["output_tokens"] or 0
         chr_val = sr["cache_hit_rate"] or 0
-        cache_read_est = _safe_int(inp_total * chr_val)
         cache_create_1h = sr["cache_create_1h_tokens"] or 0
         cache_create_5m = sr["cache_create_5m_tokens"] or 0
-        cache_create_total = cache_create_1h + cache_create_5m
-        uncached_est = max(0, inp_total - cache_read_est - cache_create_total)
-
-        # Determine dominant model from model_usage_json
-        try:
-            mu_raw = sr["model_usage_json"]
-            mu = json.loads(mu_raw) if mu_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            mu = {}
-        dom_model = max(mu, key=mu.get) if mu else "unknown"
-        try:
-            mb_raw = sr["model_usage_breakdown_json"]
-            mb = json.loads(mb_raw) if mb_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            mb = {}
-        try:
-            du_raw = sr["daily_usage_json"]
-            du = json.loads(du_raw) if du_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            du = {}
-        if not isinstance(du, dict):
-            du = {}
-
-        if isinstance(mb, dict) and mb:
-            session_priced_tokens, session_unpriced_tokens = _price_buckets(mb)
-        else:
-            model_tokens = inp_total + out_total
-            if _is_priced_model(dom_model, tier=pricing_tier):
-                session_priced_tokens, session_unpriced_tokens = model_tokens, 0
-            else:
-                session_priced_tokens, session_unpriced_tokens = 0, model_tokens
-        # Main-thread cost from the stored session breakdown. Used as-is for rows
-        # without per-day data (non-JSONL adapters, transcript gone).
-        session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
-                                                   cache_create_1h=cache_create_1h if cache_create_1h or cache_create_5m else None,
-                                                   cache_create_5m=cache_create_5m if cache_create_1h or cache_create_5m else None)
-        if session_cost == 0.0:
-            # Use the stored 1h/5m split when available; fall back to 5m-only rate otherwise.
-            if cache_create_1h or cache_create_5m:
-                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total,
-                                               tier=pricing_tier, cache_create_1h=cache_create_1h, cache_create_5m=cache_create_5m)
-            else:
-                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
-        if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
-            session_unpriced_tokens = inp_total + out_total
-
-        # Per-day slices (#200). With per-day data, each calendar day is billed for
-        # the requests that ran on it, subagents included; a day before the window
-        # is dropped. Without it, the whole session lands on its stored date.
-        slices = []  # (date, cost, priced, unpriced, input_tokens, output_tokens)
-        if du:
-            by_day = {}
-            undated_day = _undated_bill_day(du, sr["date"])
-            for day, day_mb in du.items():
-                if not isinstance(day_mb, dict):
-                    continue
-                day = undated_day if day == UNDATED_USAGE_KEY else day
-                _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
-            for day in sorted(by_day):
-                day_mb = by_day[day].get("_", {})
-                day_cost = _cost_from_model_breakdown(day_mb, tier=pricing_tier)
-                day_priced, day_unpriced = _price_buckets(day_mb)
-                day_in = sum(
-                    int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
-                    for p in day_mb.values() if isinstance(p, dict))
-                day_out = sum(int(p.get("output") or 0) for p in day_mb.values() if isinstance(p, dict))
-                slices.append([day, day_cost, day_priced, day_unpriced, day_in, day_out])
-            session_total_cost = sum(sl[1] for sl in slices)
-            slices = [sl for sl in slices if sl[0] >= cutoff]
-        else:
-            session_total_cost = session_cost
-            slices = [[sr["date"], session_cost, session_priced_tokens, session_unpriced_tokens, inp_total, out_total]]
+        priced_row = _price_session_row(sr, pricing_tier)
+        mu = priced_row["model_usage"]
+        dom_model = priced_row["dom_model"]
+        du = priced_row["daily_usage"]
+        session_total_cost = priced_row["total_cost"]
+        # A day before the window is dropped.
+        slices = [sl for sl in priced_row["slices"] if sl[0] >= cutoff]
 
         window_unpriced = 0
         jsonl_path = sr["jsonl_path"]
@@ -28552,12 +29624,13 @@ def _is_compaction_runner(cmd, event):
     return bool(re.search(r"(?:^|[\s\"'/\\])" + name + r"\.py(?:$|[\s\"';])", cmd))
 
 
-def _is_hook_installed(settings=None):
+def _is_hook_installed(settings=None, settings_only=False):
     """Check if the SessionEnd measure.py collect hook is installed.
 
     Returns True if any SessionEnd hook command contains 'measure.py collect'.
     Recognizes both old (collect-only) and new (collect + dashboard) hook commands.
-    Also checks plugin cache hooks (auto-installed via marketplace plugin).
+    Also checks plugin cache hooks (auto-installed via marketplace plugin), unless
+    ``settings_only`` asks only whether settings.json carries it (doctor's label).
     """
     # Check user settings.json
     if settings is None:
@@ -28581,6 +29654,9 @@ def _is_hook_installed(settings=None):
                     _TO_SESSION_END_CMD_RE.search(cmd) or _is_compaction_runner(cmd, "SessionEnd")
                 ):
                     return True
+
+    if settings_only:
+        return False
 
     # Check plugin cache hooks (marketplace plugin auto-install)
     plugin_cache = CLAUDE_DIR / "plugins" / "cache"
@@ -31430,6 +32506,14 @@ def _hook_command_identity(cmd):
     if not cmd:
         return ""
 
+    # The plugin's version resolver (D="$(ls -d ... | sort -V | tail -n1)") is
+    # plumbing, not identity: drop that one flat $(...) so a resolver command
+    # keeps the identity of its handler instead of collapsing to "run.py" for
+    # every hook (which would make setup_all_hooks/dedup treat all of an event's
+    # hooks as one).
+    if 'D="$(ls -d ' in cmd:
+        cmd = re.sub(r'D="\$\(ls -d [^()]*\)"', 'D=""', cmd)
+
     # Subshell fallback: commands with $(...) or backticks confuse shlex —
     # shell noise (2>/dev/null, |, sort, -V) leaks into identity tokens.
     # Extract .py name via regex and find subcommand/flags after the closing ).
@@ -31665,6 +32749,39 @@ def _cleanup_duplicate_plugin_hooks_from_settings(dry_run=False):
     return {"removed": removed, "reason": "success", "dry_run": False}
 
 
+# Hook commands written by the Claude Code cloud kit (cloud_kit.py, run by the
+# npm package's install-cloud.sh) all run this runner.
+_CLOUD_KIT_RUNNER_MARKER = "/token-optimizer-cloud-run.sh"
+
+
+def _cloud_kit_owns_hooks():
+    """True when the Claude Code cloud kit wired this machine's hooks.
+
+    In a cloud VM the kit's run.sh launches the real hooks with
+    CLAUDE_PLUGIN_ROOT pointing at the npm package, and nothing marks that as a
+    plugin install. Without this check the SessionStart self-heal sees "script
+    install with missing hooks" and adds its canonical set next to the kit's,
+    so every hook fires twice. The kit owns the hook map (generated from
+    hooks.json and refreshed on every install), so self-heal stands down.
+    Signals: the env var run.sh exports, or a kit runner in settings.json.
+    """
+    if os.environ.get("TOKEN_OPTIMIZER_CLOUD_KIT_VERSION"):
+        return True
+    try:
+        current, _ok = _read_settings_for_write()
+        hooks = (current or {}).get("hooks") or {}
+        if not isinstance(hooks, dict):
+            return False
+        for groups in hooks.values():
+            for group in groups if isinstance(groups, list) else []:
+                for h in (group.get("hooks") or []) if isinstance(group, dict) else []:
+                    if isinstance(h, dict) and _CLOUD_KIT_RUNNER_MARKER in str(h.get("command", "")):
+                        return True
+    except Exception:
+        return False
+    return False
+
+
 def setup_all_hooks(dry_run=False, verbose=False):
     """Merge the plugin's hooks.json into the user's settings.json.
 
@@ -31683,6 +32800,10 @@ def setup_all_hooks(dry_run=False, verbose=False):
     - Refuses to write if settings.json appears corrupted (non-empty file but parses to {})
     - Rejects plugin_root containing shell metacharacters
     """
+    if _cloud_kit_owns_hooks():
+        if verbose:
+            print("  [setup-all-hooks] hooks are managed by the Claude Code cloud kit; nothing to do")
+        return {"added": 0, "skipped": 0, "plugin_root": None, "reason": "cloud_kit"}
     hooks_json_path = _find_plugin_hooks_json()
     if not hooks_json_path:
         if verbose:
@@ -32157,7 +33278,7 @@ def _install_launchd_daemon(dry_run=False, soft_fail=False, effective_host=None)
     overwrites the plist idempotently and bootouts any existing instance
     first so we never fight a stale PID.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, hint=None):
@@ -32923,7 +34044,7 @@ def _install_task_scheduler_daemon(dry_run=False, soft_fail=False, effective_hos
     Windows user to run this is the de facto smoke test. Full rollback
     is one command: `measure.py setup-daemon --uninstall`.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, *extra, permanent_reason=None):
@@ -33360,7 +34481,7 @@ def _install_systemd_user_daemon(dry_run=False, soft_fail=False, effective_host=
     and kill the calling Claude Code session. Returns True on success. CLI
     callers keep the default False for the hard-failure + actionable-hint UX.
     """
-    if _daemon_snapshot_sandboxed():
+    if _scheduler_install_refused():
         return False
 
     def _fail(msg, *extra):
@@ -33640,6 +34761,22 @@ def _normalized_platform():
     return raw
 
 
+def _setup_daemon_cli(args):
+    """`setup-daemon` CLI entry. A refusal used to return "noop-sandbox" to a
+    caller that ignored it, so the command printed nothing and the user had
+    no idea why the dashboard never came back. Prints the reason, exit 1."""
+    dry = "--dry-run" in args
+    uninstall = "--uninstall" in args
+    this_install_only = "--this-install-only" in args
+    result = setup_daemon(dry_run=dry, uninstall=uninstall, this_install_only=this_install_only)
+    if result == "noop-sandbox":
+        detail = "" if (uninstall or _daemon_snapshot_sandboxed()) else _scheduler_job_points_elsewhere()
+        print("[Token Optimizer] setup-daemon " + _SCHEDULER_REFUSAL
+              + (" (existing job: %s)" % detail if detail else ""))
+        return 1
+    return 0
+
+
 def setup_daemon(dry_run=False, uninstall=False, this_install_only=False, latch_optout=True):
     """Install or remove the persistent dashboard HTTP server daemon.
 
@@ -33666,7 +34803,7 @@ def setup_daemon(dry_run=False, uninstall=False, this_install_only=False, latch_
     clean only the resolved identity, for a user intentionally running
     side-by-side installs who only wants this one gone.
     """
-    if _daemon_snapshot_sandboxed():
+    if (_daemon_snapshot_sandboxed() if uninstall else _scheduler_install_refused()):
         return "noop-sandbox"
     system = _normalized_platform()
     if uninstall:
@@ -34160,9 +35297,16 @@ def _ensure_dashboard_daemon(force=False):
     landing-verification.) Never raises.
     """
     # An explicit snapshot override is an isolation boundary, including when a
-    # detached daemon-revive child calls this with force=True.
+    # detached daemon-revive child calls this with force=True. Frozen flag
+    # only up here: this is the SessionStart hot path, and the full guard's
+    # job check runs `schtasks /Query` on Windows. It runs below, once the
+    # cheap gates and the health probe say a repair is actually due.
     if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
+    # Claude Code cloud VM: no browser to open the URL in, and no systemd user
+    # bus to install a unit on (the install path fails in containers).
+    if _remote_lean_profile():
+        return "noop-remote"
     # Cheapest gates first -- all pure/stat, no subprocess.
     if _is_foreign_runtime() or detect_runtime() != "claude":
         return "noop-foreign"
@@ -34192,6 +35336,11 @@ def _ensure_dashboard_daemon(force=False):
     alive = _verify_daemon_port(timeout_seconds=1, retries=1, retry_sleep=0)
     if installed and alive:
         return "noop-healthy"
+
+    # A repair is due. Refuse it (before stamping the throttle) when the
+    # account's job belongs to another install: writing ours would re-point it.
+    if _scheduler_install_refused():
+        return "noop-sandbox"
 
     # We need the costly path (install or restart). Throttle the ATTEMPT so a
     # persistently-failing install doesn't shell out every prompt. The cheap
@@ -34351,12 +35500,21 @@ def _daemon_midsession_pulse():
     installer. Returns a short status string. Never raises, never blocks.
     """
     try:
+        if _remote_lean_profile():
+            return "noop-remote"
+        # Frozen sandbox flag only: this pulse runs on every UserPromptSubmit.
+        # The "job owned by another install" check reads the scheduler (on
+        # Windows a `schtasks /Query`, up to 10 s when Task Scheduler is
+        # wedged), so it lives in the writers that would actually re-point a
+        # job (_install_*, _restart_dashboard_daemon, the heals, setup_daemon),
+        # never on a per-prompt path.
         if _daemon_snapshot_sandboxed():
             return "noop-sandbox"
         # SAFETY gates run EVERY turn, BEFORE the probe throttle: a
         # disabled/uninstalled/thrashing daemon must NEVER be revived, not even on
-        # the 59/60 throttled turns. All are cheap (a stat + a small config read +
-        # platform.system()); detect_runtime is paid by quality-cache regardless.
+        # the 59/60 throttled turns. All below are cheap (a stat + a small config
+        # read + platform.system(); no scheduler query); detect_runtime is paid
+        # by quality-cache regardless.
         if _is_foreign_runtime() or detect_runtime() != "claude":
             return "noop-foreign"
         # Filesystem tombstone is AUTHORITATIVE and independent of config.json: a
@@ -34599,6 +35757,10 @@ def _daemon_resurrection_blocked():
     ``"disabled"`` | ``"install-failed"``) or None when the action may proceed. The tombstone
     stat fails open (matching ``_daemon_install_failed_marker_present``: an
     unreadable state dir is not evidence of intent). Never raises.
+
+    Reads only the frozen sandbox flag, never the scheduler: this gate sits on
+    hot hook paths. A job owned by another install is refused by the writers
+    themselves (_scheduler_install_refused), and doctor reports it on its own.
     """
     if _daemon_snapshot_sandboxed():
         return "sandbox"
@@ -34654,6 +35816,12 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
 
     Returns True only when the re-registration succeeded. Never raises.
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    # Frozen flag here; the job check (a `schtasks /Query`) waits until the
+    # cheap gates below say a heal is actually due.
+    if _daemon_snapshot_sandboxed():
+        return False
     try:
         if os.name != "nt":
             return False
@@ -34679,6 +35847,10 @@ def _heal_windows_task_action(stop_first=False, throttle=False):
             return False  # nothing better to migrate TO (a DEAD action is
             # always worth re-registering: the .cmd fallback beats a daemon
             # that can never start again)
+        # A heal is due. Refuse it when the registered task belongs to
+        # another install (re-registering would re-point it at this one).
+        if _scheduler_install_refused():
+            return False
         if throttle:
             # A heal that keeps failing (policy-blocked /Create,
             # foreign process on the port) must not bounce the daemon every
@@ -34904,9 +36076,14 @@ def _restart_dashboard_daemon(system):
     if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
     try:
-        # Already current (a sibling session fixed it)? Do not reap/restart.
+        # Already current (a sibling session fixed it)? Do not reap/restart,
+        # and do not pay for the job check below (`schtasks /Query` on
+        # Windows): nothing is about to be written.
         if _daemon_served_version() == TOKEN_OPTIMIZER_VERSION:
             return "restarted"
+        # About to reap and restart: refuse when the job is another install's.
+        if _scheduler_install_refused():
+            return "noop-sandbox"
 
         # Reap our own orphaned port-holder first (never a foreign process).
         try:
@@ -35236,6 +36413,12 @@ _PROGRESSIVE_BANDS = [20, 35, 50, 65, 80]
 _PROGRESSIVE_ENABLED = os.environ.get("TOKEN_OPTIMIZER_PROGRESSIVE_CHECKPOINTS", "1") not in ("0", "false", "no", "off")
 _QUALITY_CHECKPOINT_THRESHOLDS = [80, 70, 50, 40]
 _CHECKPOINT_COOLDOWN_SECONDS = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_COOLDOWN_SECONDS", 90)
+# A post-compact restore treats the session's newest PreCompact ("auto") checkpoint
+# as the moment of the compaction it is restoring for, when it is this recent.
+# Compaction (PreCompact capture -> summary request -> SessionStart(compact)) runs
+# in minutes; an older one belongs to an earlier compaction whose own PreCompact
+# capture is all this one has to go on (e.g. #253: the capture was cut off).
+_COMPACT_RESTORE_ANCHOR_MAX_AGE_S = 1800
 _EDIT_BATCH_WRITE_THRESHOLD = _int_env("TOKEN_OPTIMIZER_EDIT_BATCH_WRITE_THRESHOLD", 4)
 _EDIT_BATCH_FILE_THRESHOLD = _int_env("TOKEN_OPTIMIZER_EDIT_BATCH_FILE_THRESHOLD", 3)
 _CHECKPOINT_TELEMETRY_ENABLED = os.environ.get("TOKEN_OPTIMIZER_CHECKPOINT_TELEMETRY", "0").lower() in ("1", "true", "yes", "on")
@@ -39151,6 +40334,61 @@ def _security_report(as_json=False):
 # PreCompact state capture, SessionStart restoration, Compact Instructions generation.
 # All logic in Python for cross-platform compatibility.
 
+def _iter_tail_lines(filepath, tail_lines, chunk_size=1 << 20):
+    """Return the tail lines of a JSONL transcript covering its last records.
+
+    Equivalent to what ``for line in open(filepath)`` yields, restricted to a
+    suffix window large enough that the caller's ``deque(maxlen=tail_lines)``
+    sees the same records as a whole-file pass: the window extends backwards
+    from EOF until it holds tail_lines lines that pass the caller's own
+    filters (size cap + json.loads), or the file start is reached. A large
+    transcript then costs a small window read instead of reading and parsing
+    every byte. The window grows geometrically, so even a transcript whose
+    tail needs most of the file costs about one extra pass, not a rescan per
+    chunk.
+
+    Two equivalence details:
+
+    - Lines come from ``StringIO(text, newline=None)``, which iterates with
+      the same universal-newline semantics as text-mode file iteration, so
+      the caller's ``len(line)`` cap and ``json.loads`` see identical
+      strings.
+    - A window starting mid-file can cut inside a line (and inside a
+      multi-byte UTF-8 sequence, where ``errors="replace"`` would diverge
+      from a whole-file decode), so its first line is dropped and the window
+      must hold tail_lines valid records without it. At byte 0 the window is
+      the whole file and nothing is dropped.
+    """
+    with open(filepath, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        buf = b""
+        grow = chunk_size
+        while True:
+            start = max(0, pos - grow)
+            f.seek(start)
+            buf = f.read(pos - start) + buf
+            pos = start
+            grow *= 2
+            lines = io.StringIO(
+                buf.decode("utf-8", errors="replace"), newline=None
+            ).readlines()
+            candidates = lines if pos == 0 else lines[1:]
+            valid = 0
+            for line in reversed(candidates):
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
+                try:
+                    json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                valid += 1
+                if valid >= tail_lines:
+                    break
+            if pos == 0 or valid >= tail_lines:
+                return candidates
+
+
 def _extract_session_state(filepath, tail_lines=500):
     """Extract structured session state from a JSONL transcript.
 
@@ -39198,14 +40436,13 @@ def _extract_session_state(filepath, tail_lines=500):
     except OSError:
         return None
     try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        for line in _iter_tail_lines(filepath, tail_lines):
+            if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     except (PermissionError, OSError):
         return None
 
@@ -39345,10 +40582,16 @@ def _capture_git_state(cwd=None):
         kw = {"capture_output": True, "text": True, "timeout": 2}
         if cwd:
             kw["cwd"] = cwd
-        br = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], **kw, creationflags=_NO_WINDOW)
-        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], **kw, creationflags=_NO_WINDOW)
-        if br.returncode == 0 and sha.returncode == 0:
-            return br.stdout.strip() or None, sha.stdout.strip() or None
+        # One spawn, not two: rev-parse mode flags apply in argument order,
+        # so the HEAD before --abbrev-ref resolves to the full sha and the
+        # HEAD after it to the branch. The sha is only a display label; [:7]
+        # matches git's default --short abbreviation for any repo below its
+        # auto-lengthen threshold.
+        r = subprocess.run(["git", "rev-parse", "HEAD", "--abbrev-ref", "HEAD"], **kw, creationflags=_NO_WINDOW)
+        if r.returncode == 0:
+            out = r.stdout.splitlines()
+            if len(out) >= 2:
+                return out[1].strip() or None, out[0].strip()[:7] or None
     except Exception:
         pass
     return None, None
@@ -39398,7 +40641,13 @@ def _confine_transcript_path(transcript_path):
         resolved = raw.resolve()
     except OSError:
         return None
-    if _use_codex_session_adapter():
+    # Path-aware, like the parser that reads it: the Codex marketplace plugin
+    # runs these hooks with CLAUDE_PLUGIN_ROOT set and no Codex marker, so
+    # detect_runtime() says "claude" there while transcript_path is a Codex
+    # rollout under ~/.codex/sessions. Judging by runtime alone refused it and
+    # every Codex plugin Stop exited 0 with no checkpoint (#253 class). Still
+    # confined: only the Codex session roots, and only for a path inside them.
+    if _use_codex_session_adapter(resolved):
         try:
             roots = [r.resolve() for r in codex_session.session_roots()]
         except Exception:
@@ -40444,6 +41693,18 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
             trigger = cp.get("trigger", "auto")
             rank = _checkpoint_restore_rank(trigger)
             session_checkpoints.append((rank, cp))
+
+        # Only what was saved before this compaction can restore what it replaced.
+        # SessionStart(compact) and PostCompact refresh the quality cache, which can
+        # capture a progressive band from the post-compact transcript: its "task" is
+        # the compaction summary, and it would outrank the PreCompact capture taken
+        # just before (progressive beats auto). Anything newer than this
+        # compaction's PreCompact checkpoint is dropped from the choice.
+        precompact = [cp["created"] for _, cp in session_checkpoints if cp.get("trigger", "auto") == "auto"]
+        if precompact:
+            anchor = max(precompact)
+            if (now - anchor).total_seconds() <= _COMPACT_RESTORE_ANCHOR_MAX_AGE_S:
+                session_checkpoints = [(r, cp) for r, cp in session_checkpoints if cp["created"] <= anchor]
 
         if session_checkpoints:
             # Sort by rank (lowest = best progressive), then by recency for ties
@@ -45474,6 +46735,84 @@ def _migrate_statusline_to_stable_path():
         return False
 
 
+_STATUSLINE_JS_IN_CMD_RE = re.compile(r"""(['"])([^'"]*statusline\.js)\1|([^\s'"]*statusline\.js)""")
+
+
+def _statusline_js_in_command(cmd):
+    """(start, end, path) of the statusline.js path inside a statusLine
+    command (quoted or bare), or None."""
+    m = _STATUSLINE_JS_IN_CMD_RE.search(cmd or "")
+    if not m:
+        return None
+    if m.group(2) is not None:
+        return m.start(2), m.end(2), m.group(2)
+    return m.start(3), m.end(3), m.group(3)
+
+
+def _path_is_under(path, base):
+    try:
+        Path(path).expanduser().resolve(strict=False).relative_to(Path(base).resolve(strict=False))
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+def _heal_dangling_statusline():
+    """Re-point OUR statusLine when it runs a statusline.js that is gone or
+    that sits in Codex's plugin cache.
+
+    Before 5.13.51 a Codex-loaded plugin hook was detected as Claude Code, and
+    its settings heal pointed Claude Code's statusLine at the Codex plugin
+    cache (deleted on Codex's next plugin update, so the status line went
+    blank). The stale-path heal only rewrites ``/plugins/cache/`` roots and
+    only on plugin-cache installs, so a script install, a missing file outside
+    a cache, or a still-present Codex copy kept the bad command.
+
+    Acts only in Claude Code (never a hosted VM's lean profile), only on a
+    statusLine that is ours (``statusline.js`` + ``token-optimizer`` in the
+    command), and only when the referenced file is missing or under
+    ``<codex home>/plugins/``. An existing statusline.js from another Token
+    Optimizer checkout (a dev clone) is the user's choice and is left alone.
+    Only the path inside the command changes; every other key is preserved.
+    Returns True if it rewrote the command.
+    """
+    try:
+        if detect_runtime() != "claude" or _remote_lean_profile():
+            return False
+        settings, _ok = _read_settings_for_write()
+        if not _ok or not settings:
+            return False
+        sl = settings.get("statusLine")
+        if not isinstance(sl, dict):
+            return False
+        cmd = sl.get("command") or ""
+        if not isinstance(cmd, str) or "statusline.js" not in cmd or "token-optimizer" not in cmd:
+            return False
+        found = _statusline_js_in_command(cmd)
+        if not found:
+            return False
+        start, end, old_path = found
+        ours = _get_statusline_path()
+        if not ours or not Path(ours).is_file():
+            return False
+        if os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(ours)):
+            return False
+        from runtime_env import codex_home as _codex_home
+        in_codex = _path_is_under(old_path, _codex_home() / "plugins")
+        if Path(old_path).expanduser().is_file() and not in_codex:
+            return False
+        new_cmd = cmd[:start] + ours + cmd[end:]
+        if cmd[start - 1:start] not in ("'", '"') and any(c.isspace() for c in ours):
+            new_cmd = cmd[:start] + "'" + ours + "'" + cmd[end:]
+        new_settings = dict(settings)
+        new_sl = dict(sl)
+        new_sl["command"] = new_cmd
+        new_settings["statusLine"] = new_sl
+        return bool(_write_settings_atomic(new_settings))
+    except Exception:
+        return False
+
+
 def _heal_keepwarm_plist_path():
     """Rewrite an installed keep-warm launchd plist whose measure.py path went
     stale onto the update-surviving marketplace clone path, then reload the agent.
@@ -45493,6 +46832,14 @@ def _heal_keepwarm_plist_path():
     ~/Library/LaunchAgents on macOS, so on other platforms it simply won't exist
     and this no-ops. Best effort: any failure leaves the plist untouched, False.
     """
+    # Per-account scheduler job: never touched from a redirected HOME
+    # (a test sandbox or scratch run would re-point the user's live job).
+    # Frozen flag only up here: this runs in ensure-health on EVERY
+    # SessionStart, and the full guard's job check is a `schtasks /Query` on
+    # Windows, where this macOS heal never has a plist to fix. The full guard
+    # runs below, once a stale plist exists and needs a rewrite.
+    if _daemon_snapshot_sandboxed():
+        return False
     if not _is_running_from_plugin_cache():
         return False
     stable = _stable_marketplace_script_path("measure.py")
@@ -45517,6 +46864,10 @@ def _heal_keepwarm_plist_path():
     idx = next((i for i, a in enumerate(args)
                 if isinstance(a, str) and a.endswith("measure.py")), None)
     if idx is None or args[idx] == stable:
+        return False
+    # A rewrite is due. Refuse it when the account's job belongs to another
+    # install (rewriting and reloading would re-point it at this one).
+    if _scheduler_install_refused():
         return False
     new_args = list(args)
     new_args[idx] = stable
@@ -45881,14 +47232,25 @@ def _ensure_vscode_extension():
 
 
 def _read_config_flag(key, default=False):
-    """Read a single flag from config.json. Returns default on any error."""
+    """Read a single flag from config.json. Returns default on any error.
+
+    A key the user's config.json does not set falls back to the repo-scoped
+    project layer ($CLAUDE_PROJECT_DIR/.claude/token-optimizer.json, allowlisted
+    non-secret keys only; see runtime_env.project_config), so a Claude Code
+    cloud session whose home is fresh every time still sees the team's
+    committed opt-outs. The user's own value always wins."""
     try:
-        if not CONFIG_PATH.exists():
-            return default
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if isinstance(cfg, dict) and key in cfg:
-            return cfg[key]
+        if CONFIG_PATH.exists():
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(cfg, dict) and key in cfg:
+                return cfg[key]
     except (json.JSONDecodeError, OSError):
+        pass
+    try:
+        value = project_config_value(key)
+        if value is not None:
+            return value
+    except Exception:
         pass
     return default
 
@@ -46441,6 +47803,17 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False, force=F
       install        -> clears "quality_bar_disabled" (explicit opt-in)
       --uninstall    -> sets   "quality_bar_disabled" (sticky opt-out)
     """
+    # Claude Code cloud has no status line, and in a cloud VM TO's hooks are
+    # the cloud kit's, which its setup script merges into the VM's
+    # ~/.claude/settings.json: a silent self-heal that adds our statusLine +
+    # cache hook to that same file would double-register the hook. This holds
+    # with the lean profile switched off (TOKEN_OPTIMIZER_REMOTE_LEAN=0) too:
+    # turning lean off brings back daemon/keep-warm work, never a second copy
+    # of the hooks. Only the automatic (quiet) callers are skipped; an
+    # explicit `setup-quality-bar` still runs.
+    if quiet and not (dry_run or uninstall or status_only) and (
+            _remote_lean_profile() or is_claude_code_cloud() or _cloud_kit_owns_hooks()):
+        return
     # This function WRITES `settings` back. The old
     # `_read_settings_json()` collapsed a malformed / unreadable / missing file
     # to `{}`, and the write below then rebuilt settings.json from that `{}` --
@@ -54341,6 +55714,9 @@ def run_ensure_health():
     # (opencode, copilot) returned above, but if that guard is ever bypassed
     # they must not be treated as Claude and have ~/.claude written.
     _is_claude = detect_runtime() == "claude"
+    # Claude Code cloud VM: skip everything that only pays off on a machine
+    # that outlives the session (see _remote_lean_profile).
+    _lean = _remote_lean_profile()
 
     # Settings self-heal: runs BEFORE any other settings writes so we see the
     # file as the user left it. Claude Code ONLY -- the wipe bug only affects
@@ -54357,7 +55733,8 @@ def run_ensure_health():
     # Preserve session transcripts: set cleanupPeriodDays if not configured.
     # Claude Code only: writes to ~/.claude/settings.json.
     # Codex and Hermes don't have this setting; their sessions persist by default.
-    if _is_claude:
+    # Not in a cloud VM: its transcripts go away with the VM regardless.
+    if _is_claude and not _lean:
         try:
             # Writes this dict back, so it must not act on an
             # unknown-state or missing-file {}. The `_cp_data` truthiness check
@@ -54432,7 +55809,7 @@ def run_ensure_health():
     # the latest headline shape, so any dashboard missing the marker predates
     # the corrected calculation and is force-refreshed.
     try:
-        if DASHBOARD_PATH.exists():
+        if DASHBOARD_PATH.exists() and not _lean:
             # Cheap staleness check via the sidecar meta (~40 bytes) instead of
             # scanning the 4-5MB HTML every SessionStart. The dashboard is fresh
             # iff the sidecar's version+shape match the running build. A missing
@@ -54503,7 +55880,7 @@ def run_ensure_health():
     try:
         current_marker = f'TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"'
         legacy_dir = RUNTIME_DIR / "_backups" / "token-optimizer"
-        candidate_paths = set() if _daemon_snapshot_sandboxed() else {
+        candidate_paths = set() if (_daemon_snapshot_sandboxed() or _lean) else {
             SNAPSHOT_DIR / "dashboard-server.py", legacy_dir / "dashboard-server.py"}
         # The auto-update refresh writes dashboard-server.py (not the LaunchAgent
         # plist) and reloads via `launchctl kickstart`, which restarts the process
@@ -54720,7 +56097,11 @@ def run_ensure_health():
         pass
     # v5.0.2: Self-heal hooks with correct semantics for each install mode.
     # Claude Code only: reads/writes ~/.claude/settings.json for hook management.
-    if not _is_codex:
+    # Never in a cloud VM (lean profile): the cloud kit's setup script wires
+    # the hooks into the VM's ~/.claude/settings.json, so adding the canonical
+    # set there too would fire every hook twice (setup_all_hooks also stands
+    # down via _cloud_kit_owns_hooks when the lean profile is off).
+    if not _is_codex and not _lean:
         try:
             last_check = _read_config_flag("last_hook_heal_check", 0)
             now = int(time.time())
@@ -54781,8 +56162,10 @@ def run_ensure_health():
             pass
     # v5.1: First-run welcome. Shows once when v5 is first seen on this machine.
     # Routed to stderr so the welcome banner never enters the model's context.
+    # Not in a cloud VM: every cloud session starts on a fresh VM, so the
+    # "first run" banner would repeat every session.
     try:
-        if not _read_config_flag("v5_welcome_shown", False):
+        if not _lean and not _read_config_flag("v5_welcome_shown", False):
             from contextlib import redirect_stdout as _redirect_welcome
             with _redirect_welcome(sys.stderr):
                 _show_v5_welcome()
@@ -54809,6 +56192,12 @@ def run_ensure_health():
                 print("  [Token Optimizer] Migrated statusLine to stable path", file=sys.stderr)
         except Exception as _e:
             print(f"  [Token Optimizer] statusLine path migration failed: {_e}", file=sys.stderr)
+        try:
+            if _heal_dangling_statusline():
+                print("  [Token Optimizer] Re-pointed a statusLine that ran a missing "
+                      "or Codex-cache statusline.js", file=sys.stderr)
+        except Exception as _e:
+            print(f"  [Token Optimizer] statusLine heal failed: {_e}", file=sys.stderr)
         # Same class for the keep-warm launchd agent: an existing plist pinned to a
         # version-cache measure.py path dies on plugin update and freezes the
         # dashboard's savings. Lift it onto the clone path (macOS-only in practice).
@@ -54928,7 +56317,8 @@ def run_ensure_health():
         pass
     # Auto-install / auto-restore quality bar on SessionStart.
     # Claude Code only: reads/writes ~/.claude/settings.json for statusLine and hooks.
-    if not _is_codex:
+    # Not in a cloud VM: there is no status line to show it in.
+    if not _is_codex and not _lean:
         try:
             _eh_qb_disabled = _read_config_flag("quality_bar_disabled", False)
             _eh_is_plugin = _is_running_from_plugin_cache() or _is_plugin_installed()
@@ -54995,7 +56385,7 @@ def run_ensure_health():
         install_dir = RUNTIME_DIR / "token-optimizer"
         update_marker = install_dir / ".last-update-check"
         installer = install_dir / "install.sh"
-        if (install_dir / ".git").is_dir() and installer.exists():
+        if not _lean and (install_dir / ".git").is_dir() and installer.exists():
             should_check = True
             if update_marker.exists():
                 age = time.time() - update_marker.stat().st_mtime
@@ -55029,7 +56419,12 @@ def run_ensure_health():
     try:
         already_shown = _read_config_flag("autoupdate_nudge_shown", False)
         qb_disabled = _read_config_flag("quality_bar_disabled", False)
-        if (_is_running_from_plugin_cache()
+        # Claude Code steps only: Codex loads the same plugin build from its
+        # own plugin cache, and its users were told to open Claude Code's
+        # /plugin menu.
+        if (not _lean
+                and detect_runtime() == "claude"
+                and _is_running_from_plugin_cache()
                 and not already_shown
                 and not qb_disabled):
             # User-visible onboarding tip. Emitted as a systemMessage so the
@@ -55070,6 +56465,10 @@ def _ensure_health_daemon_revive_first():
     pulse provides a second, session-independent recovery path. Idempotent +
     fail-open: a spawn failure is swallowed, never raised into the hook.
     """
+    if _remote_lean_profile():
+        return "noop-remote"
+    # Frozen flag only (SessionStart hot path); the detached daemon-revive child
+    # runs the writers, which apply the full _scheduler_install_refused().
     if _daemon_snapshot_sandboxed():
         return "noop-sandbox"
     try:
@@ -55643,6 +57042,12 @@ if __name__ == "__main__":
         quick_scan(as_json=output_json)
     elif args[0] == "route":
         _cmd_route(args)
+    elif args[0] == "cloud-setup-script":
+        import cloud_kit
+        sys.exit(cloud_kit.main_setup_script(args[1:]))
+    elif args[0] == "cloud-doctor":
+        import cloud_kit
+        sys.exit(cloud_kit.main_doctor(args[1:]))
     elif args[0] == "doctor":
         output_json = "--json" in args
         if detect_runtime() == "codex":
@@ -56362,10 +57767,7 @@ if __name__ == "__main__":
                 if "fail" in reason or "error" in reason:
                     sys.exit(1)
     elif args[0] == "setup-daemon":
-        dry = "--dry-run" in args
-        uninstall = "--uninstall" in args
-        this_install_only = "--this-install-only" in args
-        setup_daemon(dry_run=dry, uninstall=uninstall, this_install_only=this_install_only)
+        sys.exit(_setup_daemon_cli(args))
     elif args[0] == "cleanup":
         # Confirm gate. `dry = "--dry-run" in args` meant a
         # typo ("--dryrun", "--dry_run", "-dry-run") silently performed the
@@ -57135,10 +58537,7 @@ if __name__ == "__main__":
             # foreign-status-line advisory on every prompt.
             _is_plugin = _is_running_from_plugin_cache() or _is_plugin_installed()
             try:
-                _qb_disabled = False
-                if CONFIG_PATH.exists():
-                    _qb_cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-                    _qb_disabled = _qb_cfg.get("quality_bar_disabled", False)
+                _qb_disabled = _read_config_flag("quality_bar_disabled", False)
                 if not _is_plugin and not _qb_disabled and _is_regular_file(SETTINGS_PATH):
                     _sh_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
                     _sh_hooks = _sh_settings.get("hooks", {}).get("UserPromptSubmit", [])
@@ -57924,6 +59323,9 @@ if __name__ == "__main__":
         # PostToolUse hook handler: archive large tool results
         quiet = "--quiet" in args or "-q" in args
         archive_result(quiet=quiet)
+    elif args[0] == "session-cost":
+        # "What did the Navina session yesterday cost?" Read-only; see session_cost_main.
+        sys.exit(session_cost_main(args[1:]))
     elif args[0] == "expand":
         # Retrieve archived tool result
         list_all = "--list" in args
@@ -58060,7 +59462,7 @@ if __name__ == "__main__":
         print("  python3 measure.py setup-hook --dry-run # Show what would be installed")
         print("  python3 measure.py setup-hook --uninstall  # Remove Token Optimizer's SessionEnd hook")
         print("  python3 measure.py compact-capture          # Capture session state checkpoint")
-        print("  python3 measure.py compact-capture --budget-seconds N  # Allow up to N s (default 8, max 60)")
+        print("  python3 measure.py compact-capture --budget-seconds N  # Allow up to N s (default 14, max 60)")
         print("  python3 measure.py checkpoint-trigger --milestone pre-fanout  # Milestone checkpoint with guards")
         print("  python3 measure.py compact-restore          # Restore context from checkpoint")
         print("  python3 measure.py continue-last --topic TEXT  # Show Codex continuity hint for a topic")
@@ -58105,6 +59507,8 @@ if __name__ == "__main__":
         print("  python3 measure.py attention-optimize --apply        # Apply reordering (backup + write)")
         print("  python3 measure.py archive-result                        # PostToolUse hook: archive large tool results")
         print("  python3 measure.py archive-result --quiet                 # Silent mode (suppress stderr)")
+        print("  python3 measure.py session-cost navina --date yesterday   # What a session cost, in your words (read-only)")
+        print("  python3 measure.py session-cost --id UUID --json          # One session by id, machine-readable")
         print("  python3 measure.py expand TOOL_USE_ID                     # Retrieve archived tool result")
         print("  python3 measure.py expand TOOL_USE_ID --session SID       # Retrieve from specific session")
         print("  python3 measure.py expand --list                          # List all archived results")

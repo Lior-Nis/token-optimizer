@@ -25,6 +25,16 @@ SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import measure  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _allow_scheduler_code_under_sandbox_home(monkeypatch):
+    """The suite runs with a sandbox HOME, which measure treats as a redirected
+    home and refuses every per-account scheduler write for (_HOME_REDIRECTED).
+    This file drives that installer/restart code with the service-manager
+    subprocess layer stubbed, so it opts out of the refusal explicitly."""
+    monkeypatch.setattr(measure, "_HOME_REDIRECTED", False)
 import plugin_env  # noqa: E402
 import install_reconcile  # noqa: E402
 

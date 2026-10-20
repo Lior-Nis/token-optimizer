@@ -293,7 +293,8 @@ def _sub_session_end_flush_stop(hook_input: dict) -> None:
     if budget < 0.1:
         return
     measure._dispatch_session_end_flush(
-        ["session-end-flush", "--trigger", "stop", "--quiet", "--defer"]
+        ["session-end-flush", "--trigger", "stop", "--quiet", "--defer"],
+        budget_seconds=budget,
     )
 
 
@@ -329,7 +330,8 @@ def _sub_session_end_flush_end(hook_input: dict) -> None:
     if budget < 0.1:
         return
     measure._dispatch_session_end_flush(
-        ["session-end-flush", "--trigger", "end", "--defer"]
+        ["session-end-flush", "--trigger", "end", "--defer"],
+        budget_seconds=budget,
     )
 
 

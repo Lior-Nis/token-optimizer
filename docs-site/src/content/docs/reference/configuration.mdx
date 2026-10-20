@@ -7,6 +7,32 @@ Token Optimizer reads configuration from two places: environment variables and a
 
 For script installs on Claude Code, `config.json` lives at `~/.claude/token-optimizer/config.json`. Plugin installs use the resolved plugin-data directory; other Python adapters use their runtime home/data directory. Do not assume every install writes the legacy Claude path. It stores feature flags, consent status, the pricing tier, and timestamps. The `v5` command and the various `setup-*` and `consent` commands write to it. Most users never edit it by hand; the commands keep it consistent.
 
+## Project config file
+
+A repo can carry Token Optimizer settings for Claude Code cloud sessions in a committed file at `.claude/token-optimizer.json` (under `$CLAUDE_PROJECT_DIR`). In a cloud session the home directory, and with it `config.json`, starts fresh every time, so opt-outs and feature toggles would otherwise reset each session.
+
+The file is read only inside a Claude Code cloud session. On your own machine Token Optimizer ignores it completely: your `config.json` persists there, and a repo you clone never changes your dashboard, pricing tier or feature flags.
+
+Precedence, highest first: environment variable, then your own `config.json` (user or plugin-data), then the project file, then the built-in default. Your own setting always beats the repo's; the project file only fills keys you never set.
+
+Only non-secret preference keys are read: the `v5_` feature gates, `read_cache_enabled`, `daemon_disabled`, `quality_bar_disabled`, `vscode_ext_disabled` and `pricing_tier`. Everything else in the file is ignored, including consent and onboarding markers, which stay per person. Values must be booleans or short strings, and the file must be a regular file (not a symlink) under 64 KB. Token Optimizer never writes this file; commit it by hand. Never put secrets in it.
+
+```json
+{
+  "v5_bash_compress": true,
+  "daemon_disabled": true
+}
+```
+
+## Claude Code cloud
+
+In a Claude Code cloud session (detected from `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE`, `CLAUDE_CODE_REMOTE_SESSION_ID`, the cloud kit, or the pin below; `CLAUDE_CODE_REMOTE=true` alone is not enough) Token Optimizer runs a lean profile: the in-session features (compression, read dedup, archive and expand, checkpoints, trends) work as on the desktop, and the work that cannot help in a throwaway VM is skipped: the dashboard daemon, keep-warm, the status line and hook self-heal writes to `~/.claude/settings.json`, the `cleanupPeriodDays` write, the auto-updater and the first-run welcome. The session-end flush runs inside the hook instead of a detached worker, so its data lands before the VM can be reclaimed. Python bytecode goes to `~/.cache/token-optimizer/pycache`, never into the repo.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOKEN_OPTIMIZER_REMOTE_HOST` | auto-detected | Pin the host: `cloud`, `cowork` or `local` |
+| `TOKEN_OPTIMIZER_REMOTE_LEAN` | on in cloud | Set `0` to turn the cloud lean profile off |
+
 ## Active compression features
 
 Each active compression feature has a `config.json` key and an environment override. Setting the environment variable to `0` disables the feature for that run regardless of the persisted value.

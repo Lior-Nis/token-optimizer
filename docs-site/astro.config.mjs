@@ -124,6 +124,7 @@ export default defineConfig({
           items: [
             { label: "Choosing your install", slug: "install/overview" },
             { label: "Claude Code (CLI)", slug: "install/claude-code-cli" },
+            { label: "Claude Code (cloud sessions)", slug: "install/claude-code-cloud" },
             { label: "Claude Code (VS Code)", slug: "install/claude-code-vscode" },
             { label: "Claude desktop app", slug: "install/claude-desktop" },
             { label: "Codex (CLI)", slug: "install/codex-cli" },

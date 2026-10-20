@@ -116,3 +116,51 @@ def test_guard_flags_exists_and_stat_probes_under_real_home():
     assert "os.access" in events
     assert events & {"os.stat", "os.path.exists"}
     assert events & {"os.lstat", "os.path.lexists"}
+
+
+def test_desktop_bundled_claude_probe_is_stat_only():
+    """The dashboard's live process scan stats the .app bundle of a running,
+    desktop-bundled Claude CLI. That read-only probe is allowed; any read,
+    listing or write there is still flagged."""
+    rel = ("Library/Application Support/Claude/claude-code/2.1.299/4fa9694b7975/"
+           "claude.app/Contents/Resources/app.asar")
+    assert _home_guard._allowed("STAT", rel)
+    for kind in ("R", "W", "LIST", "SQLITE"):
+        assert not _home_guard._allowed(kind, rel), kind
+    assert not _home_guard._allowed("STAT", "Library/Application Support/Claude/claude_desktop_config.json")
+
+
+def _load_run_py():
+    import importlib.util
+
+    run_py = Path(__file__).resolve().parent.parent / "hooks" / "run.py"
+    spec = importlib.util.spec_from_file_location("to_run_py_home_guard", run_py)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_bytecode_cache_dir_is_sandboxed():
+    """run.py's bytecode cache comes from %LOCALAPPDATA% on Windows and
+    XDG_CACHE_HOME elsewhere. Both must point into the sandbox: an in-process
+    run.main() sets sys.pycache_prefix there, and a real one sent every later
+    import's .pyc to the runner's real profile (Windows CI, 5.13.50)."""
+    sandbox = str(_home_guard.SANDBOX) + os.sep
+    vars_ = ["XDG_CACHE_HOME"] + (["LOCALAPPDATA", "APPDATA"] if os.name == "nt" else [])
+    for var in vars_:
+        assert os.path.realpath(os.environ[var]).startswith(sandbox), var
+    assert os.path.realpath(str(_load_run_py()._bytecode_cache_dir())).startswith(sandbox)
+
+
+def test_temp_ancestor_git_probe_is_stat_exempt_only_for_dot_git(monkeypatch):
+    """On Windows tmp_path sits under ~/AppData/Local/Temp, so run.py's upward
+    ``.git`` walk from a tmp plugin root stats ``~/.git``. That exact probe is
+    exempt; any other child of a temp ancestor (``~/.claude``) still counts."""
+    real = _home_guard.REAL_HOME
+    # Isolate the rule: a dev checkout under ~ makes ~ a repo ancestor too.
+    monkeypatch.setattr(_home_guard, "_REPO_ANCESTORS", ())
+    monkeypatch.setattr(_home_guard, "_PATH_DIRS", ())
+    monkeypatch.setattr(_home_guard, "_TEMP_ANCESTORS", (real,))
+    assert _home_guard._stat_exempt(os.path.join(real, ".git"))
+    assert not _home_guard._stat_exempt(os.path.join(real, ".claude"))
+    assert not _home_guard._stat_exempt(os.path.join(real, ".claude", ".git"))

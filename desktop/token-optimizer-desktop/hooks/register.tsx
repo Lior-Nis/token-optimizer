@@ -27,12 +27,14 @@ import {
   busyNow,
   busyTimeoutMs,
   canOpenDashboard,
+  cleanUpOutcome,
   dashboardFailed,
   dashboardStatus,
   handoffFate,
   initialUi,
   isArmed,
   lifetimeFromUsage,
+  liveTokens,
   noteNow,
   prepareHandoff,
   requestContextTokens,
@@ -596,23 +598,33 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
     toast($, stillRunning(running ?? engineCall ?? 'compact'))
     return
   }
+  /** The note when no compaction can be confirmed; null after a confirmed one. */
   let skip: string | null = null
+  const skipped = (reason: string) => `Clean up skipped: ${reason.replace(/\.$/, '')}.`
   // Claimed with no await between the check and the claim; recorded before the call.
   const mine = await claimCall($, 'compact')
   if (!mine) {
-    skip = 'it could not be recorded'
+    skip = skipped('it could not be recorded')
   } else {
     try {
       // The command, as if typed: $.session.compact() is refused in a headless
       // session, and the desktop app runs its sessions headless.
+      // Success is decided from evidence, never from the reply's words (#207):
+      // Claude Code answers a refused /compact ("Not enough messages to compact.",
+      // a hook's veto) without throwing, and a reply may be empty or not English.
       const landedBefore = compactionsLanded
+      const tokensBefore = liveTokens(await attempt(() => $.session.usage(), null))
       const answer = await $.command.run({ command: 'compact' })
-      // Claude Code answers a refused /compact ("Not enough messages to compact.")
-      // without throwing: no compaction landed, and its line says why.
-      const said = answer?.text?.trim().split('\n')[0] ?? ''
-      if (compactionsLanded === landedBefore && said !== '' && !/^compacted\b/i.test(said)) skip = said
+      const tokensAfter = liveTokens(await attempt(() => $.session.usage(), null))
+      const outcome = cleanUpOutcome({
+        landed: compactionsLanded > landedBefore,
+        tokensBefore,
+        tokensAfter,
+        said: answer?.text ?? '',
+      })
+      if (!outcome.ok) skip = outcome.line
     } catch (error) {
-      skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
+      skip = skipped(error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed')
     } finally {
       await releaseCall($, mine)
     }
@@ -622,7 +634,7 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
   if (!ui || ui.busy !== 'clean' || ui.busySince !== since) return
   const now = await $.clock.now()
   if (skip !== null) {
-    const line = `Clean up skipped: ${skip.replace(/\.$/, '')}.`
+    const line = skip
     await setUi($, u => withNote(withBusy(u, null, now), line, now))
     toast($, line)
   } else {
@@ -1655,6 +1667,18 @@ export const register: Register = on => {
       details: () => void toggleDetails($),
       size: () => void toggleSize($),
     }
-    return bandSize() === 'slim' ? drawSlim($.ui.resolve(e), model, handlers) : drawBand($.ui.resolve(e), model, handlers)
+    const D = $.ui.resolve(e)
+    const band = bandSize() === 'slim' ? drawSlim(D, model, handlers) : drawBand(D, model, handlers)
+    // The band shares AbovePrompt (#263): the bands of mods later in the chain go beneath
+    // ours. Nothing beneath (the engine's own empty band) draws ours alone, as before; a
+    // mod beneath that throws costs its own band, never ours.
+    const beneath = await attempt(() => next(e), null)
+    if (beneath === null || beneath.type === 'engine') return band
+    return (
+      <D.Box flexDirection="column">
+        {band}
+        {beneath}
+      </D.Box>
+    )
   })
 }

@@ -1,7 +1,7 @@
 // A session as the band sees it, for the engine tests: every noun the mod
 // calls answered from memory beneath the plugin. Not a test file itself.
 import type { On } from 'claude-code'
-import { mock } from 'claude-code/testing'
+import { mock, test as kitTest, type Engine } from 'claude-code/testing'
 
 export const HOME = '/home/me'
 export const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
@@ -15,6 +15,55 @@ export const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
+
+/**
+ * A world's waits still held, each with what lets it go at once.
+ *
+ * A wait the test world holds on the mocked clock (a hung compaction, a slow save) and the
+ * test never advances past is let go by the kit after a hook's budget, ten seconds of real
+ * time, while a later test runs; the band's work behind it then lands in that test, which
+ * fails (a press lost, "Cleaning up." from nowhere, about 1 run in 4; #263's follow-up).
+ * Every engine test ends by letting its own held waits go (`test` below), so their work
+ * lands in the test that started it.
+ */
+const held = new Set<() => void>()
+
+/** The mocked clock's sleep, which the end of its test can let go early. */
+function holdable(sleep: (ms: number) => Promise<void>): (ms: number) => Promise<void> {
+  return ms =>
+    new Promise<void>(resolve => {
+      const done = () => {
+        if (!held.delete(done)) return
+        resolve()
+      }
+      held.add(done)
+      void sleep(ms).then(done, done)
+    })
+}
+
+/** Worlds stubbed in the running test, settled again once its held waits are let go. */
+const settling: Array<() => Promise<void>> = []
+
+/**
+ * The kit's `test`, ending each test by letting the waits its world still holds go and
+ * settling what they started, inside the test, failing or not. Engine tests import `test`
+ * from here, never from the kit.
+ */
+type Body = ($: Engine, on: On) => unknown
+export function test(name: string, ...rest: [Body] | [Parameters<typeof kitTest>[1], Body]): void {
+  const body = rest[rest.length - 1] as Body
+  const wrapped: Body = async ($, on) => {
+    try {
+      return await body($, on)
+    } finally {
+      for (const done of [...held]) done()
+      for (const settle of settling.splice(0)) await settle()
+      held.clear()
+    }
+  }
+  if (rest.length === 1) kitTest(name, wrapped)
+  else kitTest(name, rest[0] as never, wrapped)
+}
 
 /**
  * The kit's settle runs what is due on the mocked clock, but work a timer starts can go on
@@ -37,6 +86,8 @@ function steady<C extends { settle: () => Promise<void> }>(clock: C): C {
     out[key] = typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(clock) : value
   }
   out.settle = steadySettle
+  out.sleep = holdable((out.sleep as (ms: number) => Promise<void>))
+  settling.push(steadySettle)
   return out as C
 }
 
@@ -57,7 +108,7 @@ export type World = {
   beforeContextRead?: () => Promise<void>
   rejectContextReadOnce?: boolean
   env?: Record<string, string>
-  context?: { window: number; tokens?: number; percent: number }
+  context?: { window: number; tokens?: number; percent?: number }
   files: Record<string, [mtimeMs: number, contents: string]>
   status: Status
   /** How the next compact-capture / resume-lean runs answer. */
@@ -67,8 +118,17 @@ export type World = {
   dashboard: 'ok' | 'fail' | 'browser-fail' | 'throws' | 'hang'
   /** Mocked-clock delay before the dashboard command answers (ms). */
   dashboardDelayMs: number
-  /** How Clean up's /compact answers: a compaction, a refusal, or never. */
-  compact: 'ok' | 'skip' | 'hang' | 'refused' | 'said-compacted'
+  /**
+   * How Clean up's /compact answers. As Claude Code does it: a compaction resets the
+   * live window (`context.tokens` absent until the next response) and its reply may be
+   * empty (`ok`) or in any language (`ok-foreign`); `ok-watched` runs `compactBeneath`
+   * (the engine's session.compact, which the band's own hook sees land) and leaves the
+   * window reading as it was. A refusal resolves without throwing and leaves the
+   * window as it was: with Claude Code's line (`refused`), in another language
+   * (`refused-foreign`), with no text (`refused-silent`), or claiming "Compacted" with
+   * nothing behind it (`said-compacted`). `skip` throws; `hang` never answers.
+   */
+  compact: 'ok' | 'ok-foreign' | 'ok-watched' | 'skip' | 'hang' | 'refused' | 'refused-foreign' | 'refused-silent' | 'said-compacted'
   /** How `$.model.fork()` answers. */
   fork: { read: number } | 'nothing'
   theme: string
@@ -111,6 +171,8 @@ export type World = {
   uiWriteHangs: number
   /** What a plugin-run `/clear` does beneath the band before its call resolves (the engine ends the old session inside it). */
   clearBeneath: (() => Promise<void>) | null
+  /** What a plugin-run `/compact` dispatches beneath the band before its call resolves (`ok-watched`). */
+  compactBeneath: (() => Promise<void>) | null
   runs: { argv: string[]; stdin?: string; timeoutMs?: number }[]
   toasts: string[]
   compacts: number
@@ -176,6 +238,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     storeSetFails: 0,
     storeSetDelayMs: 0,
     clearBeneath: null,
+    compactBeneath: null,
     runs: [],
     toasts: [],
     compacts: 0,
@@ -350,7 +413,16 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       if (w.compact === 'skip') throw new Error('nothing to compact')
       // What Claude Code really does when there is too little to compact: it answers, it does not throw.
       if (w.compact === 'refused') return { text: 'Not enough messages to compact.' }
+      if (w.compact === 'refused-foreign') return { text: 'Pas assez de messages à compacter.' }
+      if (w.compact === 'refused-silent') return { text: '' }
       if (w.compact === 'said-compacted') return { text: 'Compacted (ctrl+o to see full summary)' }
+      if (w.compact === 'ok-watched') {
+        if (w.compactBeneath) await w.compactBeneath()
+        return { text: '' }
+      }
+      // A compaction that stands: the live window starts over until its next response.
+      w.context = { window: (w.context ?? { window: 1_000_000 }).window }
+      return { text: w.compact === 'ok-foreign' ? 'Conversation compactée.' : '' }
     }
     if (e.command === 'clear' && w.clearBeneath) await w.clearBeneath()
     return { text: '' }

@@ -61,6 +61,17 @@ import _home_guard  # noqa: E402
 _home_guard.install_sandbox()
 _home_guard.install_guard()
 
+# Windows only: a hook that finds measure.py's bytecode cold waits for the
+# background compile only as long as the host's hook timeout allows, then exits
+# without output (#264, hooks/module_runner.py). That compile takes 10-30 s on
+# Windows runners, so a test hook firing on a fresh plugin copy would get the
+# host-deadline fail-open instead of the behaviour it checks. Tests have no host
+# deadline: let them wait for the compile, as an inline compile did. The gate
+# itself is pinned by tests/test_cold_compile_gate.py with explicit waits;
+# macOS and Linux compile inside the shipped waits, so they run them unchanged.
+if os.name == "nt":
+    os.environ.setdefault("TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S", "600")
+
 _ENV_DISABLE = "TOKEN_OPTIMIZER_TREE_GUARD"
 _ENV_PER_TEST = "TOKEN_OPTIMIZER_TREE_GUARD_PER_TEST"
 
@@ -271,7 +282,11 @@ def _real_home_guard(request):
     """
     nodeid = request.node.nodeid
     _home_guard.set_current(nodeid)
+    # hooks/run.py main() sets sys.pycache_prefix for its own process; a test
+    # that calls it in-process must not move bytecode for the rest of the run.
+    pycache_prefix = sys.pycache_prefix
     yield
+    sys.pycache_prefix = pycache_prefix
     _home_guard.set_current("")
     hits = _home_guard.take_hits(nodeid)
     if hits:

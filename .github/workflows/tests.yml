@@ -59,7 +59,7 @@ jobs:
       # Run from the repo root: the tests resolve the scripts under
       # skills/token-optimizer/scripts/ relative to it.
       - name: Run tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q -rs
 
   opencode-native:
     runs-on: ubuntu-latest
@@ -123,7 +123,27 @@ jobs:
       - name: Install pytest
         run: python -m pip install --upgrade pip pytest
       - name: Known regressions are still caught
-        run: python scripts/check_regression_guards.py
+        # Each mutation runs only its own listed tests; 4 copies in parallel.
+        # --require-all: every mutation must be proven here (none may be n/a).
+        run: python scripts/check_regression_guards.py --jobs 4 --require-all
+
+  # Same planted bugs on Windows: guards for Windows-only paths (scheduler,
+  # launcher, console flags) can only be proven on the real OS.
+  regression-guards-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Known regressions are still caught
+        # No --require-all: mutations whose guard tests all skip on Windows
+        # (POSIX-only) report n/a; the Linux job proves those. Any mutation
+        # whose tests run here and still pass on the broken code fails the job.
+        run: python scripts/check_regression_guards.py --jobs 4
 
   # plugins/token-optimizer/ is a generated mirror of root skills/ + hooks/
   # (scripts/sync-codex-marketplace-plugin.sh). Until now drift was only
@@ -195,7 +215,7 @@ jobs:
         run: python -m pip install --upgrade pip pytest
 
       - name: Run tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q -rs
 
   # Build the docs site here, not only in Deploy Docs.
   #

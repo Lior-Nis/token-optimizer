@@ -30,13 +30,19 @@ Two distribution paths work:
 
 ## Runtime detection
 
-Inside Cowork, `is_cowork()` returns true while `detect_runtime()` still resolves to `claude`, so the engine paths are unchanged and the human-facing label reads `Claude Code (Cowork)`. Any of these host markers is enough to detect Cowork:
+Inside Cowork, `is_cowork()` returns true while `detect_runtime()` still resolves to `claude`, so the engine paths are unchanged and the human-facing label reads `Claude Code (Cowork)`. Claude Code cloud sessions (claude.ai/code, `claude --cloud`) are a different VM host with their own label, `Claude Code (cloud)`, and `is_claude_code_cloud()` instead. The host markers resolve in this order:
 
-| Signal | Notes |
-|---|---|
-| `CLAUDE_CODE_REMOTE=true` | The only documented cloud-vs-desktop signal. Primary. |
-| `CLAUDE_CODE_CONTAINER_ID` | Observed in every Cowork VM, undocumented. Fallback. |
-| `CLAUDE_PLUGIN_ROOT` under `/plugins/synced/` | Where org-console account-synced plugins land. |
+| Signal | Resolves to | Notes |
+|---|---|---|
+| `TOKEN_OPTIMIZER_REMOTE_HOST=cloud`, `cowork` or `local` | as set | Explicit pin for hosts that export an unexpected mix. |
+| `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` | cloud for `cloud_*`, Cowork for a value containing `cowork` | `cloud_default` in Anthropic-hosted cloud VMs. Other values fall through. |
+| `TOKEN_OPTIMIZER_CLOUD_KIT_VERSION` | cloud | Exported by the cloud kit's runner, only inside a VM. |
+| `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_...`) | cloud | Observed in every Claude Code cloud VM. |
+| `CLAUDE_PLUGIN_ROOT` under `/plugins/synced/` | Cowork | Where account-synced plugins land. Only read when none of the cloud signals above is present, because cloud VMs have a `plugins/synced/` directory too. |
+| `CLAUDE_CODE_CONTAINER_ID` | Cowork | Observed in every Cowork VM, undocumented. Only read when none of the cloud signals above is present, because cloud VMs set it too. |
+| `CLAUDE_CODE_REMOTE=true` alone | remote (kind unknown) | The documented "remote environment" signal. On its own it gets neither the Cowork caveats nor the cloud lean profile. |
+
+Cloud VMs also set `CLAUDE_CODE_CONTAINER_ID` and carry a `plugins/synced/` directory, but always together with the session id and environment type, which are checked first. Checked the other way round, they used to label every cloud session Cowork.
 
 `AI_AGENT` is deliberately not a signal: the local Claude Code CLI also exports `AI_AGENT=claude-code_<version>_harness` into every hook subprocess, so that marker cannot tell a Cowork VM from a desktop session.
 

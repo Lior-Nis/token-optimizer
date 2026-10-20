@@ -47,6 +47,9 @@ def wired(tmp_path, monkeypatch):
     """measure.py with the heal wired to a synthetic plist + stable path, and
     launchctl neutralized (no real bootout/bootstrap during tests)."""
     mod = _load_measure(monkeypatch)
+    # The sandbox HOME reads as a redirected home, which refuses scheduler
+    # writes; launchctl is neutralized here, so opt out explicitly.
+    monkeypatch.setattr(mod, "_HOME_REDIRECTED", False)
 
     stable = tmp_path / "marketplaces" / "stable" / "measure.py"
     stable.parent.mkdir(parents=True)

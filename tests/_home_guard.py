@@ -81,6 +81,13 @@ _HOME_OVERRIDE_VARS = (
     "TOKEN_OPTIMIZER_DEVIN_HOME", "DEVIN_CONFIG_DIR",
     "TOKEN_OPTIMIZER_SNAPSHOT_DIR", "OPENCODE_DATA_DIR", "OPENCODE_CONFIG_DIR",
     "HOMEDRIVE", "HOMEPATH",
+    # Hosted-VM markers (runtime_env.remote_host): a suite run INSIDE a Claude
+    # Code cloud or Cowork session would otherwise flip every test into the
+    # cloud lean profile / Cowork state routing. Tests that need them set them.
+    "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
+    "TOKEN_OPTIMIZER_REMOTE_HOST", "TOKEN_OPTIMIZER_REMOTE_LEAN",
+    "TOKEN_OPTIMIZER_CLOUD_KIT_VERSION", "TOKEN_OPTIMIZER_ALLOW_FOREIGN_HOME_SCHEDULER",
+    "CLAUDE_PROJECT_DIR", "PYTHONPYCACHEPREFIX",
 )
 
 SANDBOX: Path | None = None
@@ -93,6 +100,17 @@ ALLOWLIST: list[tuple[str, str, str]] = [
     # resolved binary to find the host CLI. Existence probe of an executable,
     # not user data; STAT only, so any open/list/write there still fails.
     ("STAT", r"^\.local/share/(claude|devin)(/|$)", "host CLI binary discovery"),
+    # npm discovery for the cloud-kit packaging test (shutil.which("npm") stats
+    # the node version manager's bin dir). STAT only, same reasoning as above.
+    ("STAT", r"^\.(nvm|volta|fnm|asdf)(/|$)", "npm binary discovery"),
+    # Live claude-process classification (dashboard health scan): when a
+    # Claude CLI bundled by the desktop app is running on the dev machine, the
+    # scan stats its .app bundle (MacOS/, Resources/app.asar, Electron
+    # Framework) to tell the desktop app from a terminal CLI. Read-only probe
+    # of an installed binary, not user data, and only reachable while such a
+    # process happens to run, which made two dashboard tests fail in one full
+    # run and pass in the next (2026-10-19). STAT only.
+    ("STAT", r"^Library/Application Support/Claude/claude-code(/|$)", "desktop-bundled claude binary probe"),
 ]
 
 
@@ -123,9 +141,52 @@ def install_sandbox() -> Path | None:
     if os.name == "nt":
         # Cursor, Copilot and Cowork read %APPDATA% before falling back to HOME.
         os.environ["APPDATA"] = str(home / "AppData" / "Roaming")
+        # hooks/run.py and measure.py put bytecode under %LOCALAPPDATA% (the
+        # Windows twin of XDG_CACHE_HOME). Left real, an in-process run.main()
+        # set sys.pycache_prefix to the runner's real profile and every later
+        # import read/wrote .pyc there (~3800 guard errors, Windows CI 5.13.50).
+        os.environ["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+    _install_scheduler_shims(root)
     SANDBOX = root
     atexit.register(shutil.rmtree, str(root), True)
     return SANDBOX
+
+
+# Service managers are per ACCOUNT, not per HOME: a test that reaches a real
+# ``launchctl bootstrap`` re-points the developer's live job at the sandbox
+# (2026-10-19: an e2e run re-bootstrapped the real dashboard agent). The
+# product guard refuses those calls from a redirected HOME, but a guard is not
+# a reason to let the real binaries be reachable. Each tool that exists on this
+# machine gets a no-op shim first on PATH (so ``shutil.which`` answers exactly
+# as before), which logs its argv to SCHEDULER_LOG and exits 0. Child processes
+# inherit the PATH. POSIX only: Windows CreateProcess resolves ``schtasks`` to
+# ``schtasks.exe`` and would skip a script shim, and the Windows CI runner has
+# no live user jobs to hijack.
+SCHEDULER_TOOLS = ("launchctl", "systemctl", "schtasks", "crontab", "loginctl")
+SCHEDULER_LOG: Path | None = None
+
+
+def _install_scheduler_shims(root: Path) -> None:
+    global SCHEDULER_LOG
+    if os.name == "nt":
+        return
+    shim_dir = root / "scheduler-shims"
+    shim_dir.mkdir(exist_ok=True)
+    log = root / "scheduler-calls.log"
+    for tool in SCHEDULER_TOOLS:
+        if shutil.which(tool) is None:
+            continue
+        shim = shim_dir / tool
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s %s\\n" "{tool}" "$*" >> "{log}" 2>/dev/null\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+    os.environ["PATH"] = str(shim_dir) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["TOKEN_OPTIMIZER_TEST_SCHEDULER_LOG"] = str(log)
+    SCHEDULER_LOG = log
 
 
 # --- audit guard -----------------------------------------------------------
@@ -134,6 +195,14 @@ _EXEMPT_PREFIXES: tuple[str, ...] = ()
 _PATH_DIRS: tuple[str, ...] = ()
 _REPO_ANCESTORS: tuple[str, ...] = tuple(
     str(p) for p in REPO.parents if str(p).startswith(REAL_HOME))
+# Ancestors of the system temp dir under the real home (Windows only:
+# AppData\Local\Temp). pytest's tmp_path lives there, so a product walk up
+# from a tmp_path (run.py's ``.git`` work-tree probe) stats
+# ``~/AppData/Local/.git``, ``~/AppData/.git``, ``~/.git``: existence probes
+# of the temp dir's parents, the same thing the repo-ancestor rule allows.
+_TEMP_ANCESTORS: tuple[str, ...] = tuple(
+    str(p) for p in Path(os.path.realpath(tempfile.gettempdir())).parents
+    if str(p) == REAL_HOME or str(p).startswith(REAL_HOME + os.sep))
 HITS: list[tuple[str, str, str, str]] = []  # (nodeid, event, kind, path)
 _current: dict[str, str] = {"id": ""}
 _installed = False
@@ -175,11 +244,15 @@ def _compute_path_dirs() -> tuple[str, ...]:
 def _stat_exempt(full: str) -> bool:
     """Existence probes that are not reads of user data (kind STAT only):
     executable lookup along PATH, and the cwd-upward walk for CLAUDE.md that
-    probes ``<ancestor-of-repo>/CLAUDE.md`` and ``<ancestor>/.claude/CLAUDE.md``."""
+    probes ``<ancestor-of-repo>/CLAUDE.md`` and ``<ancestor>/.claude/CLAUDE.md``,
+    and ``<temp-dir ancestor>/.git`` (an upward work-tree walk from a tmp_path;
+    only ``.git``, so ``~/.claude`` and other real dirs still count)."""
     for ex in _PATH_DIRS:
         if full == ex or full.startswith(ex + os.sep) or ex.startswith(full + os.sep):
             return True
     parent = os.path.dirname(full)
+    if parent in _TEMP_ANCESTORS and os.path.basename(full) == ".git":
+        return True
     for anc in _REPO_ANCESTORS:
         if parent == anc or (os.path.basename(parent) == ".claude"
                              and os.path.dirname(parent) == anc):

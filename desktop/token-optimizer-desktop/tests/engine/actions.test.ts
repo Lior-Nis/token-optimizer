@@ -1,8 +1,8 @@
 // The three buttons: Clean up, Start fresh and Keep warm through
 // register.tsx inside the engine, every guard on the mocked clock.
-import { expect, test, type Engine } from 'claude-code/testing'
+import { expect, type Engine } from 'claude-code/testing'
 
-import { BAND, NOW_MS, START, stub } from './world.ts'
+import { BAND, NOW_MS, START, stub, test } from './world.ts'
 
 const sentenceOf = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) =>
   (await ui.findAll({ type: 'Text' })).map(t => t.text)
@@ -81,18 +81,6 @@ test('a /compact Claude Code refuses says why instead of "Cleaned up."', async (
   expect(w.toasts).toEqual(['Clean up skipped: Not enough messages to compact.'])
   expect(await has(ui, 'Clean up skipped: Not enough messages to compact.')).toBe(true)
   expect(await has(ui, 'Cleaned up.')).toBe(false)
-})
-
-test('a /compact that prints "Compacted" counts as cleaned up', async ($, on) => {
-  const w = stub(on, { compact: 'said-compacted' })
-  await $.session.start(START)
-  await w.clock.settle() // the status read runs just after the start
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-
-  await ui.press({ key: 'card-quality-clean' })
-  await w.clock.settle()
-  expect(w.toasts).toEqual([])
-  expect(await has(ui, 'Cleaned up.')).toBe(true)
 })
 
 test('a compaction that hangs past the timeout no longer says "Cleaning up."', async ($, on) => {

@@ -6,7 +6,9 @@
 // as a session would answer. tests/pure/data.spec.ts covers the same
 // gatherer under Node.
 import type { On } from 'claude-code'
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+
+import { test } from './world.ts'
 
 const HOME = '/home/me'
 const NOW_MS = Date.parse('2026-10-03T10:00:00Z')

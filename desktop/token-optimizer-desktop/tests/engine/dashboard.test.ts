@@ -1,9 +1,10 @@
 // The "Full dashboard" link in the unfolded band, both sizes: where it sits, what its click
 // runs, the busy guard and the failure note, through register.tsx inside the engine.
-import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import { expect, type Engine } from 'claude-code/testing'
 
 import { BUSY_TIMEOUT_MS, busyTimeoutMs, DASHBOARD_TIMEOUT_MS, NOTE_MS } from '../../src/actions.ts'
-import { BAND, START, quality, stub, SCRIPTS, type World } from './world.ts'
+import { BAND, START, quality, stub, SCRIPTS, type World, test } from './world.ts'
 
 const OPENING = 'Opening the dashboard.'
 const FAILED = 'Could not open the dashboard.'
@@ -19,7 +20,7 @@ function sag(w: World): void {
   w.files[key] = [1, quality(60, 0)]
 }
 
-async function mounted($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], patch: Partial<World> = {}, size: 'full' | 'slim' = 'full') {
+async function mounted($: Engine, on: On, patch: Partial<World> = {}, size: 'full' | 'slim' = 'full') {
   const w = stub(on, patch)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start

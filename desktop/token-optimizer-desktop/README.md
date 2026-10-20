@@ -4,7 +4,7 @@ A status bar for the Claude desktop app. It draws above your prompt and shows se
 
 ## Install
 
-It ships inside the Token Optimizer plugin (`hooks/hooks.json` names this folder's `hooks/register.tsx` under `modules`), so there is nothing extra to install. This folder keeps its own manifest only so its tests run on their own with `claude plugin test`.
+It ships inside the Token Optimizer plugin (`hooks/hooks.json` names this folder's `hooks/register.tsx` under `modules`), so there is nothing extra to install. This folder keeps its own manifest only so its tests run on their own with `claude plugin test`. `npm run typecheck` and `npm test` cover the pure modules (CI); `npm run typecheck:engine` checks `hooks/` and `tests/engine/` against Claude Code's plugin API declarations, which only the claude CLI writes, so it runs locally.
 
 Needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; when off, nothing breaks and the bar just does not appear. The terminal keeps its existing status line. VS Code is not supported.
 

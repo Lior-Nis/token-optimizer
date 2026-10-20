@@ -18,7 +18,7 @@ ALLOWED_MODULES = frozenset(Path(name).stem for name in PAYLOAD)
 REPO_MODULES = frozenset((
     'activity_tracker', 'antigravity_doctor', 'antigravity_hook_bridge', 'antigravity_install',
     'antigravity_proto', 'antigravity_session', 'antigravity_state', 'archive_result',
-    'bash_compress', 'bash_compress_hook', 'bash_hook', 'bash_whitelist', 'benchmark',
+    'bash_compress', 'bash_compress_hook', 'bash_hook', 'bash_whitelist', 'benchmark', 'cloud_kit',
     'build_output_compress', 'codex_command_compress', 'codex_compact_prompt', 'codex_doctor',
     'codex_hook_bridge', 'codex_install', 'codex_io', 'codex_log_index', 'codex_models',
     'codex_session', 'codex_state', 'codex_statusline', 'command_filters',

@@ -806,8 +806,13 @@ class BaseAdapter:
 
         Returns (runs, errors) where errors is a list of non-fatal error messages.
         If conn is provided, skips already-collected runs.
+
+        The default is for adapters that can detect a system but not read its
+        runs yet. It says so: a bare ([], []) printed "0 scanned" for a system
+        detect() had just reported as installed, the silent-zero of #149.
         """
-        return [], []
+        return [], [f"{self.display_name} fleet collection is not implemented yet, "
+                    f"so its runs are not counted here (0 is not a measurement)."]
 
     def parse_config(self) -> dict:
         """Parse system configuration for Tier 1 waste analysis.
@@ -1529,6 +1534,19 @@ ADAPTER_REGISTRY: list[type[BaseAdapter]] = [
 ]
 
 
+def _require_known_system(target_system):
+    """Exit 2 on a --system no adapter answers to. It used to filter every
+    adapter out and print "0 new runs collected", a silent zero (#149 class)
+    for a typo such as --system claude-code."""
+    if target_system is None:
+        return
+    known = [cls.name for cls in ADAPTER_REGISTRY]
+    if target_system not in known:
+        print(f"  Unknown --system {target_system!r}. Known systems: {', '.join(known)}.",
+              file=sys.stderr)
+        sys.exit(2)
+
+
 # ===================================================================
 # WASTE PATTERN DETECTORS
 # ===================================================================
@@ -2139,6 +2157,7 @@ def cmd_scan(args: list[str]):
                 pass
         elif a == "--system" and i + 1 < len(args):
             target_system = args[i + 1]
+    _require_known_system(target_system)
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
     conn = _init_fleet_db()
@@ -2238,6 +2257,7 @@ def cmd_audit(args: list[str]):
                 pass
         elif a == "--system" and i + 1 < len(args):
             target_system = args[i + 1]
+    _require_known_system(target_system)
 
     # First, ensure we have data
     if not FLEET_DB.exists():
@@ -2390,6 +2410,7 @@ def cmd_report(args: list[str]):
                 pass
         elif a == "--system" and i + 1 < len(args):
             target_system = args[i + 1]
+    _require_known_system(target_system)
 
     if not FLEET_DB.exists():
         print("  No fleet.db found. Run 'fleet.py scan' first.")

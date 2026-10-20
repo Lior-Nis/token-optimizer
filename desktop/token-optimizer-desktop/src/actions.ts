@@ -145,6 +145,49 @@ export function noteNow(ui: UiState, now: number): string | null {
   return ui.note !== null && now < ui.noteUntil ? ui.note : null
 }
 
+/** Clean up's note when its /compact left no sign that a compaction happened, and gave no reason. */
+export const CLEAN_UNCONFIRMED = 'Clean up could not confirm a compaction.'
+
+/**
+ * What the band saw around Clean up's /compact. `landed`: its own
+ * `session.compact` hook watched a compaction stand during the call (the engine
+ * may leave a plugin's hooks out of a dispatch its own code raised, so a miss
+ * proves nothing). `tokensBefore`/`tokensAfter`: `$.session.usage().context.tokens`
+ * either side of the call, which the engine leaves absent "until the first
+ * response of the live window: a fresh session, or one just compacted"
+ * (SessionContextUsage). `said`: the command's reply, any language.
+ */
+export type CompactEvidence = {
+  landed: boolean
+  tokensBefore: number | null
+  tokensAfter: number | null
+  said: string
+}
+
+/**
+ * Clean up's outcome from evidence, never from the reply's wording (#207):
+ * success needs a compaction the band watched land, or the live window reset by
+ * it (tokens there before the call, gone after). Anything else is a skip: the
+ * reply names why when there is one ("Not enough messages to compact.", or a
+ * hook's veto, in whatever language), and an empty reply cannot confirm anything.
+ */
+export function cleanUpOutcome(ev: CompactEvidence): { ok: true } | { ok: false; line: string } {
+  const windowReset = ev.tokensBefore !== null && ev.tokensBefore > 0 && ev.tokensAfter === null
+  if (ev.landed || windowReset) return { ok: true }
+  const said = ev.said.trim().split('\n')[0]?.trim() ?? ''
+  if (said === '') return { ok: false, line: CLEAN_UNCONFIRMED }
+  return { ok: false, line: `Clean up skipped: ${said.replace(/\.$/, '')}.` }
+}
+
+/** The live window's tokens from a `$.session.usage()` reading, null when the engine has none. */
+export function liveTokens(usage: unknown): number | null {
+  if (!usage || typeof usage !== 'object') return null
+  const context = (usage as Json).context
+  if (!context || typeof context !== 'object') return null
+  const t = (context as Json).tokens
+  return typeof t === 'number' && Number.isFinite(t) ? t : null
+}
+
 /** The path compact-capture printed (`[Token Optimizer] Checkpoint saved: <path>`), or null. */
 export function checkpointPathFrom(stdout: string): string | null {
   const match = /Checkpoint saved: (.+?)\s*$/m.exec(stdout)
@@ -232,6 +275,17 @@ export type HandoffPort = {
 export type HandoffResult = { ok: true; handoff: Handoff } | { ok: false; reason: string }
 
 /**
+ * Why Start fresh stopped when no launcher was a real Python 3 (#261): on
+ * Windows that is usually the Store's python shortcuts standing in for one.
+ */
+export const NO_PYTHON_REASON = 'no working Python 3 was found (the Microsoft Store python shortcuts are not one; install Python 3 from python.org)'
+
+/** The host's runner rejects with an error of this name when no Python 3 starts. */
+function isNoPython(error: unknown): boolean {
+  return error instanceof Error && error.name === 'PythonNotFoundError'
+}
+
+/**
  * Start fresh up to the clear: save a checkpoint, check it is real,
  * build the lean resume text. Any failure returns a one-line reason and
  * nothing is cleared.
@@ -246,8 +300,8 @@ export async function prepareHandoff(
   let captured: { exitCode: number; stdout: string }
   try {
     captured = await port.run(['compact-capture', '--trigger', 'start-fresh', '--budget-seconds', String(CAPTURE_BUDGET_SECONDS)], stdin)
-  } catch {
-    return fail('the checkpoint could not be saved')
+  } catch (error) {
+    return fail(isNoPython(error) ? NO_PYTHON_REASON : 'the checkpoint could not be saved')
   }
   if (captured.exitCode !== 0) return fail('the checkpoint could not be saved')
   const path = checkpointPathFrom(captured.stdout)

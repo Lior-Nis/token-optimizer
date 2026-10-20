@@ -62,6 +62,9 @@ _PAYLOAD_MODULES = (
     "command_filters.py",
     "spawn_utils.py",
     "utf8_io.py",
+    # credential_patterns: bash_compress's credential-preservation patterns
+    # (the inline fallback misses e.g. ghp_/github_pat_ tokens, #171).
+    "credential_patterns.py",
 )
 
 

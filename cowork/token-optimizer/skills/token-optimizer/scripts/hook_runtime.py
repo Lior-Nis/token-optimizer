@@ -81,7 +81,10 @@ class HookDeadline:
             pass
 
     def remaining(self) -> float:
-        return max(0.0, self.end - time.monotonic())
+        # Capped at the deadline's own length: on Windows the clock ticks every
+        # ~15 ms, so (t0 + s) - t0 read in the same tick can round to s + 3e-14,
+        # and callers that budget from remaining() must never exceed their share.
+        return min(self.seconds, max(0.0, self.end - time.monotonic()))
 
     def expires_wall(self) -> float:
         return time.time() + self.remaining()
