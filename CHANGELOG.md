@@ -1,5 +1,10 @@
 # Changelog
 
+## [5.13.53] - 2026-10-20
+
+- Windows desktop app sessions find their own project again, instead of borrowing the most recently touched one, so costs and baselines stay with the right project (#265).
+- A session's model is read from its own transcript, wherever that lives.
+
 ## [5.13.52] - 2026-10-20
 
 - Context fill reads like your own meter: with a smaller auto-compact window, Claude now sees "38% of 1M window (auto-compact at 500k, 76% of the way there)" instead of a bare 76%, so it stops calling a half-empty session full.
