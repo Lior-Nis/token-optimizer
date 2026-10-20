@@ -25838,6 +25838,647 @@ def _read_path_upkeep(conn, days):
             pass
 
 
+def _session_price_buckets(mb, pricing_tier):
+    """(priced_tokens, unpriced_tokens) for a per-model breakdown."""
+    priced = unpriced = 0
+    for model_name, parts in (mb or {}).items():
+        if not isinstance(parts, dict):
+            continue
+        model_tokens = (
+            int(parts.get("fresh_input") or 0)
+            + int(parts.get("cache_read") or 0)
+            + int(parts.get("cache_create") or 0)
+            + int(parts.get("output") or 0)
+        )
+        if _is_priced_model(model_name, tier=pricing_tier):
+            priced += model_tokens
+        else:
+            unpriced += model_tokens
+    return priced, unpriced
+
+
+def _price_session_row(sr, pricing_tier):
+    """Price one session_log row: THE per-session cost for the dashboard and
+    for `session-cost`, so the two can never disagree.
+
+    *sr* needs date, input_tokens, output_tokens, cache_hit_rate,
+    cache_create_1h_tokens, cache_create_5m_tokens, model_usage_json,
+    model_usage_breakdown_json and daily_usage_json. Every model is priced at
+    its own generation card (_get_model_cost -> _claude_price_key).
+
+    Returns a dict:
+      main_cost   parent-thread cost (stored per-model breakdown; a dominant-model
+                  estimate for rows that carry none)
+      total_cost  the whole session. With per-day usage (parent + subagents,
+                  requests merged by requestId so a shared one bills once) it is
+                  the sum of the days; without it, main_cost.
+      slices      [[date, cost, priced, unpriced, input, output], ...] every
+                  billed day, uncut by any window
+      has_daily   whether total_cost includes the subagents
+      priced_tokens / unpriced_tokens, dom_model, model_usage, breakdown,
+      daily_usage
+    """
+    inp_total = sr["input_tokens"] or 0
+    out_total = sr["output_tokens"] or 0
+    chr_val = sr["cache_hit_rate"] or 0
+    cache_read_est = _safe_int(inp_total * chr_val)
+    cache_create_1h = sr["cache_create_1h_tokens"] or 0
+    cache_create_5m = sr["cache_create_5m_tokens"] or 0
+    cache_create_total = cache_create_1h + cache_create_5m
+    uncached_est = max(0, inp_total - cache_read_est - cache_create_total)
+
+    mu = _safe_json_dict(sr["model_usage_json"])
+    dom_model = max(mu, key=mu.get) if mu else "unknown"
+    mb = _safe_json_dict(sr["model_usage_breakdown_json"])
+    du = _safe_json_dict(sr["daily_usage_json"])
+
+    if mb:
+        session_priced_tokens, session_unpriced_tokens = _session_price_buckets(mb, pricing_tier)
+    else:
+        model_tokens = inp_total + out_total
+        if _is_priced_model(dom_model, tier=pricing_tier):
+            session_priced_tokens, session_unpriced_tokens = model_tokens, 0
+        else:
+            session_priced_tokens, session_unpriced_tokens = 0, model_tokens
+    # Main-thread cost from the stored session breakdown. Used as-is for rows
+    # without per-day data (non-JSONL adapters, transcript gone).
+    split = bool(cache_create_1h or cache_create_5m)
+    session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
+                                               cache_create_1h=cache_create_1h if split else None,
+                                               cache_create_5m=cache_create_5m if split else None)
+    if session_cost == 0.0:
+        # Use the stored 1h/5m split when available; fall back to 5m-only rate otherwise.
+        if split:
+            session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total,
+                                           tier=pricing_tier, cache_create_1h=cache_create_1h, cache_create_5m=cache_create_5m)
+        else:
+            session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
+    if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
+        session_unpriced_tokens = inp_total + out_total
+
+    # Per-day slices (#200). With per-day data, each calendar day is billed for
+    # the requests that ran on it, subagents included. Without it, the whole
+    # session lands on its stored date.
+    slices = []  # (date, cost, priced, unpriced, input_tokens, output_tokens)
+    if du:
+        by_day = {}
+        undated_day = _undated_bill_day(du, sr["date"])
+        for day, day_mb in du.items():
+            if not isinstance(day_mb, dict):
+                continue
+            day = undated_day if day == UNDATED_USAGE_KEY else day
+            _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
+        for day in sorted(by_day):
+            day_mb = by_day[day].get("_", {})
+            day_cost = _cost_from_model_breakdown(day_mb, tier=pricing_tier)
+            day_priced, day_unpriced = _session_price_buckets(day_mb, pricing_tier)
+            day_in = sum(
+                int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
+                for p in day_mb.values() if isinstance(p, dict))
+            day_out = sum(int(p.get("output") or 0) for p in day_mb.values() if isinstance(p, dict))
+            slices.append([day, day_cost, day_priced, day_unpriced, day_in, day_out])
+        total_cost = sum(sl[1] for sl in slices)
+    else:
+        total_cost = session_cost
+        slices = [[sr["date"], session_cost, session_priced_tokens, session_unpriced_tokens, inp_total, out_total]]
+    return {
+        "main_cost": session_cost,
+        "total_cost": total_cost,
+        "slices": slices,
+        "has_daily": bool(du),
+        "priced_tokens": sum(sl[2] for sl in slices),
+        "unpriced_tokens": sum(sl[3] for sl in slices),
+        "dom_model": dom_model,
+        "model_usage": mu,
+        "breakdown": mb,
+        "daily_usage": du,
+    }
+
+
+# ---------------------------------------------------------------------------
+# session-cost: "what did the Navina session yesterday cost?" answered from
+# trends.db, priced by _price_session_row (the dashboard's own number). Strictly
+# read-only: the DB is opened mode=ro (WAL readers never block a writer) and,
+# only if that open fails, immutable=1. Nothing here creates, migrates or
+# writes a file.
+# ---------------------------------------------------------------------------
+
+# Filler words a plain question carries ("what did the ... session cost").
+# Dropped before matching so passing the user's own words still works.
+_SESSION_COST_STOPWORDS = frozenset("""
+a an and are at be by cost costs costed did do does for from how i in is it
+its me much my of on or price priced pricing session sessions spend spent
+that the this to was were what which with
+""".split())
+_SESSION_COST_ID_RX = re.compile(r"^[0-9a-f]{8}[0-9a-f-]*$", re.IGNORECASE)
+_SESSION_COST_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SESSION_COST_COLS = (
+    "id, jsonl_path, date, project, duration_minutes, input_tokens, output_tokens, "
+    "message_count, api_calls, cache_hit_rate, cache_create_1h_tokens, "
+    "cache_create_5m_tokens, model_usage_json, model_usage_breakdown_json, "
+    "daily_usage_json, slug, topic, session_uuid, is_sidechain, subagents_json, "
+    "collected_at, origin, platform"
+)
+SESSION_COST_BASIS = (
+    "API-equivalent list price ({tier}). On a subscription plan this is what the "
+    "work would have cost at API rates, not a bill."
+)
+
+
+def _session_cost_norm(text):
+    """Case- and form-insensitive text for matching (Hebrew/any script safe)."""
+    import unicodedata  # noqa: PLC0415 - only this command needs it
+    return unicodedata.normalize("NFKC", str(text or "")).casefold()
+
+
+def _session_cost_resolve_date(word, today=None):
+    """'today' / 'yesterday' / YYYY-MM-DD -> YYYY-MM-DD, else None."""
+    today = today or datetime.now().date()
+    w = _session_cost_norm(word).strip()
+    if w == "today":
+        return today.strftime("%Y-%m-%d")
+    if w == "yesterday":
+        return (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    if _SESSION_COST_DATE_RX.match(w):
+        try:
+            return datetime.strptime(w, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+    return None
+
+
+def _session_cost_parse_args(argv):
+    """Parse session-cost arguments. Returns (opts, error-or-None)."""
+    opts = {"words": [], "id": None, "date": None, "days": None, "limit": 5, "json": False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            opts["json"] = True
+        elif a in ("--id", "--date", "--days", "--limit"):
+            if i + 1 >= len(argv):
+                return opts, f"{a} needs a value"
+            val = argv[i + 1]
+            i += 1
+            if a == "--id":
+                opts["id"] = val.strip().lower()
+            elif a == "--date":
+                d = _session_cost_resolve_date(val)
+                if d is None:
+                    return opts, f"--date takes YYYY-MM-DD, today or yesterday (got {val!r})"
+                opts["date"] = d
+            else:
+                try:
+                    n = int(val)
+                except ValueError:
+                    return opts, f"{a} takes a whole number (got {val!r})"
+                if n < 1:
+                    return opts, f"{a} must be at least 1"
+                opts["days" if a == "--days" else "limit"] = n
+        elif a.startswith("--"):
+            return opts, f"unknown option {a}"
+        else:
+            opts["words"].append(a)
+        i += 1
+    # Plain words may carry the date or the id themselves.
+    words = []
+    for raw in opts["words"]:
+        for w in re.split(r"[\s,?!.;:]+", raw):
+            w = w.strip("\"'()[]{}<>")
+            if not w:
+                continue
+            d = _session_cost_resolve_date(w)
+            if d is not None:
+                opts["date"] = opts["date"] or d
+                continue
+            if _SESSION_COST_ID_RX.match(w) and not opts["id"]:
+                opts["id"] = w.lower()
+                continue
+            n = _session_cost_norm(w)
+            if n not in _SESSION_COST_STOPWORDS:
+                words.append(n)
+    opts["words"] = words
+    return opts, None
+
+
+def _session_cost_open_db(db_path):
+    """Open trends.db without writing a byte or blocking a writer.
+
+    trends.db runs in WAL mode. With no writer attached (no -wal, or an empty
+    one) every row is in the main file, so immutable=1 reads it with no locks
+    and creates nothing; a plain mode=ro open would create -wal/-shm files.
+    With a live writer (-wal holding data and its -shm present), mode=ro
+    joins the shared read protocol: it sees every committed row and a WAL
+    reader never blocks a writer. If that fails (an exclusive lock, or a WAL
+    with no -shm to share), immutable=1 still answers from the main file,
+    which may miss the newest rows. Returns (conn, mode) or (None, error)."""
+    db_path = Path(db_path).resolve()
+    uri_base = db_path.as_uri()
+    try:
+        wal = Path(str(db_path) + "-wal")
+        live = wal.exists() and wal.stat().st_size > 0
+        shm_ok = Path(str(db_path) + "-shm").exists()
+    except OSError:
+        live, shm_ok = True, False
+    if not live:
+        attempts = (("quiescent", "?mode=ro&immutable=1"),)
+    elif shm_ok:
+        attempts = (("shared-read", "?mode=ro"), ("snapshot", "?mode=ro&immutable=1"))
+    else:
+        attempts = (("snapshot", "?mode=ro&immutable=1"),)
+    last_err = None
+    for mode, query in attempts:
+        conn = None
+        try:
+            conn = sqlite3.connect(uri_base + query, uri=True, timeout=1.5)
+            conn.execute("PRAGMA query_only=1")
+            conn.execute("SELECT 1 FROM session_log LIMIT 1").fetchall()
+            conn.row_factory = sqlite3.Row
+            return conn, mode
+        except sqlite3.Error as exc:
+            last_err = exc
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+    return None, str(last_err)
+
+
+def _session_cost_haystack(row):
+    """Every text field a plain-words question can match: topic, slug, project
+    (raw and cleaned) and the transcript's folder name."""
+    project = row["project"] or ""
+    parts = [row["topic"], row["slug"], project, _clean_project_name(project)]
+    jp = row["jsonl_path"]
+    if jp:
+        parts.append(Path(jp).parent.name)
+    return _session_cost_norm(" ".join(str(p) for p in parts if p))
+
+
+def _session_cost_word_hits(words, row):
+    """How many of *words* match this row. A word of three characters or fewer
+    must be a whole token ('tr' never matches 'trends'); longer words match
+    anywhere (Hebrew prefixes attach to the word they modify)."""
+    hay = _session_cost_haystack(row)
+    tokens = set(re.findall(r"\w+", hay))
+    hits = 0
+    for w in words:
+        if (w in tokens) if len(w) <= 3 else (w in hay):
+            hits += 1
+    return hits
+
+
+def _session_cost_row_id(row):
+    uuid = row["session_uuid"]
+    if uuid:
+        return str(uuid)
+    jp = row["jsonl_path"] or ""
+    return Path(jp).stem if jp else f"row-{row['id']}"
+
+
+def _session_cost_components(priced, row, tier):
+    """Per-model tokens and dollars from the same buckets the total came from
+    (per-day usage when stored, else the parent breakdown, else the
+    dominant-model estimate). Returns (models, tokens, cost_parts)."""
+    buckets = {}
+    if priced["has_daily"]:
+        for day_mb in priced["daily_usage"].values():
+            if isinstance(day_mb, dict):
+                _merge_daily_usage(buckets, {"_": day_mb})
+        buckets = buckets.get("_", {})
+    elif priced["breakdown"]:
+        buckets = {m: p for m, p in priced["breakdown"].items() if isinstance(p, dict)}
+    else:
+        inp = int(row["input_tokens"] or 0)
+        cr = _safe_int(inp * (row["cache_hit_rate"] or 0))
+        cc1 = int(row["cache_create_1h_tokens"] or 0)
+        cc5 = int(row["cache_create_5m_tokens"] or 0)
+        buckets = {priced["dom_model"]: {
+            "fresh_input": max(0, inp - cr - cc1 - cc5), "cache_read": cr,
+            "cache_create": cc1 + cc5, "cache_create_1h": cc1, "cache_create_5m": cc5,
+            "output": int(row["output_tokens"] or 0)}}
+    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    parts = {"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+    models = []
+    for model, p in buckets.items():
+        fi = int(p.get("fresh_input") or 0)
+        out = int(p.get("output") or 0)
+        cr = int(p.get("cache_read") or 0)
+        cc = int(p.get("cache_create") or 0)
+        has_split = "cache_create_1h" in p or "cache_create_5m" in p
+        c1 = int(p.get("cache_create_1h") or 0) if has_split else None
+        c5 = int(p.get("cache_create_5m") or 0) if has_split else None
+        c_in = _get_model_cost(model, fi, 0, 0, 0, tier=tier)
+        c_out = _get_model_cost(model, 0, out, 0, 0, tier=tier)
+        c_cr = _get_model_cost(model, 0, 0, cr, 0, tier=tier)
+        c_cw = _get_model_cost(model, 0, 0, 0, cc, tier=tier, cache_create_1h=c1, cache_create_5m=c5)
+        for k, v in (("input", fi), ("output", out), ("cache_read", cr), ("cache_write", cc)):
+            tokens[k] += v
+        for k, v in (("input", c_in), ("output", c_out), ("cache_read", c_cr), ("cache_write", c_cw)):
+            parts[k] += v
+        models.append({"model": model, "priced": _is_priced_model(model, tier=tier),
+                       "tokens": fi + out + cr + cc,
+                       "cost_usd": round(c_in + c_out + c_cr + c_cw, 4)})
+    models.sort(key=lambda m: (-m["cost_usd"], -m["tokens"]))
+    return models, tokens, parts
+
+
+def _session_cost_entry(row, tier, date_filter=None, current_id=None):
+    """One matched session, priced, as a JSON-ready dict."""
+    priced = _price_session_row(row, tier)
+    total = float(priced["total_cost"])
+    models, tokens, parts = _session_cost_components(priced, row, tier)
+    subagents = _safe_json_dict(row["subagents_json"])
+    sub_count = sum(int(v or 0) for v in subagents.values() if isinstance(v, (int, float)))
+    main = min(float(priced["main_cost"]), total) if priced["has_daily"] else total
+    sub_cost = max(0.0, total - main) if priced["has_daily"] else 0.0
+    # Components come from the same buckets as the total; any gap is the
+    # per-request long-context card on a row with no per-day data.
+    adjustment = total - sum(parts.values())
+    days = sorted({sl[0] for sl in priced["slices"] if sl[0]})
+    sid = _session_cost_row_id(row)
+    partial = False
+    partial_reason = None
+    if current_id and sid.startswith(current_id):
+        partial, partial_reason = True, "this is the current session; it is collected again when it ends"
+    else:
+        try:
+            jp = row["jsonl_path"]
+            collected = row["collected_at"]
+            if jp and collected and os.path.exists(jp):
+                if datetime.fromtimestamp(os.stat(jp).st_mtime) > datetime.fromisoformat(str(collected)) + timedelta(seconds=60):
+                    partial, partial_reason = True, "the transcript grew after it was collected"
+        except (OSError, ValueError, TypeError):
+            pass
+    entry = {
+        "session_id": sid,
+        "date": row["date"],
+        "days": days or [row["date"]],
+        "topic": _strip_ansi(row["topic"] or "") or None,
+        "slug": _strip_ansi(row["slug"] or "") or None,
+        "project": _strip_ansi(_clean_project_name(row["project"])),
+        "kind": "delegated" if row["is_sidechain"] else "session",
+        "origin": row["origin"],
+        "duration_minutes": round(float(row["duration_minutes"] or 0), 1),
+        "api_calls": int(row["api_calls"] or 0),
+        "models": models,
+        "tokens": tokens,
+        "cost_usd": {
+            "input": round(parts["input"], 4),
+            "output": round(parts["output"], 4),
+            "cache_read": round(parts["cache_read"], 4),
+            "cache_write": round(parts["cache_write"], 4),
+            "total": round(total, 4),
+            "main_thread": round(main, 4),
+            "subagents": round(sub_cost, 4),
+        },
+        "subagents": {"count": sub_count, "types": subagents,
+                      "included": bool(priced["has_daily"]) or not sub_count},
+        "unpriced_tokens": int(priced["unpriced_tokens"]),
+        "collected_at": row["collected_at"],
+        "partial": partial,
+        "partial_reason": partial_reason,
+    }
+    if abs(adjustment) >= 0.0001:
+        entry["cost_usd"]["long_context_adjustment"] = round(adjustment, 4)
+    if date_filter and len(entry["days"]) > 1:
+        entry["cost_usd"]["on_" + date_filter] = round(
+            sum(sl[1] for sl in priced["slices"] if sl[0] == date_filter), 4)
+    return entry
+
+
+def _session_cost_uncollected(id_prefix):
+    """Transcripts on disk for an id that trends.db has no row for (read-only glob)."""
+    if not id_prefix or detect_runtime() != "claude":
+        return []
+    try:
+        base = CLAUDE_DIR / "projects"
+        if not base.is_dir():
+            return []
+        safe = re.sub(r"[^0-9a-fA-F-]", "", id_prefix)
+        return [str(p) for p in base.glob(f"*/{safe}*.jsonl")][:3] if safe else []
+    except OSError:
+        return []
+
+
+def session_cost_query(argv):
+    """Build the session-cost answer as a dict (see session_cost_main)."""
+    opts, err = _session_cost_parse_args(argv)
+    tier = _load_pricing_tier()
+    out = {
+        "db": str(TRENDS_DB),
+        "basis": SESSION_COST_BASIS.format(tier=_pricing_tier_label(tier)),
+        "query": {"words": opts["words"], "id": opts["id"], "date": opts["date"],
+                  "days": opts["days"]},
+        "sessions": [],
+        "match_count": 0,
+        "total_cost_usd": 0.0,
+        "closest": [],
+        "note": None,
+    }
+    if err:
+        out["error"] = err
+        return out
+    if not TRENDS_DB.exists():
+        out["error"] = ("No Token Optimizer history yet (no trends database at this "
+                        "path). Sessions are collected when they end.")
+        return out
+    conn, mode = _session_cost_open_db(TRENDS_DB)
+    if conn is None:
+        out["error"] = f"Could not read the trends database read-only: {mode}"
+        return out
+    out["read_mode"] = mode
+    current_id = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip().lower() or None
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(session_log)").fetchall()}
+        select = ", ".join(c if c in cols else f"NULL AS {c}"
+                           for c in (x.strip() for x in _SESSION_COST_COLS.split(",")))
+        params = []
+        where = []
+        if opts["date"]:
+            where.append("date >= ?")  # date is a session's LAST day
+            params.append(opts["date"])
+        elif not opts["id"]:
+            days = opts["days"] or 30
+            cutoff = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+            out["query"]["days"] = days
+            where.append("date >= ?")
+            params.append(cutoff)
+        sql = f"SELECT {select} FROM session_log"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        rows = conn.execute(sql + " ORDER BY date DESC, id DESC", params).fetchall()
+    except sqlite3.Error as exc:
+        conn.close()
+        out["error"] = f"Could not read the trends database: {exc}"
+        return out
+    conn.close()
+
+    # One session counts once: copies of a session (worktree, mirror) keep the
+    # most complete row, the same rule as _dedupe_session_rows.
+    best = {}
+    for r in rows:
+        key = _session_cost_row_id(r)
+        rank = _session_rank(r["message_count"], r["input_tokens"], r["output_tokens"])
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, r)
+    rows = [v[1] for v in best.values()]
+    rows.sort(key=lambda r: (str(r["date"] or ""), int(r["id"] or 0)), reverse=True)
+
+    def _days_of(r):
+        du = _safe_json_dict(r["daily_usage_json"])
+        ds = {d for d in du if d != UNDATED_USAGE_KEY}
+        ds.add(r["date"])
+        return ds
+
+    def _id_ok(r):
+        if not opts["id"]:
+            return True
+        sid = _session_cost_row_id(r).lower()
+        stem = Path(r["jsonl_path"] or "").stem.lower()
+        return sid.startswith(opts["id"]) or stem.startswith(opts["id"])
+
+    def _date_ok(r):
+        return not opts["date"] or opts["date"] in _days_of(r)
+
+    words = opts["words"]
+    scoped = [r for r in rows if _id_ok(r) and _date_ok(r)]
+    matched = [r for r in scoped if not words or _session_cost_word_hits(words, r) == len(words)]
+
+    entries = [_session_cost_entry(r, tier, opts["date"], current_id) for r in matched]
+    out["match_count"] = len(entries)
+    out["total_cost_usd"] = round(sum(e["cost_usd"]["total"] for e in entries), 4)
+    out["sessions"] = entries[:opts["limit"]]
+    out["shown"] = len(out["sessions"])
+    if entries:
+        return out
+
+    # Nothing matched: say so and offer the closest few. Sessions matching
+    # some of the words come first, then the newest in the date scope.
+    pool = scoped if (opts["date"] or opts["id"]) and scoped else rows
+    if words:
+        # Stable sort: within a hit count the newest-first order stays.
+        pool = sorted(pool, key=lambda r: -_session_cost_word_hits(words, r))
+    out["closest"] = [_session_cost_entry(r, tier, opts["date"], current_id) for r in pool[:3]]
+    if opts["id"]:
+        on_disk = _session_cost_uncollected(opts["id"])
+        if on_disk:
+            out["note"] = ("That session has a transcript but is not collected yet. "
+                           "Collection runs when a session ends; run `measure.py collect` "
+                           "to collect now, then ask again.")
+            out["uncollected_transcripts"] = on_disk
+            return out
+    out["note"] = ("No collected session matches. Collection runs when a session ends, "
+                   "so a session still open (or ended in the last minute) may not be "
+                   "here yet.")
+    return out
+
+
+def _fmt_session_cost_tokens(n):
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
+def _fmt_session_cost_duration(minutes):
+    m = int(round(float(minutes or 0)))
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def _usd(v):
+    """Dollars as people read them: cents from $1 up, four places below."""
+    v = float(v or 0)
+    return f"${v:,.2f}" if abs(v) >= 1 else f"${v:.4f}"
+
+
+def _print_session_cost_entry(n, e):
+    title = e["topic"] or e["slug"] or "(untitled session)"
+    days = e["days"]
+    when = days[0] if len(days) == 1 else f"{days[0]} to {days[-1]}"
+    kind = "  [delegated session]" if e["kind"] == "delegated" else ""
+    print(f"{n}. {title}{kind}")
+    print(f"   {when} · project {e['project']} · id {e['session_id']}")
+    sub = e["subagents"]
+    sub_txt = f" · {sub['count']} subagent run{'s' if sub['count'] != 1 else ''}" if sub["count"] else ""
+    print(f"   {_fmt_session_cost_duration(e['duration_minutes'])} · {e['api_calls']} calls{sub_txt}")
+    models = " · ".join(
+        f"{m['model']} {_usd(m['cost_usd'])}" + ("" if m["priced"] else " (no price card)")
+        for m in e["models"]) or "none recorded"
+    print(f"   Models: {models}")
+    t = e["tokens"]
+    print(f"   Tokens: {_fmt_session_cost_tokens(t['input'])} input · "
+          f"{_fmt_session_cost_tokens(t['output'])} output · "
+          f"{_fmt_session_cost_tokens(t['cache_read'])} cache read · "
+          f"{_fmt_session_cost_tokens(t['cache_write'])} cache write")
+    c = e["cost_usd"]
+    print(f"   Cost:   input {_usd(c['input'])} · output {_usd(c['output'])} · "
+          f"cache read {_usd(c['cache_read'])} · cache write {_usd(c['cache_write'])}"
+          + (f" · long-context {_usd(c['long_context_adjustment'])}" if "long_context_adjustment" in c else ""))
+    split = ""
+    if (sub["count"] or c["subagents"] > 0) and sub["included"]:
+        split = f"  (main thread {_usd(c['main_thread'])} + subagents {_usd(c['subagents'])})"
+    elif sub["count"]:
+        split = "  (main thread only; subagents are added on the next collection)"
+    print(f"   Total:  {_usd(c['total'])}{split}")
+    for k, v in c.items():
+        if k.startswith("on_"):
+            print(f"   Of which on {k[3:]}: {_usd(v)}")
+    if e["partial"]:
+        print(f"   Partial: {e['partial_reason']} (figures as of {e['collected_at']}).")
+
+
+def session_cost_main(argv):
+    """`measure.py session-cost [words...] [--id UUID] [--date D] [--days N]
+    [--limit N] [--json]`: what a session cost, from the user's own words."""
+    res = session_cost_query(argv)
+    if "--json" in argv:
+        print(json.dumps(res, indent=2, ensure_ascii=False, default=str))
+        return 1 if res.get("error") else 0
+    if res.get("error"):
+        print(f"[Token Optimizer] {res['error']}")
+        return 1
+    q = res["query"]
+    scope = []
+    if q["words"]:
+        scope.append("“" + " ".join(q["words"]) + "”")
+    if q["id"]:
+        scope.append(f"id {q['id']}")
+    if q["date"]:
+        scope.append(f"on {q['date']}")
+    elif q.get("days"):
+        scope.append(f"in the last {q['days']} days")
+    scope_txt = " ".join(scope) or "all sessions"
+    if res["match_count"]:
+        n = res["match_count"]
+        print(f"Session cost: {n} session{'s' if n != 1 else ''} {scope_txt}"
+              + (f", {_usd(res['total_cost_usd'])} in total" if n > 1 else ""))
+        if res["shown"] < n:
+            print(f"(showing the newest {res['shown']}; --limit N shows more)")
+        print()
+        for i, e in enumerate(res["sessions"], 1):
+            _print_session_cost_entry(i, e)
+            print()
+    else:
+        print(f"Session cost: no session matches {scope_txt}.")
+        if res.get("note"):
+            print(res["note"])
+        if res["closest"]:
+            print()
+            print("Closest sessions:")
+            print()
+            for i, e in enumerate(res["closest"], 1):
+                _print_session_cost_entry(i, e)
+                print()
+    print(f"Basis: {res['basis']}")
+    if res.get("read_mode") == "snapshot":
+        print("Read from a lock-free snapshot; the very latest writes may be missing.")
+    return 0
+
+
 def _collect_trends_from_db(days=30):
     """Query SQLite trends DB for aggregated usage data.
 
@@ -26035,24 +26676,6 @@ def _query_trends_db(conn, days):
         (cutoff,),
     ).fetchall()
 
-    def _price_buckets(mb):
-        """(priced_tokens, unpriced_tokens) for a per-model breakdown."""
-        priced = unpriced = 0
-        for model_name, parts in (mb or {}).items():
-            if not isinstance(parts, dict):
-                continue
-            model_tokens = (
-                int(parts.get("fresh_input") or 0)
-                + int(parts.get("cache_read") or 0)
-                + int(parts.get("cache_create") or 0)
-                + int(parts.get("output") or 0)
-            )
-            if _is_priced_model(model_name, tier=pricing_tier):
-                priced += model_tokens
-            else:
-                unpriced += model_tokens
-        return priced, unpriced
-
     def _day_entry(date):
         if date not in daily:
             daily[date] = {
@@ -26075,85 +26698,20 @@ def _query_trends_db(conn, days):
         except (json.JSONDecodeError, TypeError):
             subagents = {}
 
-        # Estimate cost from stored data
+        # One pricing path for every per-session dollar figure (the dashboard
+        # here, `session-cost` for plain-language questions): _price_session_row.
         inp_total = sr["input_tokens"] or 0
         out_total = sr["output_tokens"] or 0
         chr_val = sr["cache_hit_rate"] or 0
-        cache_read_est = _safe_int(inp_total * chr_val)
         cache_create_1h = sr["cache_create_1h_tokens"] or 0
         cache_create_5m = sr["cache_create_5m_tokens"] or 0
-        cache_create_total = cache_create_1h + cache_create_5m
-        uncached_est = max(0, inp_total - cache_read_est - cache_create_total)
-
-        # Determine dominant model from model_usage_json
-        try:
-            mu_raw = sr["model_usage_json"]
-            mu = json.loads(mu_raw) if mu_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            mu = {}
-        dom_model = max(mu, key=mu.get) if mu else "unknown"
-        try:
-            mb_raw = sr["model_usage_breakdown_json"]
-            mb = json.loads(mb_raw) if mb_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            mb = {}
-        try:
-            du_raw = sr["daily_usage_json"]
-            du = json.loads(du_raw) if du_raw else {}
-        except (json.JSONDecodeError, TypeError, KeyError):
-            du = {}
-        if not isinstance(du, dict):
-            du = {}
-
-        if isinstance(mb, dict) and mb:
-            session_priced_tokens, session_unpriced_tokens = _price_buckets(mb)
-        else:
-            model_tokens = inp_total + out_total
-            if _is_priced_model(dom_model, tier=pricing_tier):
-                session_priced_tokens, session_unpriced_tokens = model_tokens, 0
-            else:
-                session_priced_tokens, session_unpriced_tokens = 0, model_tokens
-        # Main-thread cost from the stored session breakdown. Used as-is for rows
-        # without per-day data (non-JSONL adapters, transcript gone).
-        session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
-                                                   cache_create_1h=cache_create_1h if cache_create_1h or cache_create_5m else None,
-                                                   cache_create_5m=cache_create_5m if cache_create_1h or cache_create_5m else None)
-        if session_cost == 0.0:
-            # Use the stored 1h/5m split when available; fall back to 5m-only rate otherwise.
-            if cache_create_1h or cache_create_5m:
-                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total,
-                                               tier=pricing_tier, cache_create_1h=cache_create_1h, cache_create_5m=cache_create_5m)
-            else:
-                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
-        if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
-            session_unpriced_tokens = inp_total + out_total
-
-        # Per-day slices (#200). With per-day data, each calendar day is billed for
-        # the requests that ran on it, subagents included; a day before the window
-        # is dropped. Without it, the whole session lands on its stored date.
-        slices = []  # (date, cost, priced, unpriced, input_tokens, output_tokens)
-        if du:
-            by_day = {}
-            undated_day = _undated_bill_day(du, sr["date"])
-            for day, day_mb in du.items():
-                if not isinstance(day_mb, dict):
-                    continue
-                day = undated_day if day == UNDATED_USAGE_KEY else day
-                _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
-            for day in sorted(by_day):
-                day_mb = by_day[day].get("_", {})
-                day_cost = _cost_from_model_breakdown(day_mb, tier=pricing_tier)
-                day_priced, day_unpriced = _price_buckets(day_mb)
-                day_in = sum(
-                    int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
-                    for p in day_mb.values() if isinstance(p, dict))
-                day_out = sum(int(p.get("output") or 0) for p in day_mb.values() if isinstance(p, dict))
-                slices.append([day, day_cost, day_priced, day_unpriced, day_in, day_out])
-            session_total_cost = sum(sl[1] for sl in slices)
-            slices = [sl for sl in slices if sl[0] >= cutoff]
-        else:
-            session_total_cost = session_cost
-            slices = [[sr["date"], session_cost, session_priced_tokens, session_unpriced_tokens, inp_total, out_total]]
+        priced_row = _price_session_row(sr, pricing_tier)
+        mu = priced_row["model_usage"]
+        dom_model = priced_row["dom_model"]
+        du = priced_row["daily_usage"]
+        session_total_cost = priced_row["total_cost"]
+        # A day before the window is dropped.
+        slices = [sl for sl in priced_row["slices"] if sl[0] >= cutoff]
 
         window_unpriced = 0
         jsonl_path = sr["jsonl_path"]
@@ -58766,6 +59324,9 @@ if __name__ == "__main__":
         # PostToolUse hook handler: archive large tool results
         quiet = "--quiet" in args or "-q" in args
         archive_result(quiet=quiet)
+    elif args[0] == "session-cost":
+        # "What did the Navina session yesterday cost?" Read-only; see session_cost_main.
+        sys.exit(session_cost_main(args[1:]))
     elif args[0] == "expand":
         # Retrieve archived tool result
         list_all = "--list" in args
@@ -58947,6 +59508,8 @@ if __name__ == "__main__":
         print("  python3 measure.py attention-optimize --apply        # Apply reordering (backup + write)")
         print("  python3 measure.py archive-result                        # PostToolUse hook: archive large tool results")
         print("  python3 measure.py archive-result --quiet                 # Silent mode (suppress stderr)")
+        print("  python3 measure.py session-cost navina --date yesterday   # What a session cost, in your words (read-only)")
+        print("  python3 measure.py session-cost --id UUID --json          # One session by id, machine-readable")
         print("  python3 measure.py expand TOOL_USE_ID                     # Retrieve archived tool result")
         print("  python3 measure.py expand TOOL_USE_ID --session SID       # Retrieve from specific session")
         print("  python3 measure.py expand --list                          # List all archived results")

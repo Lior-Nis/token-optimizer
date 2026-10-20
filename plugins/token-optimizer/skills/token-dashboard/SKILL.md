@@ -1,12 +1,11 @@
 ---
 name: token-dashboard
-description: Opens the Token Optimizer dashboard in the browser (context usage, quality, savings). Use when the user asks to see the dashboard.
-disable-model-invocation: true
+description: Answers what a past session cost ("the Navina session yesterday", a session id) with a priced number, and opens the Token Optimizer dashboard when asked to see it.
 ---
 
 # Token Optimizer Dashboard
 
-Opens an up-to-date dashboard showing your context usage trends, quality scores, session history, and skill management.
+Answers what a session cost from the user's own words, and opens an up-to-date dashboard of context usage, quality, session history and skills. Open the dashboard only when the user asks to see it; a cost question never opens a browser.
 
 ## Instructions
 
@@ -63,7 +62,17 @@ if [ -z "$MEASURE_PY" ]; then echo "[Error] measure.py not found. Is Token Optim
 export TOKEN_OPTIMIZER_RUNTIME="$RUNTIME"
 ```
 
-2. **Collect and open**:
+2. **A cost question** ("what did the Navina session yesterday cost?", "how much were my TR sync sessions?", "cost of session <id>"): run this instead of steps 3-4.
+```bash
+python3 "$MEASURE_PY" session-cost <the user's words> --json
+```
+   - Pass the user's own words (`navina yesterday`, `tr sync`, an id or its first 8 characters). Names match topic, slug and project, case-insensitively, and all of them must match; `today`, `yesterday` and `YYYY-MM-DD` set the day. Add `--days N` for "this week" (default 30), `--limit N` to list more.
+   - Answer from `sessions[]`: date, topic, `cost_usd.total`, the main-thread and subagent split when subagents ran, and `partial_reason` when set. Several matches: give `total_cost_usd` and list them, asking which one only when it changes the answer.
+   - State `basis` in one line: API list prices, so on a subscription it is what the work would have cost, not a bill.
+   - No match: say so, show `closest[]`, and pass on `note` (a session is collected when it ends).
+   - Never query trends.db or price tokens yourself: this is the dashboard's own number, read without writing.
+
+3. **Collect and open**:
 ```bash
 # TOKEN_OPTIMIZER_INTERACTIVE=1 marks this as a user-initiated open, so the 20s
 # hook budget does not cut off a heavy rebuild on a large history. The user is
@@ -74,11 +83,11 @@ TOKEN_OPTIMIZER_INTERACTIVE=1 python3 "$MEASURE_PY" collect --quiet && \
 
 This collects the latest session data into the trends database, regenerates the dashboard HTML, and opens it in your default browser.
 
-3. **Tell the user** the dashboard is open. Probe the daemon before mentioning any URL:
+4. **Tell the user** the dashboard is open. Probe the daemon before mentioning any URL:
    - Probe daemon: `python3 "$MEASURE_PY" daemon-status 2>/dev/null`
    - If DAEMON_RUNNING: lead with `URL: http://localhost:24842/token-optimizer` (bookmarkable, auto-updates), then mention the file fallback.
    - If DAEMON_NOT_RUNNING: do not print the `localhost:24842` URL. Tell the user the dashboard opened as a file, and suggest `python3 $MEASURE_PY setup-daemon` (macOS and Windows) if they want a bookmarkable URL.
-   - File path: never hardcode it. It is install-dependent. Cite the `  Dashboard: ` line from the step-2 output.
+   - File path: never hardcode it. It is install-dependent. Cite the `  Dashboard: ` line from the step-3 output.
    - For Codex when DAEMON_NOT_RUNNING: do not imply the Claude daemon is required; the generated file works, and Stop hooks refresh it when balanced hooks are installed.
 
 Written for and checked on Claude Opus 5.5 and Sonnet 5.5, and GPT-5.6 on Codex.

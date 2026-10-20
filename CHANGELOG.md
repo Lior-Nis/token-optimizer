@@ -2,6 +2,7 @@
 
 ## [5.13.51] - 2026-10-19
 
+- Ask what any session cost in plain words ("the Navina session yesterday") and get a priced answer.
 - Codex and Claude Code side by side stay separate: a Codex session no longer writes its data into Claude Code's folder or changes Claude Code's status line.
 - Codex now saves checkpoints at Stop and before compaction, and its hooks keep working after a plugin update mid-session.
 - After a compact, Claude gets back your real task instead of the compaction summary.
