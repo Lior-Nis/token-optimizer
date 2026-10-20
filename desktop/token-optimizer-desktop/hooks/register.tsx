@@ -1667,6 +1667,18 @@ export const register: Register = on => {
       details: () => void toggleDetails($),
       size: () => void toggleSize($),
     }
-    return bandSize() === 'slim' ? drawSlim($.ui.resolve(e), model, handlers) : drawBand($.ui.resolve(e), model, handlers)
+    const D = $.ui.resolve(e)
+    const band = bandSize() === 'slim' ? drawSlim(D, model, handlers) : drawBand(D, model, handlers)
+    // The band shares AbovePrompt (#263): the bands of mods later in the chain go beneath
+    // ours. Nothing beneath (the engine's own empty band) draws ours alone, as before; a
+    // mod beneath that throws costs its own band, never ours.
+    const beneath = await attempt(() => next(e), null)
+    if (beneath === null || beneath.type === 'engine') return band
+    return (
+      <D.Box flexDirection="column">
+        {band}
+        {beneath}
+      </D.Box>
+    )
   })
 }

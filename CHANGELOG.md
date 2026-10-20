@@ -13,6 +13,7 @@
 - The before-compact checkpoint is faster on big conversations.
 - Hooks keep their compiled-code cache even when your environment sets `PYTHONDONTWRITEBYTECODE`. Thanks @Rewdzi (#259).
 - Start fresh and the desktop status bar work on Windows when `python` and `python3` are Microsoft Store shortcuts. Thanks @Flurry2005 (#261).
+- Desktop: Token Optimizer's band no longer hides other plugins' bands above the prompt. Thanks @jfrankelp (#263).
 - The cloud setup works on a minimal PATH and when generated on a Windows machine.
 
 ## [5.13.50] - 2026-10-19
