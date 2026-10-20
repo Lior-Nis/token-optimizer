@@ -37268,7 +37268,8 @@ def compute_quality_score(quality_data, session_id=None):
         elif _worst_key == "context_fill_degradation":
             top_drag = {
                 "key": "context_fill",
-                "label": f"{round(fill_pct * 100)}% context fill",
+                "label": (f"{round(model_fill * 100)}% context fill ({round(fill_pct * 100)}% of the way to auto-compact)"
+                          if compact_window_reduced else f"{round(fill_pct * 100)}% context fill"),
                 "points": round(_worst_pts, 1),
             }
         elif _worst_key == "compaction_depth":
@@ -37319,8 +37320,8 @@ def compute_quality_score(quality_data, session_id=None):
     _cfd_detail = f"{round(fill_pct * 100)}% fill, {band_name.lower()} ({curve_name})"
     if compact_window_reduced:
         _cfd_detail = (
-            f"{round(fill_pct * 100)}% of compact window "
-            f"({round(model_fill * 100)}% of model window), "
+            f"{round(model_fill * 100)}% of model window "
+            f"({round(fill_pct * 100)}% of the way to auto-compact), "
             f"{band_name.lower()} ({curve_name})"
         )
 
@@ -40859,7 +40860,7 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         lines.append("## Context Quality")
         lines.append(
             f"- Score: {quality_summary.get('grade', '?')} ({quality_summary.get('score', '?')}/100)"
-            f" | Fill: {cfd.get('fill_pct', '?')}%"
+            f" | Fill: {_format_context_fill(cfd.get('fill_pct'), cfd)}"
             f" | Model: {cfd.get('model') or quality_summary.get('model') or 'unknown'}"
         )
         if cfd.get("quality_curve"):
@@ -43015,7 +43016,7 @@ def _continuity_prompt_hint(prompt_text="", session_id=None, cwd=None, max_age_m
     if quality:
         lines.append(
             f"- Prior context quality: {quality.get('grade', '?')} "
-            f"({quality.get('score', '?')}/100), fill {quality.get('breakdown', {}).get('context_fill_degradation', {}).get('fill_pct', '?')}%"
+            f"({quality.get('score', '?')}/100), fill {_format_context_fill(quality.get('breakdown', {}).get('context_fill_degradation', {}).get('fill_pct'), quality.get('breakdown', {}).get('context_fill_degradation', {}))}"
         )
     # Per-item relevance filter: a checkpoint that passed the
     # same-project gate may still carry session-wide Key Decisions / Files that
@@ -43694,7 +43695,7 @@ def checkpoint_trigger(milestone=None, session_id=None, transcript_path=None, qu
         transcript_path=str(filepath),
         session_id=session_id,
         trigger=trigger,
-        fill_pct=result.get("fill_pct"),
+        fill_pct=_model_window_fill(result),
         quality_score=result.get("score"),
     )
     if not cp_path:
@@ -45868,8 +45869,11 @@ def _maybe_fresh_session_nudge(result, cache_path, quality_data, quiet=False):
     saved_str = f"~{saved // 1000}K" if saved >= 1000 else f"~{saved}"
     usd = _fresh_session_savings_usd(saved, session_id)
     cost_str = f" (~${usd:.2f})" if usd >= 0.01 else ""
+    # Share of the model window: what the user's meter shows (see _format_context_fill).
+    shown = _model_window_fill(result)
+    shown = shown if isinstance(shown, (int, float)) else fill_pct
     return (
-        f"[Token Optimizer] {int(fill_pct)}% full, quality {score}. "
+        f"[Token Optimizer] {int(shown)}% full, quality {score}. "
         f"Fresh session reclaims {saved_str}{cost_str}. "
         f"Checkpoint saved, say \"continue this\"."
     )
@@ -56533,6 +56537,43 @@ def _format_reduced_window_note(cached, model_window, model_size):
     return f" (of {_format_window_size(compact)} compact window, {share}{model_size} model window{origin})"
 
 
+def _format_context_fill(fill_pct, cached):
+    """The fill phrase every model-facing message uses, e.g. "38% of 1M window".
+
+    Leads with the share of the MODEL window: the number the user's own context
+    meter shows. With a reduced compact window the compact share follows as
+    distance to auto-compact. Models quote the first number they read; leading
+    with the compact share made sessions report "76% full" and offer handovers
+    at 38% real fill.
+    """
+    cached = cached or {}
+    try:
+        model_window = int(cached.get("model_context_window") or 0)
+        compact = int(cached.get("compact_window") or 0)
+    except (TypeError, ValueError, OverflowError):
+        model_window = compact = 0
+    model_fill = cached.get("model_fill_pct")
+    if (cached.get("compact_window_reduced") and 0 < compact < model_window
+            and isinstance(fill_pct, (int, float))):
+        if not isinstance(model_fill, (int, float)):
+            model_fill = fill_pct * compact / model_window
+        source = _safe_note_text(cached.get("compact_window_source"), extra="=.[]'", limit=64)
+        origin = f", source: {source}" if source else ""
+        return (f"{model_fill:.0f}% of {_format_window_size(model_window)} window "
+                f"(auto-compact at {_format_window_size(compact)}, {fill_pct:.0f}% of the way there{origin})")
+    if not isinstance(fill_pct, (int, float)):
+        return "?%"
+    return f"{fill_pct:.0f}%{_format_window_note(cached)}"
+
+
+def _model_window_fill(result):
+    """Share of the model window for display; fill_pct when no reduction applies."""
+    result = result or {}
+    if result.get("compact_window_reduced") and isinstance(result.get("model_fill_pct"), (int, float)):
+        return result["model_fill_pct"]
+    return result.get("fill_pct")
+
+
 def _format_window_note(cached):
     """Render the denominator and its origin, e.g. " (1M window, source: default 1M)".
 
@@ -56865,7 +56906,7 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
         if fill_pct >= 90:
             if not quiet:
                 sys.stderr.write(
-                    f"[Token Optimizer] Context at {fill_pct:.0f}%{window_note} — consider /compact or /clear. "
+                    f"[Token Optimizer] Context at {_format_context_fill(fill_pct, cached)} — consider /compact or /clear. "
                     f"Verbosity nudge suppressed to avoid adding tokens.\n"
                 )
             return ""
@@ -56894,7 +56935,7 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
         #     the Sonnet figure as the product number.
         if fill_pct >= 75:
             nudge = (
-                f"[Token Optimizer] Context {fill_pct:.0f}%{window_note}, resource health {score:.0f}/100. "
+                f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, resource health {score:.0f}/100. "
                 "Answer in a focused and spartan way, as if the user has ADHD. Cut everything "
                 "that is not the answer itself. Think as long as you need, and size code, "
                 "diffs and file contents to the task."
@@ -56902,7 +56943,7 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
         elif (fill_pct >= _VERBOSITY_NUDGE_MIN_FILL
               and session_efficiency < _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD):
             nudge = (
-                f"[Token Optimizer] Context {fill_pct:.0f}%{window_note}, "
+                f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, "
                 f"session efficiency {session_efficiency:.0f}/100. "
                 "Answer in a focused and spartan way, as if the user has ADHD. "
                 "Think as long as you need, and size code, diffs and file contents to the task."

@@ -2,6 +2,7 @@
 
 ## [5.13.52] - 2026-10-20
 
+- Context fill reads like your own meter: with a smaller auto-compact window, Claude now sees "38% of 1M window (auto-compact at 500k, 76% of the way there)" instead of a bare 76%, so it stops calling a half-empty session full.
 - Session cost examples in the docs and help text use neutral sample names.
 
 ## [5.13.51] - 2026-10-19
