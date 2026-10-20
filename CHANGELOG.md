@@ -13,6 +13,7 @@
 - Fleet reports warn instead of showing a silent zero, and an unknown system name is an error.
 - The before-compact checkpoint is faster on big conversations.
 - Hooks keep their compiled-code cache even when your environment sets `PYTHONDONTWRITEBYTECODE`. Thanks @Rewdzi (#259).
+- Windows: hooks no longer time out in the Claude desktop app while Python compiles Token Optimizer for the first time. Thanks @NehoraiHadad (#264).
 - Start fresh and the desktop status bar work on Windows when `python` and `python3` are Microsoft Store shortcuts. Thanks @Flurry2005 (#261).
 - Desktop: Token Optimizer's band no longer hides other plugins' bands above the prompt. Thanks @jfrankelp (#263).
 - The cloud setup works on a minimal PATH and when generated on a Windows machine.
