@@ -77,7 +77,10 @@ def test_regenerate_advances_served_dashboard_mtime_and_uses_served_install(tmp_
                     urllib.request.Request("http://127.0.0.1:24991/api/regenerate", method="POST",
                                             headers={"Host": "localhost:24991", "Origin": "http://localhost:24991",
                                                      "X-TO-Token": "test-token", "Content-Length": "0"}),
-                    timeout=1,
+                    # Connection refusal (daemon not up yet) is instant and retried
+                    # below; this bounds the regenerate itself, which runs measure
+                    # and can take several seconds on a cold Windows runner.
+                    timeout=60,
                 )
                 break
             except urllib.error.HTTPError as error:
@@ -155,7 +158,10 @@ def test_regenerate_resolves_served_install_despite_mismatched_marketplace_ident
                     urllib.request.Request("http://127.0.0.1:24992/api/regenerate", method="POST",
                                             headers={"Host": "localhost:24992", "Origin": "http://localhost:24992",
                                                      "X-TO-Token": "test-token", "Content-Length": "0"}),
-                    timeout=1,
+                    # Connection refusal (daemon not up yet) is instant and retried
+                    # below; this bounds the regenerate itself, which runs measure
+                    # and can take several seconds on a cold Windows runner.
+                    timeout=60,
                 )
                 break
             except urllib.error.HTTPError as error:

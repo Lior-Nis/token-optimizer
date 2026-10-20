@@ -96,7 +96,7 @@ import shutil
 from collections import deque
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 try:
     import tomllib
 except ImportError:  # pragma: no cover - Python < 3.11 fallback
@@ -1908,9 +1908,14 @@ def _resolve_session_model(session_id=None):
     if session_id:
         session_id = sanitize_session_id(session_id)
         try:
-            projects_dir = find_projects_dir()
-            if projects_dir:
-                candidate = projects_dir / f"{session_id}.jsonl"
+            # The session id names its transcript exactly; find it wherever it
+            # lives rather than trusting a cwd lookup that can guess another
+            # project's dir (#265).
+            candidate = next(iter(sorted((CLAUDE_DIR / "projects").glob(f"*/{session_id}.jsonl"))), None)
+            if candidate is None:
+                projects_dir = find_projects_dir()
+                candidate = projects_dir / f"{session_id}.jsonl" if projects_dir else None
+            if candidate is not None:
                 if candidate.exists():
                     counts = {}
                     with open(candidate, "r", encoding="utf-8", errors="replace") as f:
@@ -2215,34 +2220,87 @@ def _encode_project_dir_name(path_str):
     return re.sub(r"[^A-Za-z0-9]", "-", str(path_str))
 
 
+# MSIX-packaged apps (the Claude desktop app on Windows) get a virtualized
+# %APPDATA%: after any `cd` in Git Bash the Win32 cwd is the physical
+# ...\\AppData\\Local\\Packages\\<pkg>\\LocalCache\\Roaming\\... path, while Claude Code
+# names project dirs from the logical ...\\AppData\\Roaming\\... path (#265).
+_MSIX_REDIRECT_RE = re.compile(
+    r"^(?P<home>[A-Za-z]:[\\/]Users[\\/][^\\/]+)[\\/]AppData[\\/]Local[\\/]Packages[\\/]"
+    r"[^\\/]+[\\/]LocalCache[\\/](?P<kind>Roaming|Local)(?P<rest>(?:[\\/].*)?)$",
+    re.IGNORECASE,
+)
+
+
+def _unvirtualize_msix_path(path_str):
+    """Map an MSIX physical LocalCache path back to the logical AppData path."""
+    text = str(path_str)
+    m = _MSIX_REDIRECT_RE.match(text)
+    if not m:
+        return text
+    sep = "\\" if "\\" in text else "/"
+    return f"{m.group('home')}{sep}AppData{sep}{m.group('kind')}{m.group('rest')}"
+
+
 def cwd_to_project_dir_name():
     """Convert cwd to Claude Code project directory name format.
 
     e.g. /Users/alex/my project -> -Users-alex-my-project
          D:\\Code\\my app       -> D--Code-my-app  (Windows)
     """
-    return _encode_project_dir_name(Path.cwd())
+    return _encode_project_dir_name(_unvirtualize_msix_path(Path.cwd()))
 
 
-def find_projects_dir():
-    """Find the Claude Code projects directory matching the current working directory."""
+def _project_dir_from_transcript(projects_base, transcript_path):
+    """The project dir holding a transcript, when it lives under projects_base."""
+    if not transcript_path:
+        return None
+    try:
+        rel = Path(transcript_path).resolve().relative_to(projects_base.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if len(rel.parts) < 2:
+        return None
+    candidate = projects_base / rel.parts[0]
+    return candidate if candidate.is_dir() else None
+
+
+def find_projects_dir(cwd=None, transcript_path=None):
+    """Find the Claude Code projects directory for this session.
+
+    Most reliable first: the hook payload's transcript_path (its parent is the
+    project dir by construction), then the payload cwd, then the process cwd,
+    then $CLAUDE_PROJECT_DIR, each with MSIX paths mapped back to the logical
+    AppData path (#265). Only then the most-recently-modified guess.
+    """
     projects_base = CLAUDE_DIR / "projects"
     if not projects_base.exists():
         return None
 
-    # Try to match current working directory first
-    expected_name = cwd_to_project_dir_name()
-    expected_dir = projects_base / expected_name
-    if expected_dir.exists():
-        return expected_dir
+    from_transcript = _project_dir_from_transcript(projects_base, transcript_path)
+    if from_transcript is not None:
+        return from_transcript
 
-    # Fallback: try parent directories (user may be in a subdirectory)
-    cwd = Path.cwd()
-    for parent in list(cwd.parents)[:5]:
-        parent_name = _encode_project_dir_name(parent)
-        parent_dir = projects_base / parent_name
-        if parent_dir.exists():
-            return parent_dir
+    bases = []
+    if cwd:
+        bases.append(cwd)
+    try:
+        bases.append(Path.cwd())
+    except OSError:
+        pass
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        bases.append(os.environ["CLAUDE_PROJECT_DIR"])
+
+    for base in bases:
+        for text in dict.fromkeys((_unvirtualize_msix_path(base), str(base))):
+            expected_dir = projects_base / _encode_project_dir_name(text)
+            if expected_dir.exists():
+                return expected_dir
+            # The user may be in a subdirectory of the project.
+            path_cls = PureWindowsPath if re.match(r"^[A-Za-z]:[\\/]", text) else Path
+            for parent in list(path_cls(text).parents)[:5]:
+                parent_dir = projects_base / _encode_project_dir_name(parent)
+                if parent_dir.exists():
+                    return parent_dir
 
     # Last resort: most recently modified (with warning)
     dirs = [d for d in projects_base.iterdir() if d.is_dir()]
