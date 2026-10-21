@@ -82,4 +82,9 @@ MUTATIONS += [
      ["tests/test_uninstall_manifest_reconcile.py::test_remove_keeps_active_our_entries"],
      RECONCILE,
      [("        all_gone = all(\n", "        all_gone = True or all(\n")]),
+    ("a foreign status line counts as ours when its folder path mentions token-optimizer",
+     ["tests/test_statusline_ownership.py::test_foreign_statusline_commands_are_not_ours",
+      "tests/test_statusline_ownership.py::test_cleanup_keeps_a_foreign_statusline_under_a_token_optimizer_folder"],
+     MEASURE,
+     [("    if not found:\n        return True\n    parts = ", "    return True\n    parts = ")]),
 ]
