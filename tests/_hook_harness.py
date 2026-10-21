@@ -135,7 +135,8 @@ def consented_home(root: Path) -> Path:
 def run_hook(command: str, plugin_root: Path, payload: dict, home: Path, log: Path,
              timeout: float = 90.0) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_", "TOKEN_OPTIMIZER_", "CODEX_", "TO_TEST_"))}
+           if not k.startswith(("CLAUDE_", "TOKEN_OPTIMIZER_", "CODEX_", "TO_TEST_"))
+           or k == "TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S"}
     env.update({
         "HOME": str(home), "USERPROFILE": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),

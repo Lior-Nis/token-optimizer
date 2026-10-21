@@ -106,6 +106,23 @@ _COLD_COMPILE_WAIT_S = {
     "measure": 4.0,
     "codex_hook_bridge": 1.5,
 }
+# The PreCompact save (measure.py compact-capture --trigger auto) is the one
+# measure.py hook whose skip loses data: no save means the restore after the
+# compaction falls back to an older checkpoint. Its host timeout is 30 s and it
+# runs async, so it can wait far longer than the 4 s the tightest measure.py
+# hook allows. 12 s + its own 15 s budget (hook_runtime.BUDGET_PRECOMPACT_CAPTURE)
+# + start-up stays under the 30 s.
+_COLD_COMPILE_WAIT_PRECOMPACT_SAVE_S = 12.0
+
+
+def _is_precompact_save(module_name: str, script_args) -> bool:
+    args = list(script_args or ())
+    if module_name != "measure" or not args or args[0] != "compact-capture":
+        return False
+    try:
+        return args[args.index("--trigger") + 1] == "auto"
+    except (ValueError, IndexError):
+        return False
 # Seconds; overrides every wait above. A negative value turns the gate off
 # (compile inline, the pre-5.13.51 behaviour).
 _COLD_COMPILE_WAIT_ENV = "TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S"
@@ -332,10 +349,12 @@ def _measure_bytecode_ready(plugin_scripts: str, wait_s: float) -> bool:
         time.sleep(0.05)
 
 
-def _cold_compile_wait(module_name: str):
+def _cold_compile_wait(module_name: str, script_args=()):
     """Seconds this entry may wait for a background compile, or None when the
     entry is not gated (it does not import measure.py up front)."""
     wait = _COLD_COMPILE_WAIT_S.get(module_name)
+    if _is_precompact_save(module_name, script_args):
+        wait = _COLD_COMPILE_WAIT_PRECOMPACT_SAVE_S
     if wait is None:
         return None
     raw = os.environ.get(_COLD_COMPILE_WAIT_ENV, "").strip()
@@ -386,7 +405,7 @@ def main() -> int:
 
     # Before anything imports measure.py: never compile it on the hook's
     # deadline (#264). See _measure_bytecode_ready.
-    _wait = _cold_compile_wait(module_name)
+    _wait = _cold_compile_wait(module_name, script_args)
     if _wait is not None:
         try:
             if not _measure_bytecode_ready(_plugin_scripts, _wait):

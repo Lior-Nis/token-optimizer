@@ -32,7 +32,8 @@ def _home(tmp_path: Path) -> Path:
 
 def _doctor_session_end_line(home: Path, cwd: Path) -> str:
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_", "TOKEN_OPTIMIZER_", "CODEX_", "OPENCODE_", "HERMES_"))}
+           if not k.startswith(("CLAUDE_", "TOKEN_OPTIMIZER_", "CODEX_", "OPENCODE_", "HERMES_"))
+           or k == "TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S"}
     env.update({"HOME": str(home), "USERPROFILE": str(home), "TOKEN_OPTIMIZER_NO_PROC_SCAN": "1",
                 "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
                 "XDG_DATA_HOME": str(home / ".local" / "share"), "XDG_STATE_HOME": str(home / ".local" / "state")})

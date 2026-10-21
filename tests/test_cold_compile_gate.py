@@ -157,8 +157,8 @@ class Bench:
                 "prompt": "add tests for the parser", "source": "startup",
                 "stop_hook_active": False, "permission_mode": "default"}
 
-    def start(self, runner="hooks/userpromptsubmit_runner.py", event="UserPromptSubmit", **env):
-        proc = subprocess.Popen([sys.executable, str(HOOKS / "run.py"), runner],
+    def start(self, runner="hooks/userpromptsubmit_runner.py", event="UserPromptSubmit", args=(), **env):
+        proc = subprocess.Popen([sys.executable, str(HOOKS / "run.py"), runner, *args],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, cwd=str(self.proj),
                                 env={**self.env, **env})
@@ -344,11 +344,21 @@ _RESERVE_S = 8.0
 _RESERVE_OVERRIDES_S = {"codex_hook_bridge": 4.5}
 
 
-def _gated_waits():
+def _module_runner():
     spec = importlib.util.spec_from_file_location("_module_runner_264", HOOKS / "module_runner.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod._COLD_COMPILE_WAIT_S
+    return mod
+
+
+def _gated_waits():
+    return _module_runner()._COLD_COMPILE_WAIT_S
+
+
+def _hook_args(command: str, target: str) -> list[str]:
+    """The arguments a manifest command passes after <target>.py."""
+    m = re.search(r"(?:hooks|scripts)/" + re.escape(target) + r"\.py([^;\"]*)", command)
+    return m.group(1).split() if m else []
 
 
 def _manifest_entries():
@@ -384,7 +394,13 @@ _HOST_KILL_EXPECTED = {("plugins/token-optimizer/hooks/hooks.json", "SessionEnd"
 
 
 def test_every_gated_wait_leaves_room_under_the_host_timeout():
-    waits = _gated_waits()
+    runner = _module_runner()
+    waits = runner._COLD_COMPILE_WAIT_S
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import hook_runtime
+    finally:
+        sys.path.remove(str(SCRIPTS))
     checked, over = 0, []
     for origin, event, command, timeout in _manifest_entries():
         if (origin, event) in _HOST_KILL_EXPECTED:
@@ -395,8 +411,53 @@ def test_every_gated_wait_leaves_room_under_the_host_timeout():
             continue
         checked += 1
         host = float(timeout or 60)
+        args = _hook_args(command, targets[0])
+        wait = runner._cold_compile_wait(targets[0], args)
         reserve = _RESERVE_OVERRIDES_S.get(targets[0], _RESERVE_S)
-        if waits[targets[0]] + reserve > host:
-            over.append((origin, event, targets[0], waits[targets[0]], reserve, host))
+        # A hook with its own work budget needs that budget, plus start-up, after the wait.
+        budget, _label = hook_runtime.resolve_entry_budget(targets[0], args)
+        if budget and budget + 2.0 > reserve:
+            reserve = budget + 3.0
+        if wait + reserve > host:
+            over.append((origin, event, targets[0], args, wait, reserve, host))
     assert checked >= 8, f"found only {checked} gated manifest entries"
     assert not over, f"cold-compile wait + reserve exceeds the host timeout: {over}"
+
+
+def test_precompact_save_waits_out_a_slow_cold_compile(bench):
+    """The PreCompact save is the measure.py hook whose skip loses data: the
+    restore after the compaction falls back to an older checkpoint. With the
+    shipped waits (no override) a 5 s cold compile outlasts the 4 s other
+    measure.py hooks get, but the save waits for it and writes its checkpoint.
+    5 s, not SLOW_S: the real compile adds 2-5 s on a loaded runner, and the
+    total must stay inside the save's 12 s wait."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _hook_harness import SESSION_ID, transcript
+    tpath = transcript(bench.proj, bench.home)
+    base = bench.payload
+
+    def payload(event="PreCompact"):
+        return {**base(event), "session_id": SESSION_ID, "transcript_path": str(tpath), "trigger": "auto"}
+
+    bench.payload = payload
+    rc, _out, err, _elapsed = bench.fire(
+        runner="skills/token-optimizer/scripts/measure.py", event="PreCompact",
+        args=("compact-capture", "--trigger", "auto", "--quiet"), TO_COLD_SLOW_S="5")
+    assert rc == 0, err[-2000:]
+    assert len(bench.compiler_boots()) == 1
+    [hook] = bench.hook_exits()
+    assert not hook["compiled_measure"], "the hook compiled measure.py itself"
+    ckpts = bench.home / ".claude" / "token-optimizer" / "checkpoints"
+    saved = sorted(ckpts.glob(f"{SESSION_ID}-*.md")) if ckpts.is_dir() else []
+    assert saved, "the PreCompact save failed open on a compile it had time to wait for"
+
+
+def test_only_the_precompact_save_gets_the_longer_wait():
+    runner = _module_runner()
+    short = runner._COLD_COMPILE_WAIT_S["measure"]
+    assert runner._cold_compile_wait("measure", ["compact-capture", "--trigger", "auto", "--quiet"]) > short
+    for args in (["compact-capture", "--trigger", "stop-failure", "--quiet"],
+                 ["compact-capture", "--trigger", "stop"],
+                 ["dynamic-compact-instructions", "--quiet"],
+                 ["compact-capture"], []):
+        assert runner._cold_compile_wait("measure", args) == short, args
