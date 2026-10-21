@@ -268,6 +268,7 @@ test('usage: auto-compaction ceiling replaces both the model window and host per
   assert.equal(u.contextWindow, 480_000)
   assert.equal(u.contextPercent, 39.8125)
   assert.equal(u.contextTokens, 191_100)
+  assert.equal(u.contextModelWindow, 1_000_000)
   assert.deepEqual(usage.context, { tokens: 191_100, window: 1_000_000, percent: 18 })
 })
 

@@ -439,6 +439,7 @@ test('a compact window from settings or /autocompact, resolved by the status com
   assert.equal(first.contextWindow, 400_000)
   assert.equal(first.contextPercent, 50)
   assert.equal(first.contextWindowReduced, true)
+  assert.equal(first.contextModelWindow, 1_000_000)
 
   // A refresh that does not run the status command keeps the resolved window.
   const kept = await gather(io, first)
@@ -459,6 +460,7 @@ test('a compact window from settings or /autocompact, resolved by the status com
   assert.equal(cleared.contextWindow, 1_000_000)
   assert.equal(cleared.contextPercent, 20)
   assert.equal(cleared.contextWindowReduced, false)
+  assert.equal(cleared.contextModelWindow, null)
 })
 
 test('an older Token Optimizer that reports no compact window changes nothing', async () => {

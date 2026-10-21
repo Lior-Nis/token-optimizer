@@ -204,9 +204,19 @@ export function cards(s: Snapshot, opts: FormatOptions = {}): Card[] {
       }
     : { id: 'quality', title: 'Quality --', body: [plain('The score appears after the first tool call.')], actions: qualityActions }
 
+  // With a smaller auto-compact ceiling the ring measures distance to compaction, while
+  // quality follows the model window, so the card names both and makes no quality claim.
+  const model = s.contextModelWindow
   const context: Card =
     s.contextTokens != null && s.contextWindow != null
-      ? { id: 'context', title: `${tokens(s.contextTokens)} of ${tokens(s.contextWindow)} tokens`, body: [plain('Quality holds best under half full.')], actions: [] }
+      ? model != null && model > s.contextWindow
+        ? {
+            id: 'context',
+            title: `${tokens(s.contextTokens)} of ${tokens(s.contextWindow)} before auto-compact`,
+            body: [plain(`${Math.round((s.contextTokens / model) * 100)}% of the ${tokens(model)} model window.`)],
+            actions: [],
+          }
+        : { id: 'context', title: `${tokens(s.contextTokens)} of ${tokens(s.contextWindow)} tokens`, body: [plain('Quality holds best under half full.')], actions: [] }
       : { id: 'context', title: 'Context --', body: [plain('The fill appears after the first reply.')], actions: [] }
 
   const out = [quality, context, cacheCard(s.cache)]

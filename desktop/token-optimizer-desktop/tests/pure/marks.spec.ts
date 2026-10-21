@@ -166,3 +166,17 @@ test('iconSvg returns a standalone SVG with xmlns, colour and alt', () => {
     assert.ok(ICONS[name].length > 0, name)
   }
 })
+
+test('#270: a smaller auto-compact window is described as distance to compaction, not a quality warning', () => {
+  // 213k on a 1M model with autoCompactWindow 300k: the ring is 71%, quality sees 21%.
+  const c = cards(snap({ contextTokens: 213_000, contextWindow: 300_000, contextPercent: 71, contextModelWindow: 1_000_000 }), TZ).find((x) => x.id === 'context')!
+  assert.equal(c.title, '213k of 300k before auto-compact')
+  assert.equal(body(c), '21% of the 1M model window.')
+  assert.doesNotMatch(body(c), /half full/)
+})
+
+test('#270: without a smaller auto-compact window the context card is unchanged', () => {
+  const c = cards(snap({ contextTokens: 213_000, contextWindow: 1_000_000, contextPercent: 21, contextModelWindow: null }), TZ).find((x) => x.id === 'context')!
+  assert.equal(c.title, '213k of 1M tokens')
+  assert.equal(body(c), 'Quality holds best under half full.')
+})

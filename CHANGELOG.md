@@ -1,5 +1,10 @@
 # Changelog
 
+## [5.13.54] - 2026-10-21
+
+- The desktop widget's context card now reads "213k of 300k before auto-compact · 21% of the 1M model window" when you've set a smaller auto-compact window, instead of a quality warning the score doesn't agree with. Thanks @NehoraiHadad (#270).
+- Windows session starts skip the Task Scheduler check on a healthy install, so starting a session is a little quicker.
+
 ## [5.13.53] - 2026-10-20
 
 - Windows desktop app sessions find their own project again, instead of borrowing the most recently touched one, so costs and baselines stay with the right project (#265).

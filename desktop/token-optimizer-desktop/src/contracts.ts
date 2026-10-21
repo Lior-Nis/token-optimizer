@@ -69,6 +69,8 @@ export type Snapshot = {
   contextPercent: number | null
   contextTokens: number | null
   contextWindow: number | null
+  /** Set only when contextWindow is a smaller auto-compact ceiling: the model's own window. */
+  contextModelWindow?: number | null
   fiveHour: Limit | null
   week: Limit | null
   cache: CacheView
