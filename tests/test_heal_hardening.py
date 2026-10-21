@@ -897,3 +897,17 @@ def test_both_shim_locations_heal_in_one_pass(m, monkeypatch, tmp_path):
         assert "where " not in healed.lower(), str(base)
         assert str(base / "dashboard-server.py") in healed, str(base)
     assert m._heal_windows_launcher_shim() is False
+
+
+def test_healthy_task_is_read_once_per_window_not_every_session_start(m, monkeypatch):
+    """5.13.50 removed the scheduler read from healthy SessionStarts, but the
+    console-flash heal still ran one `schtasks /Query` on every start. A healthy
+    task is read once, then not again inside the throttle window."""
+    rec, installs, flags = _heal_env(m, monkeypatch, r"C:\Py\pythonw.exe")
+    assert m._heal_windows_console_flash() is False
+    assert any("/Query" in v for v in rec.verbs), "the first start must look at the task"
+    assert flags.get("last_windows_task_action_check")
+    rec.verbs.clear()
+    assert m._heal_windows_console_flash() is False
+    assert not any("/Query" in v for v in rec.verbs), rec.verbs
+    assert installs == []
