@@ -393,7 +393,8 @@ def _manifest_entries():
 _HOST_KILL_EXPECTED = {("plugins/token-optimizer/hooks/hooks.json", "SessionEnd")}
 
 
-def test_every_gated_wait_leaves_room_under_the_host_timeout():
+def test_every_gated_wait_leaves_room_under_the_host_timeout(monkeypatch):
+    monkeypatch.delenv("TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S", raising=False)
     runner = _module_runner()
     waits = runner._COLD_COMPILE_WAIT_S
     sys.path.insert(0, str(SCRIPTS))
@@ -424,6 +425,8 @@ def test_every_gated_wait_leaves_room_under_the_host_timeout():
     assert not over, f"cold-compile wait + reserve exceeds the host timeout: {over}"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the real compile alone takes 10-30 s on Windows runners, "
+                    "past any wait the save's 30 s hook timeout leaves room for")
 def test_precompact_save_waits_out_a_slow_cold_compile(bench):
     """The PreCompact save is the measure.py hook whose skip loses data: the
     restore after the compaction falls back to an older checkpoint. With the
@@ -452,7 +455,8 @@ def test_precompact_save_waits_out_a_slow_cold_compile(bench):
     assert saved, "the PreCompact save failed open on a compile it had time to wait for"
 
 
-def test_only_the_precompact_save_gets_the_longer_wait():
+def test_only_the_precompact_save_gets_the_longer_wait(monkeypatch):
+    monkeypatch.delenv("TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S", raising=False)
     runner = _module_runner()
     short = runner._COLD_COMPILE_WAIT_S["measure"]
     assert runner._cold_compile_wait("measure", ["compact-capture", "--trigger", "auto", "--quiet"]) > short

@@ -8,8 +8,7 @@ schedule). The cleanup command reconciles the uninstall direction: REPORT our
 stale entries by default, and under the explicit cleanup command REMOVE them
 (backup first), leaving other plugins' entries byte-identical.
 
-Run directly:  python3 tests/test_uninstall_manifest_reconcile.py
-Exits non-zero on first failure.
+Run: python3 -m pytest tests/test_uninstall_manifest_reconcile.py -q
 """
 
 from __future__ import annotations
@@ -18,11 +17,22 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import install_reconcile as ir  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_live_daemon(monkeypatch):
+    """The liveness probe hits the real loopback port. A dashboard daemon
+    running on the dev machine marks every entry live, so the stale checks
+    below would pass whatever the installPath rule does. The live-daemon
+    protection has its own tests (test_daemon_uninstall_*)."""
+    monkeypatch.setattr(ir, "_dashboard_daemon_alive", lambda *a, **k: False)
 
 
 def _write_installed(plugins_dir: Path, plugins: dict) -> Path:
@@ -73,11 +83,7 @@ def test_report_only_does_not_modify(tmp_path):
     assert mkt.read_text(encoding="utf-8") == before_mkt
 
 
-def test_remove_drops_only_our_stale_entries_leaving_others_byte_identical(tmp_path, monkeypatch):
-    # FIX-SPEC-DAEMON: a genuinely stale identity (installPath gone AND daemon
-    # dead) is still removed. Pin the liveness probe to False so the test is
-    # deterministic regardless of whether a real daemon is running on the host.
-    monkeypatch.setattr(ir, "_dashboard_daemon_alive", lambda: False)
+def test_remove_drops_only_our_stale_entries_leaving_others_byte_identical(tmp_path):
     home = tmp_path / "home"
     plugins_dir = home / "plugins"
     cache = plugins_dir / "cache"
@@ -149,10 +155,7 @@ def test_remove_keeps_active_our_entries(tmp_path):
     assert mkt.read_text(encoding="utf-8") == before_mkt
 
 
-def test_dry_run_with_remove_discloses_but_touches_nothing(tmp_path, monkeypatch):
-    # FIX-SPEC-DAEMON: deterministic liveness (daemon dead) so the stale
-    # classification holds regardless of a real daemon on the host.
-    monkeypatch.setattr(ir, "_dashboard_daemon_alive", lambda: False)
+def test_dry_run_with_remove_discloses_but_touches_nothing(tmp_path):
     home = tmp_path / "home"
     plugins_dir = home / "plugins"
     cache = plugins_dir / "cache"
@@ -174,23 +177,3 @@ def test_dry_run_with_remove_discloses_but_touches_nothing(tmp_path, monkeypatch
     assert result["backup"] is None
     assert inst.read_text(encoding="utf-8") == before_inst
     assert mkt.read_text(encoding="utf-8") == before_mkt
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    failed = 0
-    for t in tests:
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                t(Path(td))
-            print(f"  PASS  {t.__name__}")
-        except AssertionError as e:
-            failed += 1
-            print(f"  FAIL  {t.__name__}: {e}")
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print(f"  ERROR {t.__name__}: {type(e).__name__}: {e}")
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    sys.exit(1 if failed else 0)
