@@ -47,6 +47,19 @@ from types import SimpleNamespace
 
 import pytest
 
+# The fixtures were written around 2026-10-12, against a payoff window that is
+# relative to time.time(). Every literal date goes through _shift, which moves it
+# by whole days so it sits as far from "now" as it did then; otherwise the
+# records age out of the window and the tests start failing on their own.
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+
+_SHIFT = _timedelta(days=(_date.fromtimestamp(time.time()) - _date(2026, 10, 12)).days)
+
+
+def _shift(stamp: str) -> str:
+    day, rest = stamp[:10], stamp[10:]
+    return (_datetime.strptime(day, "%Y-%m-%d") + _SHIFT).strftime("%Y-%m-%d") + rest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
 MEASURE = SCRIPTS / "measure.py"
@@ -621,7 +634,7 @@ def _pad(home: Path, n=250, project="pad"):
     project + model so they never join another group) to clear the
     tripwire's minimum sample without changing any estimate."""
     recs = []
-    base = time.mktime(time.strptime("2026-10-09", "%Y-%m-%d"))
+    base = time.mktime(time.strptime(_shift("2026-10-09"), "%Y-%m-%d"))
     for i in range(n):
         t = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(base + i * 10))
         recs.append(_sidechain_record(t, f"pad{i}", 0, model="claude-haiku-4-5",
@@ -631,12 +644,12 @@ def _pad(home: Path, n=250, project="pad"):
 
 def test_payoff_gap_classification(m):
     mod, _settings, home = m
-    t0 = "2026-10-01T10:00:00Z"
+    t0 = _shift("2026-10-01T10:00:00Z")
     _write_sidechain(home, "a.jsonl", [
         _sidechain_record(t0, "r1", 1000),
-        _sidechain_record("2026-10-01T10:10:00Z", "r2", 800),   # +10m: would-be read
-        _sidechain_record("2026-10-01T10:11:40Z", "r3", 500),   # +100s: real write
-        _sidechain_record("2026-10-01T12:11:40Z", "r4", 400),   # +2h: beyond 1h
+        _sidechain_record(_shift("2026-10-01T10:10:00Z"), "r2", 800),   # +10m: would-be read
+        _sidechain_record(_shift("2026-10-01T10:11:40Z"), "r3", 500),   # +100s: real write
+        _sidechain_record(_shift("2026-10-01T12:11:40Z"), "r4", 400),   # +2h: beyond 1h
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["subagent_5m_cache_writes"] == 4
@@ -649,10 +662,10 @@ def test_payoff_gap_classification(m):
 def test_payoff_dollar_math(m):
     mod, _settings, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-01T10:00:00Z", "r1", 1000),
-        _sidechain_record("2026-10-01T10:10:00Z", "r2", 800),
-        _sidechain_record("2026-10-01T10:11:40Z", "r3", 500),
-        _sidechain_record("2026-10-01T12:11:40Z", "r4", 400),
+        _sidechain_record(_shift("2026-10-01T10:00:00Z"), "r1", 1000),
+        _sidechain_record(_shift("2026-10-01T10:10:00Z"), "r2", 800),
+        _sidechain_record(_shift("2026-10-01T10:11:40Z"), "r3", 500),
+        _sidechain_record(_shift("2026-10-01T12:11:40Z"), "r4", 400),
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     # sonnet rate card: 5m write 3.75, 1h write 6.0, read 0.3 (per MTok).
@@ -668,8 +681,8 @@ def test_payoff_ignores_main_transcripts(m):
     mod, _settings, home = m
     f = home / "projects" / "proj" / "main.jsonl"
     f.parent.mkdir(parents=True, exist_ok=True)
-    main_rec1 = _sidechain_record("2026-10-01T10:00:00Z", "r1", 5000)
-    main_rec2 = _sidechain_record("2026-10-01T11:30:00Z", "r2", 5000)
+    main_rec1 = _sidechain_record(_shift("2026-10-01T10:00:00Z"), "r1", 5000)
+    main_rec2 = _sidechain_record(_shift("2026-10-01T11:30:00Z"), "r2", 5000)
     del main_rec1["isSidechain"]  # a top-level transcript carries no flag
     del main_rec2["isSidechain"]
     with open(f, "w", encoding="utf-8") as fh:
@@ -683,20 +696,20 @@ def test_payoff_ignores_main_transcripts(m):
 def test_payoff_respects_window_and_since(m):
     mod, _settings, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-09-01T10:00:00Z", "r1", 1000),
-        _sidechain_record("2026-09-01T10:30:00Z", "r2", 1000),
-        _sidechain_record("2026-10-01T10:00:00Z", "r3", 1000),
-        _sidechain_record("2026-10-01T10:30:00Z", "r4", 1000),
-        _sidechain_record("2026-10-08T10:00:00Z", "r5", 1000),
-        _sidechain_record("2026-10-08T10:30:00Z", "r6", 1000),
+        _sidechain_record(_shift("2026-09-01T10:00:00Z"), "r1", 1000),
+        _sidechain_record(_shift("2026-09-01T10:30:00Z"), "r2", 1000),
+        _sidechain_record(_shift("2026-10-01T10:00:00Z"), "r3", 1000),
+        _sidechain_record(_shift("2026-10-01T10:30:00Z"), "r4", 1000),
+        _sidechain_record(_shift("2026-10-08T10:00:00Z"), "r5", 1000),
+        _sidechain_record(_shift("2026-10-08T10:30:00Z"), "r6", 1000),
     ])
-    now = time.mktime(time.strptime("2026-10-10", "%Y-%m-%d"))
+    now = time.mktime(time.strptime(_shift("2026-10-10"), "%Y-%m-%d"))
     p = mod.subagent_cache_payoff(days=30, now=now)
     assert p["subagent_5m_cache_writes"] == 4  # September is outside 30d
-    since = time.mktime(time.strptime("2026-10-05", "%Y-%m-%d"))
+    since = time.mktime(time.strptime(_shift("2026-10-05"), "%Y-%m-%d"))
     p2 = mod.subagent_cache_payoff(days=30, now=now, since_ts=since)
     assert p2["subagent_5m_cache_writes"] == 2  # only the Oct 8 pair
-    since_early = time.mktime(time.strptime("2026-08-01", "%Y-%m-%d"))
+    since_early = time.mktime(time.strptime(_shift("2026-08-01"), "%Y-%m-%d"))
     p3 = mod.subagent_cache_payoff(days=365, now=now, since_ts=since_early)
     assert p3["subagent_5m_cache_writes"] == 6
 
@@ -721,7 +734,7 @@ PREMIUM = 2.25 / 1e6
 
 def _two_spawns(home, gap_first="10:20:00", agent_a=None, agent_b=None,
                 project_a="proj", project_b="proj", cc_b=14000,
-                day="2026-10-05"):
+                day=_shift("2026-10-05")):
     _write_sidechain(home, "a.jsonl", [
         _sidechain_record(f"{day}T10:00:00Z", "a1", 12000),
     ], project=project_a, agent_type=agent_a)
@@ -756,11 +769,11 @@ def test_across_spawn_no_win_when_spawns_two_minutes_apart(m):
 def test_across_spawn_gap_is_from_latest_activity_not_spawn_start(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 12000),
-        _sidechain_record("2026-10-05T10:18:00Z", "a2", 100, cr=12000),
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 12000),
+        _sidechain_record(_shift("2026-10-05T10:18:00Z"), "a2", 100, cr=12000),
     ])
     _write_sidechain(home, "b.jsonl", [
-        _sidechain_record("2026-10-05T10:20:00Z", "b1", 14000),
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "b1", 14000),
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     # The prefix was touched at 10:18; spawn b at 10:20 is 2 minutes later.
@@ -778,8 +791,8 @@ def test_across_spawn_no_win_when_spawns_three_hours_apart(m):
 def test_single_spawn_has_no_across_estimate(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 12000),
-        _sidechain_record("2026-10-05T10:20:00Z", "a2", 500),
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 12000),
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "a2", 500),
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["across_spawn_tokens"] == 0, "needs 2+ spawns for a shared prefix"
@@ -821,9 +834,9 @@ def test_grouping_falls_back_to_project_and_model_and_says_so(m):
 def test_across_spawn_groups_are_per_model(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 12000)])
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 12000)])
     _write_sidechain(home, "b.jsonl", [
-        _sidechain_record("2026-10-05T10:20:00Z", "b1", 12000,
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "b1", 12000,
                           model="claude-haiku-4-5")])
     assert mod.subagent_cache_payoff(now=time.time())["across_spawn_tokens"] == 0
 
@@ -837,10 +850,10 @@ def test_across_since_uses_pre_window_activity_as_context(m):
         return datetime.fromisoformat(stamp + "+00:00").timestamp()
 
     # both spawns happened before `since`: nothing to count
-    p = mod.subagent_cache_payoff(now=time.time(), since_ts=utc("2026-10-05T12:00:00"))
+    p = mod.subagent_cache_payoff(now=time.time(), since_ts=utc(_shift("2026-10-05T12:00:00")))
     assert p["across_spawn_tokens"] == 0
     # spawn a before `since`, spawn b after it: b is counted against a
-    p = mod.subagent_cache_payoff(now=time.time(), since_ts=utc("2026-10-05T10:10:00"))
+    p = mod.subagent_cache_payoff(now=time.time(), since_ts=utc(_shift("2026-10-05T10:10:00")))
     assert p["across_spawn_tokens"] == 12000
     assert p["subagent_5m_cache_writes"] == 1
 
@@ -848,12 +861,12 @@ def test_across_since_uses_pre_window_activity_as_context(m):
 def test_no_double_counting_between_within_and_across(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 12000),
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 12000),
     ])
     _write_sidechain(home, "b.jsonl", [
-        _sidechain_record("2026-10-05T10:20:00Z", "b1", 14000),   # across: 12000
-        _sidechain_record("2026-10-05T10:40:00Z", "b2", 3000),    # within: 3000
-        _sidechain_record("2026-10-05T10:41:00Z", "b3", 800),     # 1 min: write
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "b1", 14000),   # across: 12000
+        _sidechain_record(_shift("2026-10-05T10:40:00Z"), "b2", 3000),    # within: 3000
+        _sidechain_record(_shift("2026-10-05T10:41:00Z"), "b3", 800),     # 1 min: write
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["across_spawn_tokens"] == 12000
@@ -869,8 +882,8 @@ def test_5m_write_request_reads_are_not_counted_as_realized(m):
     1h win and its write tokens are not 1h premium."""
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 1000),
-        _sidechain_record("2026-10-05T10:30:00Z", "a2", 500, cr=1000),
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 1000),
+        _sidechain_record(_shift("2026-10-05T10:30:00Z"), "a2", 500, cr=1000),
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["realized_read_tokens"] == 0
@@ -881,10 +894,10 @@ def test_5m_write_request_reads_are_not_counted_as_realized(m):
 def test_post_enable_realized_reads_within_one_agent(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "r1", 0, cc1h=5000),
-        _sidechain_record("2026-10-05T10:30:00Z", "r2", 0, cc1h=100, cr=5000),
-        _sidechain_record("2026-10-05T10:31:00Z", "r3", 0, cr=5100),   # 1 min
-        _sidechain_record("2026-10-05T11:10:00Z", "r4", 0, cr=5100),   # pure read, 39 min
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "r1", 0, cc1h=5000),
+        _sidechain_record(_shift("2026-10-05T10:30:00Z"), "r2", 0, cc1h=100, cr=5000),
+        _sidechain_record(_shift("2026-10-05T10:31:00Z"), "r3", 0, cr=5100),   # 1 min
+        _sidechain_record(_shift("2026-10-05T11:10:00Z"), "r4", 0, cr=5100),   # pure read, 39 min
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["subagent_5m_cache_writes"] == 0
@@ -900,11 +913,11 @@ def test_post_enable_realized_reads_within_one_agent(m):
 def test_post_enable_realized_reads_across_spawns(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "a1", 0, cc1h=12000)])
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "a1", 0, cc1h=12000)])
     _write_sidechain(home, "b.jsonl", [
         # first request of a spawn 20 min later: the prefix is a read, and it
         # carries no write at all -- the regime comes from the group's cache
-        _sidechain_record("2026-10-05T10:20:00Z", "b1", 0, cr=12000)])
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "b1", 0, cr=12000)])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["realized_read_tokens"] == 12000
     assert p["across_spawn_tokens"] == 0, "counterfactual part is 5m-only"
@@ -915,8 +928,8 @@ def test_post_enable_realized_reads_across_spawns(m):
 def test_post_enable_loss_is_visible(m):
     mod, _s, home = m
     _write_sidechain(home, "a.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "l1", 0, cc1h=8000),
-        _sidechain_record("2026-10-05T12:00:00Z", "l2", 0, cc1h=8000),   # 2h: expired
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "l1", 0, cc1h=8000),
+        _sidechain_record(_shift("2026-10-05T12:00:00Z"), "l2", 0, cc1h=8000),   # 2h: expired
     ])
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["realized_read_tokens"] == 0
@@ -928,15 +941,15 @@ def test_mixed_5m_and_1h_history_is_one_estimate(m):
     mod, _s, home = m
     # Before enabling (project old): two spawns on 5m writes, 20 min apart.
     _write_sidechain(home, "o1.jsonl", [
-        _sidechain_record("2026-09-25T10:00:00Z", "o1", 12000)], project="old")
+        _sidechain_record(_shift("2026-09-25T10:00:00Z"), "o1", 12000)], project="old")
     _write_sidechain(home, "o2.jsonl", [
-        _sidechain_record("2026-09-25T10:20:00Z", "o2", 12000)], project="old")
+        _sidechain_record(_shift("2026-09-25T10:20:00Z"), "o2", 12000)], project="old")
     # After enabling (project new): the same pattern on 1h writes + reads.
     _write_sidechain(home, "n1.jsonl", [
-        _sidechain_record("2026-10-05T10:00:00Z", "n1", 0, cc1h=12000)],
+        _sidechain_record(_shift("2026-10-05T10:00:00Z"), "n1", 0, cc1h=12000)],
         project="new")
     _write_sidechain(home, "n2.jsonl", [
-        _sidechain_record("2026-10-05T10:20:00Z", "n2", 0, cc1h=500, cr=12000)],
+        _sidechain_record(_shift("2026-10-05T10:20:00Z"), "n2", 0, cc1h=500, cr=12000)],
         project="new")
     p = mod.subagent_cache_payoff(now=time.time())
     assert p["across_spawn_tokens"] == 12000          # counterfactual, 5m part
@@ -977,8 +990,8 @@ def _judge(m, now=None):
 
 def _loss_history(home):
     _write_sidechain(home, "loss.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "x1", 0, cc1h=8000),
-        _sidechain_record("2026-10-09T12:00:00Z", "x2", 0, cc1h=8000),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "x1", 0, cc1h=8000),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "x2", 0, cc1h=8000),
     ])
 
 
@@ -998,9 +1011,9 @@ def test_tripwire_keeps_post_enable_win(m):
     mod, settings, home = m
     _enable_15d_ago(m)
     _write_sidechain(home, "win.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "w1", 0, cc1h=5000),
-        _sidechain_record("2026-10-09T10:30:00Z", "w2", 0, cc1h=100, cr=5000),
-        _sidechain_record("2026-10-09T11:10:00Z", "w3", 0, cr=5100),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "w1", 0, cc1h=5000),
+        _sidechain_record(_shift("2026-10-09T10:30:00Z"), "w2", 0, cc1h=100, cr=5000),
+        _sidechain_record(_shift("2026-10-09T11:10:00Z"), "w3", 0, cr=5100),
     ])
     _pad(home)
     r = _judge(m)
@@ -1038,7 +1051,7 @@ def test_user_with_almost_no_subagents_is_never_reverted(m):
     mod, settings, home = m
     _enable_15d_ago(m)
     _write_sidechain(home, "one.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "z1", 0, cc1h=300000)])
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "z1", 0, cc1h=300000)])
     r = _judge(m)
     assert r["reverted"] is False
     assert _read(settings)[KEY] == "1h"
@@ -1088,8 +1101,8 @@ def test_tripwire_reverts_on_negative_net(m):
     # Since enable: subagent writes on sub-hour gaps? No -- make PURE cost:
     # one write, then a 2h-gap rewrite (no would-be reads), so net < 0.
     _write_sidechain(_home, "neg.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "n1", 5000),
-        _sidechain_record("2026-10-09T12:00:00Z", "n2", 5000),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "n1", 5000),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "n2", 5000),
     ])
     _pad(_home)
     r = _judge(m)
@@ -1108,10 +1121,10 @@ def test_tripwire_keeps_setting_on_positive_net(m):
     # 10000*(3.75-0.3)/1e6 = $0.0345) while the extra 1h write premium is
     # only (10002)*(6.0-3.75)/1e6 = $0.0225 -- a genuinely positive net.
     _write_sidechain(_home, "pos.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "p1", 5000),
-        _sidechain_record("2026-10-09T10:30:00Z", "p2", 10000),
-        _sidechain_record("2026-10-09T10:30:01Z", "p3", 1),
-        _sidechain_record("2026-10-09T12:00:00Z", "p4", 1),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "p1", 5000),
+        _sidechain_record(_shift("2026-10-09T10:30:00Z"), "p2", 10000),
+        _sidechain_record(_shift("2026-10-09T10:30:01Z"), "p3", 1),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "p4", 1),
     ])
     _pad(_home)
     r = _judge(m)
@@ -1125,8 +1138,8 @@ def test_tripwire_needs_14_days(m):
     mod, settings, _home = m
     mod.subagent_cache_enable(now=time.time() - 5 * 86400)
     _write_sidechain(_home, "neg.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "n1", 5000),
-        _sidechain_record("2026-10-09T12:00:00Z", "n2", 5000),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "n1", 5000),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "n2", 5000),
     ])
     _pad(_home)
     r = mod.evaluate_subagent_cache_tripwire(now=time.time())
@@ -1146,10 +1159,10 @@ def test_tripwire_judges_at_most_once_per_day(m, monkeypatch):
     mod, settings, _home = m
     _enable_15d_ago(m)
     _write_sidechain(_home, "pos.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "p1", 5000),
-        _sidechain_record("2026-10-09T10:30:00Z", "p2", 10000),
-        _sidechain_record("2026-10-09T10:30:01Z", "p3", 1),
-        _sidechain_record("2026-10-09T12:00:00Z", "p4", 1),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "p1", 5000),
+        _sidechain_record(_shift("2026-10-09T10:30:00Z"), "p2", 10000),
+        _sidechain_record(_shift("2026-10-09T10:30:01Z"), "p3", 1),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "p4", 1),
     ])
     _pad(_home)
     t0 = time.time()
@@ -1202,8 +1215,8 @@ def test_tripwire_ignores_when_user_set_the_key(m):
     data[KEY] = "1h"
     _write_settings(settings, data)
     _write_sidechain(_home, "neg.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "n1", 5000),
-        _sidechain_record("2026-10-09T12:00:00Z", "n2", 5000),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "n1", 5000),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "n2", 5000),
     ])
     r = mod.evaluate_subagent_cache_tripwire(now=time.time())
     assert r["reverted"] is False
@@ -1237,8 +1250,8 @@ def test_sessionstart_revert_notice_once(m):
     mod, settings, _home = m
     _enable_15d_ago(m)
     _write_sidechain(_home, "neg.jsonl", [
-        _sidechain_record("2026-10-09T10:00:00Z", "n1", 5000),
-        _sidechain_record("2026-10-09T12:00:00Z", "n2", 5000),
+        _sidechain_record(_shift("2026-10-09T10:00:00Z"), "n1", 5000),
+        _sidechain_record(_shift("2026-10-09T12:00:00Z"), "n2", 5000),
     ])
     _pad(_home)
     mod.subagent_cache_scan_run(now=time.time(), since_ts=_set_ts(m))

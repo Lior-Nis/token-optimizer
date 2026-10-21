@@ -92,7 +92,7 @@ def test_resolver_keeps_per_handler_dedup_identity():
 
 
 @pytest.mark.parametrize("hooks_path", HOOKS_JSON_FILES, ids=lambda p: p.parent.parent.name)
-def test_missing_launcher_exits_zero_not_127(hooks_path):
+def test_missing_launcher_exits_zero_not_127(hooks_path, tmp_path):
     """Run each real command with CLAUDE_PLUGIN_ROOT pointing at a gone dir."""
     env_root = "/nonexistent/token-optimizer/9.9.9-gc"
     for cmd in _launcher_commands(hooks_path):
@@ -100,7 +100,7 @@ def test_missing_launcher_exits_zero_not_127(hooks_path):
         # by exporting it so the shell expands it identically.
         proc = subprocess.run(
             ["sh", "-c", cmd],
-            env={"CLAUDE_PLUGIN_ROOT": env_root, "PATH": "/usr/bin:/bin:/usr/local/bin"},
+            env={"CLAUDE_PLUGIN_ROOT": env_root, "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)},
             capture_output=True,
             text=True,
             timeout=60,
@@ -126,7 +126,7 @@ def test_present_launcher_still_runs(tmp_path):
     cmd = _launcher_commands(HOOKS_JSON_FILES[0])[0]
     proc = subprocess.run(
         ["sh", "-c", cmd],
-        env={"CLAUDE_PLUGIN_ROOT": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+        env={"CLAUDE_PLUGIN_ROOT": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)},
         capture_output=True,
         text=True,
         timeout=60,

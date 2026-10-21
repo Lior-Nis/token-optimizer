@@ -11,22 +11,50 @@ import json
 import sys
 import threading
 
+# The wait for the first byte, and the longest pause allowed while a payload is
+# still arriving. A host that opens stdin and then goes silent costs at most this.
 _STDIN_TIMEOUT = 0.5
+# Hard ceiling for the whole read. A multi-MB tool result can take longer than
+# _STDIN_TIMEOUT to stream on a loaded machine; reading stops only when the host
+# goes quiet or this ceiling is reached, never mid-stream at the first 0.5 s.
+_STDIN_TOTAL_CAP = 5.0
 
 
 def _read_stdin_windows(timeout: float = _STDIN_TIMEOUT, max_bytes: int = 1_048_576) -> str:
-    result = [""]
+    import time
+    chunks = []
+    state = {"done": False, "last": time.monotonic()}
 
     def _reader() -> None:
         try:
-            result[0] = sys.stdin.buffer.read(max_bytes).decode("utf-8", errors="replace")
+            buf = sys.stdin.buffer
+            read = getattr(buf, "read1", buf.read)
+            total = 0
+            while total < max_bytes:
+                chunk = read(min(65536, max_bytes - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                state["last"] = time.monotonic()
         except Exception:
             pass
+        state["done"] = True
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
-    t.join(timeout)
-    return result[0]
+    start = time.monotonic()
+    # Keep waiting while bytes keep arriving; give up after `timeout` of silence
+    # or at the total ceiling. A partial payload is not valid JSON, so a cut-off
+    # read degrades to {} exactly as a timeout always did.
+    while not state["done"]:
+        t.join(0.05)
+        now = time.monotonic()
+        if now - state["last"] >= timeout or now - start >= _STDIN_TOTAL_CAP:
+            break
+    if not state["done"]:
+        return ""
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 def read_stdin_hook_input(max_bytes: int = 1_048_576) -> dict:
@@ -49,14 +77,12 @@ def read_stdin_hook_input(max_bytes: int = 1_048_576) -> dict:
             import os
             import select
             import time
-            # H-7: set the deadline BEFORE the first select. The old code set
-            # it after, so if the first select() consumed most of the 0.5s
-            # timeout, the read loop got a FULL additional 0.5s — measured
-            # 1098ms peak (2.2x the stated 0.5s). One deadline, used for all
-            # select() calls, so the total budget is _STDIN_TIMEOUT end to end.
-            deadline = time.monotonic() + _STDIN_TIMEOUT
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
+            # Two clocks: the first byte must arrive within _STDIN_TIMEOUT, and
+            # after that each pause may last up to _STDIN_TIMEOUT, all inside
+            # one _STDIN_TOTAL_CAP deadline set BEFORE the first select. A
+            # payload still streaming is never cut off at the first 0.5 s.
+            deadline = time.monotonic() + _STDIN_TOTAL_CAP
+            if not select.select([sys.stdin], [], [], _STDIN_TIMEOUT)[0]:
                 return {}
             try:
                 fd = sys.stdin.fileno()
@@ -68,15 +94,15 @@ def read_stdin_hook_input(max_bytes: int = 1_048_576) -> dict:
                 # host that writes a partial payload and holds the pipe open
                 # defeats the timeout. Read what is actually available in a loop
                 # bounded by the same deadline, assembling chunked payloads
-                # without ever blocking past _STDIN_TIMEOUT.
+                # without ever blocking on a silent pipe past _STDIN_TIMEOUT.
                 chunks = []
                 total = 0
                 while total < max_bytes:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break
-                    if not select.select([sys.stdin], [], [], remaining)[0]:
-                        break  # timed out with no further data
+                    if not select.select([sys.stdin], [], [], min(_STDIN_TIMEOUT, remaining))[0]:
+                        break  # the host went quiet: take what arrived
                     chunk = os.read(fd, max_bytes - total)
                     if not chunk:
                         break  # EOF: host closed stdin, payload complete

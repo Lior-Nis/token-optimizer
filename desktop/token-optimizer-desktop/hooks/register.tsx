@@ -1615,6 +1615,7 @@ export const register: Register = on => {
       contextPercent: s?.contextPercent ?? (s?.contextWindowReduced ? null : s?.quality?.fillPct ?? null),
       contextTokens: s?.contextTokens ?? null,
       contextWindow: s?.contextWindow ?? null,
+      contextModelWindow: s?.contextWindowReduced ? s?.contextModelWindow ?? null : null,
       fiveHour: s?.fiveHour ?? null,
       week: s?.week ?? null,
       cache: view({ ...shownClock, working }, now, planDefault(s)),

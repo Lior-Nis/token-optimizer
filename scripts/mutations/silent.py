@@ -111,3 +111,10 @@ MUTATIONS = [
       ("    except Exception:\n        # Fail open, always. A heal that breaks a session is a worse bug\n",
        "    except OSError:\n        # Fail open, always. A heal that breaks a session is a worse bug\n")]),
 ]
+
+MUTATIONS += [
+    ("hook stdin read cut off at 0.5 s while a big payload is still streaming",
+     ["tests/test_hook_robustness_regressions.py::test_stdin_payload_still_streaming_after_the_first_half_second_is_read_whole"],
+     "skills/token-optimizer/scripts/hook_io.py",
+     [("_STDIN_TOTAL_CAP = 5.0", "_STDIN_TOTAL_CAP = 0.5")]),
+]

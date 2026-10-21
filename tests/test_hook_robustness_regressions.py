@@ -242,3 +242,41 @@ def test_expired_outer_budget_is_delivered_not_disarmed():
         ptr._RUNNER_DEADLINE = None
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
+
+
+def test_stdin_payload_still_streaming_after_the_first_half_second_is_read_whole():
+    """A big tool result can take longer than _STDIN_TIMEOUT to arrive on a
+    loaded machine. As long as bytes keep coming, the read must wait for all of
+    them; a payload cut at 0.5 s is invalid JSON and the hook silently did
+    nothing (archive_result lost 3-5 MB results this way)."""
+    import json as _json
+    import time as _time
+    code = (
+        "import sys, json\n"
+        f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import hook_io\n"
+        "got = hook_io.read_stdin_hook_input(max_bytes=5_242_880)\n"
+        "print(json.dumps({'keys': sorted(got), 'n': len(got.get('tool_response', ''))}), flush=True)\n"
+    )
+    payload = _json.dumps({"tool_name": "Bash", "tool_response": "x" * 600_000}).encode()
+    proc = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        step = len(payload) // 12 + 1
+        try:
+            for i in range(0, len(payload), step):  # ~1.2 s of steady streaming
+                proc.stdin.write(payload[i:i + step])
+                proc.stdin.flush()
+                _time.sleep(0.1)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # the reader gave up mid-stream; the assert below says so
+        # Not communicate(): it flushes the stdin we already closed, which
+        # raises on Python 3.11/3.12.
+        proc.wait(timeout=60)
+        out, err = proc.stdout.read(), proc.stderr.read()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    result = _json.loads(out.decode())
+    assert result == {"keys": ["tool_name", "tool_response"], "n": 600_000}, err.decode()[-1500:]

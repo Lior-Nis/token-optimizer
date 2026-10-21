@@ -34,6 +34,8 @@ export type UsageView = {
   contextTokens: number | null
   contextWindow: number | null
   contextWindowReduced?: boolean
+  /** The model's own window, kept when a smaller auto-compact ceiling replaced it. */
+  contextModelWindow?: number | null
   fiveHour: Limit | null
   /** When the live session began (ms), from the engine itself. */
   startedAtMs?: number | null
@@ -308,7 +310,7 @@ export function parseUsage(usage: unknown, autoCompactWindow?: unknown, resolved
     contextPercent: percent,
     contextTokens: tokens,
     contextWindow: effectiveWindow,
-    ...(reduced ? { contextWindowReduced: true } : {}),
+    ...(reduced ? { contextWindowReduced: true, contextModelWindow: window } : {}),
     fiveHour: limit(all?.rateLimits, 'five_hour'),
     week: limit(all?.rateLimits, 'seven_day'),
     startedAtMs: (() => {

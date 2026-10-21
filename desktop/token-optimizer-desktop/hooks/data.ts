@@ -425,7 +425,7 @@ export type GatherOptions = {
  */
 /** Only the context figures of a parsed usage, with the reduced flag always present so a stale one is cleared. */
 function contextOf(u: ReturnType<typeof parseUsage>) {
-  return { contextPercent: u.contextPercent, contextTokens: u.contextTokens, contextWindow: u.contextWindow, contextWindowReduced: u.contextWindowReduced === true }
+  return { contextPercent: u.contextPercent, contextTokens: u.contextTokens, contextWindow: u.contextWindow, contextWindowReduced: u.contextWindowReduced === true, contextModelWindow: u.contextModelWindow ?? null }
 }
 
 export async function gather(
