@@ -1,0 +1,69 @@
+"""Safety guards whose tests used to pass with the guard deleted (test review, 2026-10-21).
+
+Shape: MUTATIONS = [(name, [test node ids], file_relpath, [(old, new), ...])]
+"""
+
+from __future__ import annotations
+
+MEASURE = "skills/token-optimizer/scripts/measure.py"
+IDENTITY = "tests/test_posix_session_identity.py"
+
+MUTATIONS = [
+    ("kill-stale no longer spares its own process and parent",
+     [IDENTITY + "::test_kill_stale_never_kills_own_pid_or_parent"],
+     MEASURE,
+     [("             and s[\"pid\"] != my_pid\n             and s[\"pid\"] != my_ppid\n", "")]),
+    ("kill-stale no longer spares the session it runs inside of",
+     [IDENTITY + "::test_kill_stale_never_kills_the_session_it_runs_inside_of"],
+     MEASURE,
+     [("             and s[\"pid\"] not in my_ancestors\n             and s.get(\"identity\", \"unknown\") in killable]",
+       "             and s.get(\"identity\", \"unknown\") in killable]")]),
+]
+
+REFETCH = "skills/token-optimizer/scripts/refetch_guard.py"
+DATA_ID = "tests/test_plugin_data_identity.py"
+
+MUTATIONS += [
+    ("refetch guard denies a re-fetch whose archive entry cannot be expanded",
+     [DATA_ID + "::test_refetch_guard_renderable_check",
+      DATA_ID + "::test_refetch_guard_empty_response_is_not_renderable",
+      DATA_ID + "::test_refetch_guard_corrupt_json_not_renderable"],
+     REFETCH,
+     [("if tool_use_id and _entry_is_renderable(archive_dir, tool_use_id):",
+       "if tool_use_id:")]),
+    ("refetch guard counts an empty archived response as expandable",
+     [DATA_ID + "::test_refetch_guard_empty_response_is_not_renderable"],
+     REFETCH,
+     [("return isinstance(payload.get(\"response\"), str) and bool(payload[\"response\"])",
+       "return isinstance(payload.get(\"response\"), str)")]),
+]
+
+EXT = "tests/test_post_flush_extensions.py"
+
+MUTATIONS += [
+    ("post-flush extension read is no longer capped at 1 MB",
+     [EXT + "::test_oversized_extension_refused"],
+     MEASURE,
+     [("            read_size = min(st.st_size if st.st_size > 0 else 1_048_576,\n                            1_048_576)",
+       "            read_size = st.st_size if st.st_size > 0 else 1_048_576")]),
+    ("post-flush extension loader accepts a FIFO or device",
+     [EXT + "::test_fifo_extension_refused_as_not_a_regular_file"],
+     MEASURE,
+     [("            if not stat.S_ISREG(st.st_mode):\n                sys.stderr.write(\n                    f\"[Token Optimizer] post-flush extension refused at \"",
+       "            if False:\n                sys.stderr.write(\n                    f\"[Token Optimizer] post-flush extension refused at \"")]),
+]
+
+MUTATIONS += [
+    ("module_runner runs a dotted module name (arbitrary module execution)",
+     ["tests/test_module_runner_guard.py::test_dotted_module_name_refused"],
+     "hooks/module_runner.py",
+     [("    if not module_name.isidentifier():\n        return 0\n", "")]),
+]
+
+MUTATIONS += [
+    ("Copilot bridge auto-approves every rewritten command",
+     ["tests/test_no_hook_auto_approve.py::test_copilot_bridge_does_not_approve_destructive_commands"],
+     "skills/token-optimizer/scripts/copilot_hook_bridge.py",
+     [("    if caps.get(CAP_ALLOW) and _bash_hook._is_auto_approvable(command):",
+       "    if caps.get(CAP_ALLOW):")]),
+]

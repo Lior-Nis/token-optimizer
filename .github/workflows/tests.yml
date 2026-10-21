@@ -143,8 +143,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3 machines, each a third of the planted bugs: ~18 min -> ~6.
-        shard: [1, 2, 3]
+        # 4 machines, each a quarter of the planted bugs (shard 1 of 3 was the
+        # 15 min long pole of the whole run).
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -156,7 +157,10 @@ jobs:
         # No --require-all: mutations whose guard tests all skip on Windows
         # (POSIX-only) report n/a; the Linux job proves those. Any mutation
         # whose tests run here and still pass on the broken code fails the job.
-        run: python scripts/check_regression_guards.py --jobs 4 --shard ${{ matrix.shard }}/3
+        # Unbuffered, so each line carries its own log timestamp.
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/check_regression_guards.py --jobs 4 --shard ${{ matrix.shard }}/4
 
   # plugins/token-optimizer/ is a generated mirror of root skills/ + hooks/
   # (scripts/sync-codex-marketplace-plugin.sh). Until now drift was only

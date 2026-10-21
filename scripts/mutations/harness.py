@@ -14,7 +14,7 @@ MUTATIONS = [
     ("harness counts a collection error or empty run as caught",
      [TESTS + "::test_only_a_real_test_failure_counts_as_caught"],
      HARNESS,
-     [("    if code == 1:\n        return \"ok\", \"\"", "    if code != 0:\n        return \"ok\", \"\"")]),
+     [("    if code == 1:\n        return \"ok\", f\"{took:.0f}s\"", "    if code != 0:\n        return \"ok\", f\"{took:.0f}s\"")]),
     ("harness silently ignores a mutation file that fails to import",
      [TESTS + "::test_malformed_mutation_files_fail_the_check"],
      HARNESS,

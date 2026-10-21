@@ -245,6 +245,19 @@ def pytest_sessionfinish(session):
 """
 
 
+def clean_run_chunks(tests: list, n: int) -> list:
+    """Split test ids into at most n non-empty groups, keeping each test file in
+    one group (a file's imports and fixtures load once). Biggest files first,
+    each into the currently smallest group."""
+    by_file = {}
+    for t in tests:
+        by_file.setdefault(t.split("::")[0], []).append(t)
+    groups = [[] for _ in range(max(1, min(n, len(by_file))))]
+    for _f, ids in sorted(by_file.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        min(groups, key=len).extend(ids)
+    return [g for g in groups if g]
+
+
 def coverage(tests: list, outcomes: dict) -> str:
     """How a mutation's listed tests fared on clean code on THIS OS.
 
@@ -287,11 +300,13 @@ def _run_one(mut, copy_root: Path):
     try:
         mutated = plant(original.decode("utf-8"), edits)
         target.write_bytes(mutated.encode("utf-8"))
+        t0 = time.monotonic()
         code, out = _pytest(copy_root, tests)
+        took = time.monotonic() - t0
     finally:
         target.write_bytes(original)
     if code == 1:
-        return "ok", ""
+        return "ok", f"{took:.0f}s"
     if code == 0:
         return "fail", "guard tests PASSED on the broken code; they no longer protect it"
     return "fail", (f"pytest exit {code} (collection error, bad node id or crash), which proves "
@@ -366,18 +381,30 @@ def main(argv=None) -> int:
             copies.append(root)
 
         # The guard tests must pass on clean code, or every mutation looks caught.
+        # Split across the copies so this check runs in parallel too.
         all_tests = sorted({t for m in runnable for t in m[1]})
-        outcomes_file = Path(tmp) / "outcomes" / "clean.json"
-        code, out = _pytest(copies[0], all_tests, exitfirst=False, outcomes_to=outcomes_file)
-        if code != 0:
-            print(f"Regression guards: the guard tests fail on UNMUTATED code (pytest exit {code}),\n"
-                  f"so no mutation result would mean anything. Fix them first.\n{out}", file=sys.stderr)
-            return 1
-        try:
-            outcomes = json.loads(outcomes_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            print(f"Regression guards: could not read the clean run's test outcomes: {exc}", file=sys.stderr)
-            return 1
+        chunks = clean_run_chunks(all_tests, jobs)
+        t0 = time.monotonic()
+
+        def clean(i):
+            outcomes_file = Path(tmp) / "outcomes" / f"clean-{i}" / "clean.json"
+            code, out = _pytest(copies[i], chunks[i], exitfirst=False, outcomes_to=outcomes_file)
+            return code, out, outcomes_file
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+            results = list(pool.map(clean, range(len(chunks))))
+        print(f"clean run of {len(all_tests)} guard tests: {time.monotonic() - t0:.0f}s", flush=True)
+        outcomes = {}
+        for code, out, outcomes_file in results:
+            if code != 0:
+                print(f"Regression guards: the guard tests fail on UNMUTATED code (pytest exit {code}),\n"
+                      f"so no mutation result would mean anything. Fix them first.\n{out}", file=sys.stderr)
+                return 1
+            try:
+                outcomes.update(json.loads(outcomes_file.read_text(encoding="utf-8")))
+            except (OSError, ValueError) as exc:
+                print(f"Regression guards: could not read the clean run's test outcomes: {exc}", file=sys.stderr)
+                return 1
 
         # A mutation whose guard tests all skip on this OS cannot be proven
         # here: report it n/a (never caught, never a miss). --require-all turns
@@ -415,7 +442,7 @@ def main(argv=None) -> int:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             for mut, (status, detail) in pool.map(work, provable):
                 if status == "ok":
-                    print(f"ok    {mut[0]}")
+                    print(f"ok    {mut[0]} ({detail})", flush=True)
                 else:
                     print(f"FAIL  {mut[0]}")
                     failures.append(f"{mut[0]} ({mut[4]} -> {mut[2]}): {detail}")

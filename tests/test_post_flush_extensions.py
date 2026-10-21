@@ -326,19 +326,24 @@ def test_successful_extension_emits_stderr(m, capsys):
     assert "ran successfully" in captured.err.lower()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="file size cap test uses POSIX-only truncate; Windows mode bits differ.",
-)
 def test_oversized_extension_refused(m, capsys):
-    """M-4: an extension file larger than 1 MB must be refused (bounded read
-    so a huge or sparse file cannot OOM the worker)."""
-    p = _install_ext(m, "def run(ctx):\n    return 'ran'\n")
-    # Overwrite with > 1 MB of padding before the run() definition.
-    with open(str(p), "w") as f:
-        f.write("# padding\n" + "x" * (1_048_576 + 100) + "\n")
-    os.chmod(str(p), 0o600)
-    # The read is capped at 1 MB, so the run() definition is truncated away.
-    # The loader reads the first 1 MB, compiles it (syntax error from the
-    # truncated line, or no run() found), and returns None.
+    """M-4: only the first 1 MB is read, so a run() past that point never loads."""
+    p = _install_ext(m, "")
+    # Valid comment lines up to past 1 MB: the cut lands inside a comment, so
+    # the truncated source still compiles; only the run() below is lost.
+    padding = ("# " + "x" * 1000 + "\n") * 1100
+    p.write_bytes((padding + "def run(ctx):\n    return 'ran'\n").encode("ascii"))
+    assert p.stat().st_size > 1_048_576
     assert m._run_post_flush_extensions(time_left_fn=lambda: 10) is None
+    assert "no callable run" in capsys.readouterr().err.lower()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
+def test_fifo_extension_refused_as_not_a_regular_file(m, capsys):
+    """C-5 / L-3: a FIFO opens fine with O_NONBLOCK for reading, so only the
+    S_ISREG check stands between it and the loader."""
+    ext_dir = m.CONFIG_DIR / "extensions"
+    ext_dir.mkdir(exist_ok=True)
+    os.mkfifo(ext_dir / "post_flush.py", 0o600)
+    assert m._run_post_flush_extensions(time_left_fn=lambda: 10) is None
+    assert "not a regular file" in capsys.readouterr().err.lower()

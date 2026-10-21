@@ -145,11 +145,30 @@ def test_grok_bridge_does_not_approve_destructive_commands(command, monkeypatch,
     assert capsys.readouterr().out == ""
 
 
-def test_copilot_bridge_approval_is_gated():
-    source = (SCRIPTS / "copilot_hook_bridge.py").read_text(encoding="utf-8")
-    assert source.count('hook_out["permissionDecision"] = "allow"') == 1
-    assert ("if caps.get(CAP_ALLOW) and _bash_hook._is_auto_approvable(command):\n"
-            '        hook_out["permissionDecision"] = "allow"') in source
+def _copilot_pre_tool_use(command, monkeypatch, capsys):
+    bridge = _fresh("copilot_hook_bridge")
+    monkeypatch.delenv("TOKEN_OPTIMIZER_BASH_COMPRESS", raising=False)
+    monkeypatch.setattr(bridge, "_COMPRESS_AVAILABLE", True)
+    monkeypatch.setattr(bridge, "load_capabilities", lambda refresh=False: {
+        bridge.CAP_UPDATED_INPUT: True, bridge.CAP_ALLOW: True})
+    bridge.handle_pre_tool_use({"toolName": "bash", "toolArgs": {"command": command},
+                                "sessionId": "copilot-test"})
+    out = capsys.readouterr().out.strip()
+    return json.loads(out)["hookSpecificOutput"] if out else None
+
+
+@pytest.mark.parametrize("command", DESTRUCTIVE_WHITELISTED)
+def test_copilot_bridge_does_not_approve_destructive_commands(command, monkeypatch, capsys):
+    hook_out = _copilot_pre_tool_use(command, monkeypatch, capsys)
+    assert hook_out is None or "permissionDecision" not in hook_out
+
+
+@pytest.mark.parametrize("command", INSPECTION_ONLY)
+def test_copilot_bridge_approves_inspection_rewrites(command, monkeypatch, capsys):
+    # Control: proves the destructive test above reaches the approval decision.
+    hook_out = _copilot_pre_tool_use(command, monkeypatch, capsys)
+    assert hook_out["permissionDecision"] == "allow"
+    assert hook_out["updatedInput"]["command"].endswith(command.split()[-1])
 
 
 def test_fake_bash_hook_without_gate_fails_closed(monkeypatch, tmp_path, capsys):

@@ -43,8 +43,14 @@ def test_non_identifier_module_name_refused(tmp_path):
 
 
 def test_dotted_module_name_refused(tmp_path):
-    (tmp_path / "pkg.py").write_text('print("SHOULD_NOT_RUN")\n')
-    r = _run(tmp_path, "os.path")
+    # Both checks after the name test would pass: "pkg.mod.py" exists as a file,
+    # and runpy resolves "pkg.mod" to pkg/mod.py. Only the identifier check
+    # stops a dotted name from reaching a module outside the flat hook list.
+    (tmp_path / "pkg.mod.py").write_text("")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "mod.py").write_text('print("SHOULD_NOT_RUN")\n')
+    r = _run(tmp_path, "pkg.mod")
     assert r.returncode == 0
     assert "SHOULD_NOT_RUN" not in r.stdout
 

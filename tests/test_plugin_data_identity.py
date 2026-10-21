@@ -502,22 +502,23 @@ def test_refetch_guard_renderable_check(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rg, "resolve_snapshot_dir", lambda: snapshot_dir)
 
-    # Write a manifest with two entries: newest (bad file) then older (good file).
+    # Manifest lines are oldest first and the lookup reads newest first, so the
+    # bad entry goes LAST: the lookup must reject it before reaching the good one.
     manifest = archive_dir / "manifest.jsonl"
     manifest.write_text(
-        json.dumps({
-            "tool_name": "mcp__test__query",
-            "args_hash": "abc123",
-            "tool_use_id": "bad-entry",
-            "timestamp": _now_iso(),
-            "tokens_est": 500,
-        }) + "\n" +
         json.dumps({
             "tool_name": "mcp__test__query",
             "args_hash": "abc123",
             "tool_use_id": "good-entry",
             "timestamp": _now_iso(),
             "tokens_est": 300,
+        }) + "\n" +
+        json.dumps({
+            "tool_name": "mcp__test__query",
+            "args_hash": "abc123",
+            "tool_use_id": "bad-entry",
+            "timestamp": _now_iso(),
+            "tokens_est": 500,
         }) + "\n",
         encoding="utf-8",
     )
@@ -557,6 +558,8 @@ def test_refetch_guard_empty_response_is_not_renderable(monkeypatch, tmp_path):
             "tool_name": "mcp__test__query",
             "args_hash": "abc123",
             "tool_use_id": "empty-response",
+            # In the window, or the lookup returns None before the renderable check.
+            "timestamp": _now_iso(),
             "tokens_est": 500,
         }) + "\n",
         encoding="utf-8",
@@ -591,6 +594,8 @@ def test_refetch_guard_corrupt_json_not_renderable(monkeypatch, tmp_path):
             "tool_name": "mcp__test__query",
             "args_hash": "abc123",
             "tool_use_id": "corrupt",
+            # In the window, or the lookup returns None before the renderable check.
+            "timestamp": _now_iso(),
             "tokens_est": 500,
         }) + "\n",
         encoding="utf-8",
