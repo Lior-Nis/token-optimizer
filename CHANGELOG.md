@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.56] - 2026-10-21
+
+- Your own status line stays put when it lives in a folder whose name includes "token-optimizer". Token Optimizer no longer mistakes it for its own, so it won't replace or remove it.
+
 ## [5.13.55] - 2026-10-21
 
 - The checkpoint saved right before a compaction is no longer skipped on a busy machine after an update, so the restore brings back your latest work.
