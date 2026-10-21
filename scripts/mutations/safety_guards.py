@@ -67,3 +67,19 @@ MUTATIONS += [
      [("    if caps.get(CAP_ALLOW) and _bash_hook._is_auto_approvable(command):",
        "    if caps.get(CAP_ALLOW):")]),
 ]
+
+RUNNER = "hooks/module_runner.py"
+COLD = "tests/test_cold_compile_gate.py"
+RECONCILE = "skills/token-optimizer/scripts/install_reconcile.py"
+
+MUTATIONS += [
+    ("PreCompact save gives up on a cold compile as fast as other measure.py hooks",
+     [COLD + "::test_precompact_save_waits_out_a_slow_cold_compile",
+      COLD + "::test_only_the_precompact_save_gets_the_longer_wait"],
+     RUNNER,
+     [("_COLD_COMPILE_WAIT_PRECOMPACT_SAVE_S = 12.0", "_COLD_COMPILE_WAIT_PRECOMPACT_SAVE_S = 4.0")]),
+    ("uninstall cleanup treats a live install as stale",
+     ["tests/test_uninstall_manifest_reconcile.py::test_remove_keeps_active_our_entries"],
+     RECONCILE,
+     [("        all_gone = all(\n", "        all_gone = True or all(\n")]),
+]

@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.55] - 2026-10-21
+
+- The checkpoint saved right before a compaction is no longer skipped on a busy machine after an update, so the restore brings back your latest work.
+
 ## [5.13.54] - 2026-10-21
 
 - The desktop widget's context card now reads "213k of 300k before auto-compact · 21% of the 1M model window" when you've set a smaller auto-compact window, instead of a quality warning the score doesn't agree with. Thanks @NehoraiHadad (#270).
