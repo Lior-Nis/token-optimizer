@@ -271,7 +271,10 @@ def test_stdin_payload_still_streaming_after_the_first_half_second_is_read_whole
             proc.stdin.close()
         except BrokenPipeError:
             pass  # the reader gave up mid-stream; the assert below says so
-        out, err = proc.communicate(timeout=60)
+        # Not communicate(): it flushes the stdin we already closed, which
+        # raises on Python 3.11/3.12.
+        proc.wait(timeout=60)
+        out, err = proc.stdout.read(), proc.stderr.read()
     finally:
         if proc.poll() is None:
             proc.kill()
