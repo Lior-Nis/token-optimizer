@@ -319,17 +319,28 @@ def _scrub_user_session_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def _clear_runtime_cache():
+    """detect_runtime() is cached for the life of the process. Restoring the env
+    vars is not enough: a test that forced "codex" leaves the cached answer
+    behind, and every later test in that process runs as Codex."""
+    mod = sys.modules.get("runtime_env")
+    if mod is not None and hasattr(getattr(mod, "detect_runtime", None), "cache_clear"):
+        mod.detect_runtime.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _restore_runtime_env():
     saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS + _SANITIZED_ENV_KEYS}
     for key in _SANITIZED_ENV_KEYS:
         os.environ.pop(key, None)
+    _clear_runtime_cache()
     yield
     for key, value in saved.items():
         if value is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+    _clear_runtime_cache()
 
 
 @pytest.fixture(autouse=True)

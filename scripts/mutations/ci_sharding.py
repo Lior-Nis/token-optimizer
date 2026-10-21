@@ -21,3 +21,11 @@ MUTATIONS = [
      CONF,
      [("        i = min(range(n), key=lambda j: (loads[j], j))", "        i = sorted(weights).index(name) % n")]),
 ]
+
+MUTATIONS += [
+    ("runtime answer cached by one test leaks into the next",
+     ["tests/test_runtime_cache_isolation.py"],
+     CONF,
+     [("    _clear_runtime_cache()\n    yield", "    yield"),
+      ("            os.environ[key] = value\n    _clear_runtime_cache()\n", "            os.environ[key] = value\n")]),
+]
