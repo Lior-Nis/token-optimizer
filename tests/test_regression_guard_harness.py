@@ -176,3 +176,14 @@ def test_partly_skipped_guard_that_misses_is_still_a_miss(fake_repo, monkeypatch
     captured = capsys.readouterr()
     assert "FAIL  blind" in captured.out and "n/a" not in captured.out
     assert "PASSED on the broken code" in captured.err
+
+
+def test_clean_run_chunks_cover_every_test_once_and_never_split_a_file():
+    tests = [f"tests/test_{f}.py::t{i}" for f in "abcde" for i in range(ord(f) - 96)]
+    chunks = guards.clean_run_chunks(tests, 3)
+    assert len(chunks) == 3
+    assert sorted(t for c in chunks for t in c) == sorted(tests)
+    for f in "abcde":
+        assert sum(any(t.startswith(f"tests/test_{f}.py") for t in c) for c in chunks) == 1
+    # More workers than files: one group per file, none empty.
+    assert len(guards.clean_run_chunks(tests[:3], 8)) == 2

@@ -318,10 +318,18 @@ def test_live_lock_defers_to_the_running_compile_and_stale_lock_is_taken_over(be
     old = time.time() - 600
     os.utime(lock, (old, old))
     bench.clear_log()
-    rc, out, err, _elapsed = bench.fire(TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S="300")
+    # The compiler is detached, so the hook need not wait for it. Checking the
+    # lock right after the hook exits keeps a broken takeover a fast failure
+    # instead of a 2-minute timeout.
+    rc, out, err, _elapsed = bench.fire(TOKEN_OPTIMIZER_COLD_COMPILE_WAIT_S=str(WAIT_S))
     assert rc == 0 and _valid_envelope(out), err[-2000:]
+    try:
+        still_stale = lock.read_text(encoding="utf-8") == "4242 0\n"
+    except FileNotFoundError:
+        still_stale = False  # taken over and already released
+    assert not still_stale, "the dead compile's stale lock was never taken over"
+    assert bench.wait_for_pyc()
     assert len(bench.compiler_boots()) == 1
-    assert bench.pyc_fresh()
 
 
 # --------------------------------------------------------------------------- #

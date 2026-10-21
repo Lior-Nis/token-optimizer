@@ -912,7 +912,8 @@ def test_kill_stale_never_kills_the_session_it_runs_inside_of(monkeypatch):
     measure = _load_measure()
     _health_with(monkeypatch, measure, [_tagged(4000), _tagged(4001)])
     monkeypatch.setattr(measure, "_posix_ancestor_pids", lambda pid: {9998, 4000, 1})
-    _fresh(monkeypatch, measure, [_tagged(4001)])
+    # Re-verification sees both, so only the ancestor guard can spare 4000.
+    _fresh(monkeypatch, measure, [_tagged(4000), _tagged(4001)])
     killed = []
     monkeypatch.setattr(measure.os, "kill", lambda pid, sig: killed.append(pid))
     measure.kill_stale_sessions(threshold_hours=12)
@@ -928,10 +929,17 @@ def test_ancestor_walk_follows_the_parent_chain_and_is_unknown_when_ps_is_unread
 
 
 def test_kill_stale_never_kills_own_pid_or_parent(monkeypatch):
+    # getpid/getppid are 9999/9998 (see _health_with). Re-verification sees all
+    # three, so only the own-pid/parent guard can spare them; 4001 proves the
+    # kill path is live.
     measure = _load_measure()
-    _health_with(monkeypatch, measure, [_tagged(9999), _tagged(9998)])
-    monkeypatch.setattr(measure.os, "kill", lambda *a: pytest.fail("killed itself or its parent"))
+    sessions = [_tagged(9999), _tagged(9998), _tagged(4001)]
+    _health_with(monkeypatch, measure, sessions)
+    _fresh(monkeypatch, measure, [dict(s) for s in sessions])
+    killed = []
+    monkeypatch.setattr(measure.os, "kill", lambda pid, sig: killed.append(pid))
     measure.kill_stale_sessions(threshold_hours=12)
+    assert killed == [4001]
 
 
 # --- end to end through mocked ps ---------------------------------------------
