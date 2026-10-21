@@ -35046,7 +35046,7 @@ def _remove_our_settings_entries(settings: dict) -> list[str]:
     sl = settings.get("statusLine")
     if isinstance(sl, dict):
         cmd = sl.get("command", "")
-        if isinstance(cmd, str) and "statusline.js" in cmd and "token-optimizer" in cmd:
+        if _statusline_cmd_is_ours(cmd):
             del settings["statusLine"]
             removed.append("statusLine (token-optimizer)")
     # Hook entries we own, across every event.
@@ -46833,6 +46833,28 @@ def _statusline_js_in_command(cmd):
     return m.start(3), m.end(3), m.group(3)
 
 
+def _statusline_cmd_is_ours(cmd):
+    """True when a statusLine command runs Token Optimizer's statusline.js.
+
+    Judged by the folder the script sits in (``token-optimizer/`` or
+    ``token-optimizer/scripts/``), not by "token-optimizer" appearing anywhere
+    in the command: another tool's statusline.js under a home or project folder
+    that happens to contain that name is not ours. A command whose script path
+    cannot be parsed falls back to the plain substring test.
+    """
+    if not isinstance(cmd, str) or "statusline.js" not in cmd or "token-optimizer" not in cmd:
+        return False
+    found = _statusline_js_in_command(cmd)
+    if not found:
+        return True
+    parts = [p for p in re.split(r"[\\/]", found[2].lower()) if p]
+    if len(parts) < 2 or parts[-1] != "statusline.js":
+        return False
+    if parts[-2] == "token-optimizer":
+        return True
+    return len(parts) >= 3 and parts[-2] == "scripts" and parts[-3] == "token-optimizer"
+
+
 def _path_is_under(path, base):
     try:
         Path(path).expanduser().resolve(strict=False).relative_to(Path(base).resolve(strict=False))
@@ -46870,7 +46892,7 @@ def _heal_dangling_statusline():
         if not isinstance(sl, dict):
             return False
         cmd = sl.get("command") or ""
-        if not isinstance(cmd, str) or "statusline.js" not in cmd or "token-optimizer" not in cmd:
+        if not _statusline_cmd_is_ours(cmd):
             return False
         found = _statusline_js_in_command(cmd)
         if not found:
@@ -47162,7 +47184,7 @@ def _is_quality_bar_installed(settings=None):
     # Check statusline
     sl = (settings.get("statusLine") or {})
     cmd = sl.get("command", "")
-    if "statusline.js" in cmd and "token-optimizer" in cmd:
+    if _statusline_cmd_is_ours(cmd):
         result["statusline"] = True
 
     # Check UserPromptSubmit hook (settings.json). Recognizes both the legacy
@@ -47971,7 +47993,7 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False, force=F
 
         # Remove statusLine if it's ours
         sl = settings.get("statusLine", {})
-        if "statusline.js" in sl.get("command", "") and "token-optimizer" in sl.get("command", ""):
+        if _statusline_cmd_is_ours(sl.get("command", "")):
             del settings["statusLine"]
             removed += 1
 
@@ -56436,7 +56458,7 @@ def run_ensure_health():
                             # make setup_quality_bar skip silently; never claim an
                             # install we didn't deliver.
                             _eh_sl = (_read_settings_json()[0].get("statusLine") or {}).get("command", "") or ""
-                            if "statusline.js" in _eh_sl and "token-optimizer" in _eh_sl:
+                            if _statusline_cmd_is_ours(_eh_sl):
                                 print(
                                     "  [Token Optimizer] Quality statusline enabled "
                                     "(context % + quality score). "
@@ -56445,7 +56467,7 @@ def run_ensure_health():
                                 )
                     else:
                         statusline_cmd = (settings.get("statusLine") or {}).get("command", "") or ""
-                        statusline_is_ours = "statusline.js" in statusline_cmd and "token-optimizer" in statusline_cmd
+                        statusline_is_ours = _statusline_cmd_is_ours(statusline_cmd)
                         hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
                         # Recognize the consolidated dispatcher as well as
                         # the legacy standalone hook, else this re-adds the
