@@ -195,8 +195,8 @@ MUTATIONS = [
     ("Bug 1 repair overreaches: another tool's missing statusline.js gets taken over",
      [MATRIX + "::test_claude_session_leaves_other_statuslines_alone[foreign_missing_js]"],
      MEASURE,
-     [('if not isinstance(cmd, str) or "statusline.js" not in cmd or "token-optimizer" not in cmd:',
-       'if not isinstance(cmd, str) or "statusline.js" not in cmd:')]),
+     [('        if not _statusline_cmd_is_ours(cmd):\n            return False\n        found = _statusline_js_in_command(cmd)',
+       '        if "statusline.js" not in cmd:\n            return False\n        found = _statusline_js_in_command(cmd)')]),
 
     ("doctor reports a status line running a missing file as healthy",
      [MATRIX + "::test_doctor_flags_a_status_line_running_a_missing_file"],

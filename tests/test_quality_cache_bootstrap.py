@@ -41,10 +41,14 @@ def m(monkeypatch):
     tmp = tempfile.mkdtemp(prefix="to-qc-bootstrap-")
     monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", tmp)
     sys.path.insert(0, str(SCRIPTS))
-    if "measure" in sys.modules:
-        del sys.modules["measure"]
+    # Load a fresh measure bound to the temp snapshot dir, then put the
+    # shared module back so later tests never see the temp paths.
+    original = sys.modules.pop("measure", None)
     import measure
-    return measure
+    yield measure
+    sys.modules.pop("measure", None)
+    if original is not None:
+        sys.modules["measure"] = original
 
 
 def test_hot_path_still_refuses_to_bootstrap(m):
