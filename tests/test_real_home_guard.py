@@ -39,12 +39,20 @@ def test_import_time_paths_in_measure_are_not_under_real_home():
     scripts = str(Path(__file__).resolve().parent.parent / "skills/token-optimizer/scripts")
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
-    import measure
+    # Import a fresh copy: an earlier test may have left a measure module in
+    # sys.modules that it loaded against its own temp folders.
+    original = sys.modules.pop("measure", None)
+    try:
+        import measure
 
-    sandbox = str(_home_guard.SANDBOX) + os.sep
-    for name in ("SNAPSHOT_DIR", "TRENDS_DB", "CLAUDE_DIR", "RUNTIME_DIR", "SETTINGS_PATH"):
-        value = os.path.realpath(str(getattr(measure, name)))
-        assert value.startswith(sandbox), f"measure.{name} cached outside the sandbox: {value}"
+        sandbox = str(_home_guard.SANDBOX) + os.sep
+        for name in ("SNAPSHOT_DIR", "TRENDS_DB", "CLAUDE_DIR", "RUNTIME_DIR", "SETTINGS_PATH"):
+            value = os.path.realpath(str(getattr(measure, name)))
+            assert value.startswith(sandbox), f"measure.{name} cached outside the sandbox: {value}"
+    finally:
+        sys.modules.pop("measure", None)
+        if original is not None:
+            sys.modules["measure"] = original
 
 
 def test_guard_flags_read_write_and_sqlite_under_real_home():

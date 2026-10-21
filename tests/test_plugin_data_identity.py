@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from unittest import mock
@@ -29,11 +30,24 @@ def _load_run_py():
 # Test helpers
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _clear_plugin_env_cache():
+    """Drop any plugin-data root a test resolved, so later tests and modules
+    never inherit a temp folder from the cache."""
+    yield
+    module = sys.modules.get("plugin_env")
+    if module is not None:
+        module.resolve_plugin_data_dir.cache_clear()
+
+
 def _load_plugin_env(monkeypatch: pytest.MonkeyPatch, data_base: Path):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     module = importlib.import_module("plugin_env")
-    module._PLUGIN_DATA_BASE = data_base
-    module._INSTALLED_PLUGINS = data_base.parent / "installed_plugins.json"
+    # monkeypatch so the shared module gets its real values back after the
+    # test; the env-var tuple is snapshotted because tests reassign it.
+    monkeypatch.setattr(module, "_PLUGIN_DATA_BASE", data_base)
+    monkeypatch.setattr(module, "_INSTALLED_PLUGINS", data_base.parent / "installed_plugins.json")
+    monkeypatch.setattr(module, "_PLUGIN_DATA_ENV_VARS", module._PLUGIN_DATA_ENV_VARS)
     # Use the real runtime_env to get the env var tuple, but override it
     # so tests control the env var list explicitly.
     module.resolve_plugin_data_dir.cache_clear()
