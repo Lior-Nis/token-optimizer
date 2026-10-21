@@ -42,7 +42,7 @@ def _run_wrapper(args, env_extra=None):
     )
 
 
-def test_gate_module_has_no_heavy_imports():
+def test_gate_module_has_no_heavy_imports(tmp_path):
     """The gate module must import only stdlib modules that are already loaded
     by bare interpreter startup, so the wrapper's self-check stays cheap."""
     probe = (
@@ -53,7 +53,7 @@ def test_gate_module_has_no_heavy_imports():
     result = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True, text=True, timeout=60,
-        env={"PYTHONPATH": str(SCRIPTS), "PATH": __import__("os").environ.get("PATH", "")},
+        env={**_isolated_env(tmp_path), "PYTHONPATH": str(SCRIPTS)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "", (
@@ -73,7 +73,18 @@ sys.meta_path.insert(0, _B())
 """
 
 
-def test_fail_open_runs_original_when_gate_unavailable():
+def _isolated_env(tmp_path):
+    """Minimal env with a temp home: without HOME the child falls back to the
+    real account home and may log into the developer's own ~/.claude."""
+    import os
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    return {"PATH": os.environ.get("PATH", ""), "HOME": str(home), "USERPROFILE": str(home),
+            "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "TOKEN_OPTIMIZER_SNAPSHOT_DIR": str(tmp_path / "snap")}
+
+
+def test_fail_open_runs_original_when_gate_unavailable(tmp_path):
     """With the gate module unimportable, the wrapper must execute the original
     command (exit code and output relayed), never drop it."""
     probe = _BLOCKER.format(scripts=str(SCRIPTS)) + (
@@ -84,14 +95,14 @@ def test_fail_open_runs_original_when_gate_unavailable():
     result = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True, text=True, timeout=120,
-        env={"PATH": __import__("os").environ.get("PATH", "")},
+        env=_isolated_env(tmp_path),
     )
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert "failopen-ok" in result.stdout
     assert "not eligible for compression" not in result.stderr
 
 
-def test_fail_open_relays_nonzero_exit_code():
+def test_fail_open_relays_nonzero_exit_code(tmp_path):
     """A failing original command keeps its exit code on the fail-open path."""
     probe = _BLOCKER.format(scripts=str(SCRIPTS)) + (
         "sys.argv = ['bash_compress.py', 'python3', '-c', 'import sys; sys.exit(3)']\n"
@@ -101,7 +112,7 @@ def test_fail_open_relays_nonzero_exit_code():
     result = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True, text=True, timeout=120,
-        env={"PATH": __import__("os").environ.get("PATH", "")},
+        env=_isolated_env(tmp_path),
     )
     assert result.returncode == 3, (result.returncode, result.stdout, result.stderr)
 

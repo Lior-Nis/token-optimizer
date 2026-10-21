@@ -4,6 +4,8 @@
 
 - The desktop widget's context card now reads "213k of 300k before auto-compact · 21% of the 1M model window" when you've set a smaller auto-compact window, instead of a quality warning the score doesn't agree with. Thanks @NehoraiHadad (#270).
 - Windows session starts skip the Task Scheduler check on a healthy install, so starting a session is a little quicker.
+- Very large tool results (several MB) are archived reliably on a busy machine instead of sometimes being skipped.
+- On Windows and Linux, turning the dashboard back on after `setup-daemon --uninstall` works again.
 
 ## [5.13.53] - 2026-10-20
 

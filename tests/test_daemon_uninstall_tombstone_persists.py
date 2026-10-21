@@ -152,6 +152,32 @@ def test_this_install_only_still_tombstones_the_swept_identity(measure, tmp_path
     assert (sibling / "daemon-token").exists()
 
 
+@pytest.mark.parametrize("system,installer", [
+    ("Darwin", "_install_launchd_daemon"),
+    ("Windows", "_install_task_scheduler_daemon"),
+    ("Linux", "_install_systemd_user_daemon"),
+])
+def test_setup_daemon_clears_the_uninstall_tombstone_on_every_platform(
+        measure, tmp_path, monkeypatch, system, installer):
+    """Uninstall tombstones the daemon on every platform, so the explicit
+    install must clear it on every platform too. Only launchd's installer used
+    to, leaving Windows and Linux dashboards dead after a reinstall."""
+    crumb = tmp_path / ".daemon-thrash"
+    crumb.write_text(measure._UNINSTALL_TOMBSTONE_MARKER)
+    monkeypatch.setattr(measure, "DAEMON_THRASH_BREADCRUMB", crumb)
+    monkeypatch.setattr(measure, "_normalized_platform", lambda: system)
+    monkeypatch.setattr(measure, "_scheduler_install_refused", lambda: False)
+    monkeypatch.setattr(measure, "_persist_dashboard_host", lambda persist=True: "127.0.0.1")
+    monkeypatch.setattr(measure, "_set_daemon_disabled", lambda v: None)
+    monkeypatch.setattr(measure, "_clear_daemon_install_failed_marker", lambda: None)
+    monkeypatch.setattr(measure, installer, lambda **k: True)
+
+    measure.setup_daemon(dry_run=True)
+    assert crumb.exists(), "a dry run must not clear anything"
+    measure.setup_daemon()
+    assert not crumb.exists(), f"{system}: reinstall left the uninstall tombstone in place"
+
+
 def test_reinstall_is_the_only_path_that_clears_the_tombstone(measure, tmp_path):
     """setup_daemon's start path unlinks it; nothing in uninstall may.
 

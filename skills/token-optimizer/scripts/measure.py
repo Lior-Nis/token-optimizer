@@ -34904,6 +34904,15 @@ def setup_daemon(dry_run=False, uninstall=False, this_install_only=False, latch_
     # the quality-bar install path. Skipped on dry-run (side-effect-free).
     if not dry_run:
         _set_daemon_disabled(False)
+        # Every platform's uninstall leaves a permanent tombstone the daemon
+        # obeys forever; an explicit install is what clears it. Done here, not
+        # per installer: only the launchd installer cleared it, so on Windows
+        # and Linux `setup-daemon` after `--uninstall` left the daemon dead.
+        try:
+            if DAEMON_THRASH_BREADCRUMB.exists():
+                DAEMON_THRASH_BREADCRUMB.unlink()
+        except OSError:
+            pass
     if system == "Darwin":
         _installed_ok = _install_launchd_daemon(dry_run=dry_run, effective_host=effective_host)
     elif system == "Windows":

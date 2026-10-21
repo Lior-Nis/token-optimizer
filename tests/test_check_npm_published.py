@@ -163,14 +163,14 @@ def test_sign_release_gate_skips_tags_that_predate_the_script(tmp_path):
     signing workflow. It must skip there, and still run the gate otherwise."""
     script = _gate_step_script()
     old = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), capture_output=True, text=True,
-                         env={"PATH": os.environ.get("PATH", ""), "TAG": "v5.11.64"}, timeout=30)
+                         env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "TAG": "v5.11.64"}, timeout=30)
     assert old.returncode == 0, old.stderr
     assert "skipped" in old.stdout
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "check_npm_published.py").write_text(
         "import sys; print('GATE', sys.argv[1:]); sys.exit(1)\n", encoding="utf-8")
     new = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), capture_output=True, text=True,
-                         env={"PATH": os.environ.get("PATH", ""), "TAG": "v9.9.9"}, timeout=30)
+                         env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "TAG": "v9.9.9"}, timeout=30)
     assert new.returncode == 1 and "GATE" in new.stdout and "v9.9.9" in new.stdout
 
 

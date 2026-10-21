@@ -19,6 +19,7 @@ edit-time guard keeps the budget from silently regressing in both source trees.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,8 +34,18 @@ MEASURE_MIRROR = (
 )
 
 
-def _run_compact_restore(env_extra=None):
-    env = {"PATH": __import__("os").environ.get("PATH", "")}
+def _run_compact_restore(tmp_path, env_extra=None):
+    # A bare env has no HOME, so Python falls back to the real account home and
+    # the child reads and writes the developer's own ~/.claude. Give it a temp one.
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "TOKEN_OPTIMIZER_SNAPSHOT_DIR": str(tmp_path / "snap"),
+    }
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(MEASURE), "compact-restore", "--new-session-only"],
@@ -43,15 +54,15 @@ def _run_compact_restore(env_extra=None):
     )
 
 
-def test_compact_restore_exits_clean_default_budget():
-    p = _run_compact_restore()
+def test_compact_restore_exits_clean_default_budget(tmp_path):
+    p = _run_compact_restore(tmp_path)
     assert p.returncode == 0, p.stderr
     assert "Traceback" not in p.stderr
 
 
-def test_compact_restore_exits_clean_tiny_budget():
+def test_compact_restore_exits_clean_tiny_budget(tmp_path):
     # A 1s budget must not break the fast path (real op completes well under 1s).
-    p = _run_compact_restore({"TOKEN_OPTIMIZER_COMPACT_RESTORE_BUDGET": "1"})
+    p = _run_compact_restore(tmp_path, {"TOKEN_OPTIMIZER_COMPACT_RESTORE_BUDGET": "1"})
     assert p.returncode == 0, p.stderr
     assert "Traceback" not in p.stderr
 

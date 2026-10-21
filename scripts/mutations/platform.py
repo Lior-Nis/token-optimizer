@@ -187,3 +187,11 @@ MUTATIONS += [
      [("    if time.time() - last >= _daemon_ensure_throttle_seconds():\n        try:\n            _write_config_flag(\"last_windows_task_action_check\"",
        "    if True:\n        try:\n            _write_config_flag(\"last_windows_task_action_check\"")]),
 ]
+
+MUTATIONS += [
+    ("setup-daemon after --uninstall leaves the tombstone on Windows/Linux",
+     ["tests/test_daemon_uninstall_tombstone_persists.py::test_setup_daemon_clears_the_uninstall_tombstone_on_every_platform"],
+     "skills/token-optimizer/scripts/measure.py",
+     [("        # and Linux `setup-daemon` after `--uninstall` left the daemon dead.\n        try:\n            if DAEMON_THRASH_BREADCRUMB.exists():",
+       "        # and Linux `setup-daemon` after `--uninstall` left the daemon dead.\n        try:\n            if False and DAEMON_THRASH_BREADCRUMB.exists():")]),
+]
