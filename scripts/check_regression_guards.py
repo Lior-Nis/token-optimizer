@@ -27,6 +27,7 @@ Run from anywhere:  python3 scripts/check_regression_guards.py
   --list            print every mutation and exit
   --only TEXT       run only mutations whose name or file contains TEXT (repeatable)
   --jobs N          run N mutations in parallel, each in its own copy (default 1)
+  --shard K/N       run slice K of N (CI splits the run across machines)
   --require-all     fail when any mutation is n/a on this OS (see below)
 
 The clean pre-run records each guard test's real outcome. A mutation whose
@@ -304,6 +305,8 @@ def main(argv=None) -> int:
     ap.add_argument("--require-all", action="store_true",
                     help="fail when any mutation is n/a (its guard tests all skip on this OS)")
     ap.add_argument("--jobs", type=int, default=int(os.environ.get("REGRESSION_GUARDS_JOBS", "1")))
+    ap.add_argument("--shard", default="",
+                    help="K/N: run slice K of N (mutations sorted by name, every Nth); CI splits the run")
     opts = ap.parse_args(argv)
 
     try:
@@ -316,6 +319,17 @@ def main(argv=None) -> int:
         if not muts:
             print("No mutation matches --only.", file=sys.stderr)
             return 1
+    if opts.shard:
+        try:
+            k, n = (int(x) for x in opts.shard.split("/"))
+            assert n >= 1 and 1 <= k <= n
+        except (ValueError, AssertionError):
+            print(f"--shard must look like 2/3, got {opts.shard!r}", file=sys.stderr)
+            return 2
+        muts = sorted(muts, key=lambda m: (m[0], m[4]))[k - 1::n]
+        if not muts:
+            print(f"Shard {opts.shard} has no mutations.")
+            return 0
     if opts.list:
         for name, tests, relpath, _edits, origin in muts:
             print(f"{origin:38} {relpath}\n    {name}\n    -> {' '.join(tests)}")

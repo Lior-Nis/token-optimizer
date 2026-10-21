@@ -36103,7 +36103,20 @@ def _heal_windows_console_flash():
     if _daemon_resurrection_blocked() is not None:
         return False
     healed_shim = _heal_windows_launcher_shim()
-    healed_task = _heal_windows_task_action(stop_first=True, throttle=True)
+    healed_task = False
+    # Reading the task's action costs a `schtasks /Query`. A healthy install
+    # needs no heal, so look at most once per ensure-throttle window instead of
+    # on every SessionStart. Stamped before the read, like the heal throttle.
+    try:
+        last = float(_read_config_flag("last_windows_task_action_check", 0) or 0)
+    except (TypeError, ValueError):
+        last = 0.0
+    if time.time() - last >= _daemon_ensure_throttle_seconds():
+        try:
+            _write_config_flag("last_windows_task_action_check", int(time.time()))
+        except Exception:
+            pass
+        healed_task = _heal_windows_task_action(stop_first=True, throttle=True)
     return bool(healed_shim or healed_task)
 
 

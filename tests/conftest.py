@@ -44,6 +44,7 @@ one legitimate case, a deliberate negative test of the guard itself.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -182,12 +183,71 @@ FAILURE_ADVICE = (
 MAX_TEST_ID_CHARS = 32500
 
 
+def _shard_spec():
+    """TO_TEST_SHARD="K/N" (1-based) runs slice K of N; unset runs everything."""
+    raw = os.environ.get("TO_TEST_SHARD", "").strip()
+    if not raw:
+        return None
+    try:
+        k, n = (int(x) for x in raw.split("/"))
+    except ValueError:
+        raise pytest.UsageError(f"TO_TEST_SHARD must look like 2/4, got {raw!r}")
+    if not (n >= 1 and 1 <= k <= n):
+        raise pytest.UsageError(f"TO_TEST_SHARD out of range: {raw!r}")
+    return k, n
+
+
+def shard_files(weights, n):
+    """Split test files into n slices of similar total weight.
+
+    Whole files stay together, so module fixtures run once. Heaviest first onto
+    the lightest slice; ties break on name, so every machine computes the same
+    split. test_zz_* files (end-of-session guards) belong to every slice.
+    """
+    slices = [[] for _ in range(n)]
+    loads = [0.0] * n
+    for name in sorted(weights, key=lambda f: (-weights[f], f)):
+        if Path(name).name.startswith("test_zz_"):
+            for s in slices:
+                s.append(name)
+            continue
+        i = min(range(n), key=lambda j: (loads[j], j))
+        slices[i].append(name)
+        loads[i] += weights[name]
+    return [set(s) for s in slices]
+
+
+def _file_weights(items):
+    """Seconds per file from tests/shard_weights.json when known, else a
+    per-test estimate, so a new file still lands somewhere sensible."""
+    known = {}
+    try:
+        known = json.loads((Path(__file__).parent / "shard_weights.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    counts = {}
+    for item in items:
+        f = item.nodeid.split("::", 1)[0]
+        counts[f] = counts.get(f, 0) + 1
+    return {f: float(known.get(f, 0.15 * c)) for f, c in counts.items()}
+
+
 def pytest_collection_modifyitems(config, items):
     oversized = [item.nodeid for item in items if len(item.nodeid) > MAX_TEST_ID_CHARS]
     if oversized:
         raise pytest.UsageError(
             'test id longer than %d characters; pass explicit ids= to parametrize: %s'
             % (MAX_TEST_ID_CHARS, ', '.join(nodeid[:120] + '...' for nodeid in oversized)))
+    spec = _shard_spec()
+    if spec is None:
+        return
+    k, n = spec
+    mine = shard_files(_file_weights(items), n)[k - 1]
+    keep = [it for it in items if it.nodeid.split("::", 1)[0] in mine]
+    dropped = [it for it in items if it.nodeid.split("::", 1)[0] not in mine]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
 
 
 def pytest_configure(config):
@@ -259,17 +319,28 @@ def _scrub_user_session_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def _clear_runtime_cache():
+    """detect_runtime() is cached for the life of the process. Restoring the env
+    vars is not enough: a test that forced "codex" leaves the cached answer
+    behind, and every later test in that process runs as Codex."""
+    mod = sys.modules.get("runtime_env")
+    if mod is not None and hasattr(getattr(mod, "detect_runtime", None), "cache_clear"):
+        mod.detect_runtime.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _restore_runtime_env():
     saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS + _SANITIZED_ENV_KEYS}
     for key in _SANITIZED_ENV_KEYS:
         os.environ.pop(key, None)
+    _clear_runtime_cache()
     yield
     for key, value in saved.items():
         if value is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+    _clear_runtime_cache()
 
 
 @pytest.fixture(autouse=True)

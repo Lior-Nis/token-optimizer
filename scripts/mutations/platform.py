@@ -179,3 +179,11 @@ MUTATIONS = [
      [("                if getattr(_tls, \"inside\", 0):\n"
        "                    return real(*a, **k)  # Popen's own start: already recorded\n", "")]),
 ]
+
+MUTATIONS += [
+    ("windows task action read on every SessionStart (no check throttle)",
+     ["tests/test_heal_hardening.py::test_healthy_task_is_read_once_per_window_not_every_session_start"],
+     "skills/token-optimizer/scripts/measure.py",
+     [("    if time.time() - last >= _daemon_ensure_throttle_seconds():\n        try:\n            _write_config_flag(\"last_windows_task_action_check\"",
+       "    if True:\n        try:\n            _write_config_flag(\"last_windows_task_action_check\"")]),
+]
