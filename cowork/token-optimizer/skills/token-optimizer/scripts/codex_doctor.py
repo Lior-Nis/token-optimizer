@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from runtime_env import codex_home, detect_runtime, runtime_home
+import codex_compact_prompt
+import codex_install
 import codex_state
 import codex_statusline
 
@@ -230,11 +232,28 @@ def _compact_prompt_check() -> dict[str, str]:
     except UnicodeDecodeError:
         return _check("FAIL", "Compact prompt", f"{config_path} is not valid UTF-8; run measure.py codex-compact-prompt --install")
     expected = codex_home() / "token-optimizer" / "codex-compact-prompt.md"
-    if str(expected) in text and expected.exists():
+    state = codex_compact_prompt.configured_prompt_state(text, expected)
+    if state == "ours" and expected.exists():
         return _check("OK", "Compact prompt", str(expected))
-    if "compact_prompt" in text or "experimental_compact_prompt_file" in text:
+    if state == "misplaced":
+        return _check("FAIL", "Compact prompt", "setting sits inside a table, so Codex ignores it; rerun measure.py codex-compact-prompt --install to move it")
+    if state in ("ours", "custom"):
         return _check("WARN", "Compact prompt", "custom compact prompt configured")
     return _check("FAIL", "Compact prompt", "not configured yet; run measure.py codex-compact-prompt --install")
+
+
+def _stop_hook_activity_check() -> dict[str, str]:
+    """Report the last Stop-hook refresh, so "registered" and "actually ran"
+    are no longer the same line (issue #276)."""
+    status_path = runtime_home() / "token-optimizer" / "hook-status.json"
+    data, error = _load_json(status_path)
+    entry = data.get("stop_flush") if isinstance(data, dict) else None
+    if error or not isinstance(entry, dict):
+        return _check("WARN", "Stop hook last run", "no run recorded yet; finish one Codex turn, then run the doctor again")
+    when = entry.get("at", "unknown time")
+    result = str(entry.get("result", "unknown"))
+    level = "WARN" if result.startswith("error") else "OK"
+    return _check(level, "Stop hook last run", f"{when}: {result}")
 
 
 def _status_line_check() -> dict[str, str]:
@@ -249,6 +268,16 @@ def _status_line_check() -> dict[str, str]:
     return _check("WARN", "Codex CLI status line", "not configured; rerun codex-install with --enable-status-line")
 
 
+def _has_our_hooks(data: dict[str, Any]) -> bool:
+    """Same ownership test the installer uses. The consolidated runner hooks
+    carry no "token-optimizer/scripts" text on POSIX installs, so a substring
+    check called a working install "no Token Optimizer hooks"."""
+    for groups in data.get("hooks", {}).values():
+        if isinstance(groups, list) and any(codex_install._is_token_optimizer_group(g) for g in groups):
+            return True
+    return False
+
+
 def _global_hook_check() -> dict[str, str]:
     hooks_path = codex_home() / "hooks.json"
     data, error = _load_json(hooks_path)
@@ -256,7 +285,7 @@ def _global_hook_check() -> dict[str, str]:
         return _check("FAIL", "Global hooks", f"{hooks_path} not found; run measure.py codex-install")
     if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
         return _check("FAIL", "Global hooks", f"{hooks_path} has no hooks object")
-    if "token-optimizer/scripts" in json.dumps(data, sort_keys=True):
+    if _has_our_hooks(data):
         return _check("OK", "Global hooks", str(hooks_path))
     return _check("WARN", "Global hooks", f"no Token Optimizer hooks in {hooks_path}; run measure.py codex-install")
 
@@ -302,32 +331,42 @@ def _project_hook_check(project: Path) -> dict[str, str]:
         return _check("WARN", "Project hooks", f"{hooks_path} not found; per-project hooks are optional when global hooks are installed")
     if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
         return _check("FAIL", "Project hooks", f"{hooks_path} has no hooks object")
-    if "token-optimizer/scripts" in json.dumps(data, sort_keys=True):
+    if _has_our_hooks(data):
         return _check("OK", "Project hooks", str(hooks_path))
     return _check("WARN", "Project hooks", f"no Token Optimizer hooks installed in {hooks_path}; manual refresh mode avoids visible Codex hook rows")
 
 
 def _project_feature_checks(project: Path) -> list[dict[str, str]]:
-    hooks_path = project / ".codex" / "hooks.json"
-    data, error = _load_json(hooks_path)
-    if error or not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+    # Features count from the global hooks file AND the project one: the
+    # default install is global, so a project-only view reported every
+    # feature as missing on a correctly installed machine.
+    hooks: dict[str, list] = {}
+    for hooks_path in (codex_home() / "hooks.json", project / ".codex" / "hooks.json"):
+        data, error = _load_json(hooks_path)
+        if error or not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+            continue
+        for event, groups in data["hooks"].items():
+            if isinstance(groups, list):
+                hooks.setdefault(event, []).extend(groups)
+    if not hooks:
         return []
 
-    hooks = data.get("hooks", {})
     checks = []
-    if _has_project_hook(hooks, "PreToolUse", "Bash", "bash_hook.py"):
+    if _has_project_hook(hooks, "PreToolUse", "Bash", ("codex_command_compress.py", "bash_hook.py")):
         checks.append(_check("OK", "Feature: Bash compression", "enabled for PreToolUse(Bash)"))
     else:
         checks.append(_check("OK", "Feature: Bash compression", "off by default to avoid visible Codex PreToolUse hook spam"))
 
     required_features = (
-        ("Session continuity and dashboard refresh", "Stop", None, "session-end-flush"),
+        # Current installs route through the consolidated runners; the older
+        # per-script names still count so a pre-runner install reads right.
+        ("Session continuity and dashboard refresh", "Stop", None, ("stop_runner.py", "session-end-flush")),
     )
     optional_noisy_features = (
-        ("Prompt quality nudges", "UserPromptSubmit", None, "codex_hook_bridge.py"),
-        ("Subagent sprawl tracking", "SubagentStart", None, "subagent-start"),
-        ("Tool output archive", "PostToolUse", "Bash", "archive_result.py"),
-        ("Context intelligence", "PostToolUse", "Bash", "context_intel.py"),
+        ("Prompt quality nudges", "UserPromptSubmit", None, ("userpromptsubmit_runner.py", "codex_hook_bridge.py")),
+        ("Subagent sprawl tracking", "SubagentStart", None, ("subagent-start",)),
+        ("Tool output archive", "PostToolUse", "Bash", ("posttooluse_runner.py", "archive_result.py")),
+        ("Context intelligence", "PostToolUse", "Bash", ("posttooluse_runner.py", "context_intel.py")),
     )
     for feature, event, matcher, needle in required_features:
         if _has_project_hook(hooks, event, matcher, needle):
@@ -354,7 +393,8 @@ def _project_feature_checks(project: Path) -> list[dict[str, str]]:
     return checks
 
 
-def _has_project_hook(hooks: dict[str, Any], event: str, matcher: str | None, command_needle: str) -> bool:
+def _has_project_hook(hooks: dict[str, Any], event: str, matcher: str | None, command_needle) -> bool:
+    needles = (command_needle,) if isinstance(command_needle, str) else tuple(command_needle)
     groups = hooks.get(event)
     if not isinstance(groups, list):
         return False
@@ -367,7 +407,7 @@ def _has_project_hook(hooks: dict[str, Any], event: str, matcher: str | None, co
             if not isinstance(hook, dict) or hook.get("type") != "command":
                 continue
             command = hook.get("command", "")
-            if isinstance(command, str) and command_needle in command:
+            if isinstance(command, str) and any(n in command for n in needles):
                 return True
     return False
 
@@ -415,6 +455,7 @@ def run_checks(project: Path | None = None) -> list[dict[str, str]]:
     checks.append(_compact_prompt_check())
     checks.append(_status_line_check())
     checks.append(_global_hook_check())
+    checks.append(_stop_hook_activity_check())
     checks.extend(_global_hook_config_checks())
     checks.append(_project_hook_check(project))
     checks.extend(_project_feature_checks(project))

@@ -56,6 +56,9 @@ _LAUNCHER_MARKER = "token-optimizer/scripts/windows-launcher"
 # Filename of the readable launcher codex_install copies NEXT TO the
 # versioned install dirs (issue #183); canonical source ships in hooks/.
 _LAUNCHER_FILENAME = "windows-launcher.py"
+# Unquoted first token for the Windows launcher command (see
+# _windows_launcher_command for why the command must not start with a quote).
+_WIN_UNQUOTED_PREFIX = 'set "TOKEN_OPTIMIZER_RUNTIME=codex" &&'
 _LAUNCHER_B64_RE = re.compile(r"b64decode\('([A-Za-z0-9+/=]+)'\)")
 # Sentinel version leaf used when normalizing a launcher for signature
 # comparison (see _launcher_signature).
@@ -101,7 +104,16 @@ def _windows_launcher_command(root: Path, script: str, args, extra_env: dict) ->
     dispatching, so the runner's sys.argv stays exactly [run.py, script,
     *args].
     """
+    # The command must NOT start with a double quote. Codex hands it to
+    # cmd.exe as a raw /C string; when that string's first character is a
+    # quote, cmd strips the first and the LAST quote on the line (/S rules),
+    # which unpairs every quoted path ("The filename, directory name, or
+    # volume label syntax is incorrect", issue #276). A leading builtin keeps
+    # the line intact whether or not the host wraps it in an outer pair of
+    # quotes. The launcher sets this variable too; the prefix is only there
+    # to give cmd an unquoted first token.
     parts = [
+        _WIN_UNQUOTED_PREFIX,
         _cmd_quote(sys.executable),
         _cmd_quote(str(root.parent / _LAUNCHER_FILENAME)),
         "--baked-root",
@@ -441,6 +453,17 @@ _WIN_RUNNER_VIA_VAR_RE = re.compile(
 )
 
 
+# The consolidated runners (hooks/<event>_runner.py) carry no
+# "token-optimizer/scripts" text on POSIX marketplace installs, so without this
+# signature a reinstall appended a second copy of each runner hook and uninstall
+# left them all behind. Ours = a runner name AND our hooks/run.py (or
+# python-launcher.sh) AND a path under a token-optimizer folder, together.
+_RUNNER_SCRIPT_RE = re.compile(
+    r'hooks[/\\]+(?:sessionstart|userpromptsubmit|posttooluse|stop)_runner\.py'
+)
+_RUNNER_ENTRY_RE = re.compile(r'hooks[/\\]+(?:run\.py|python-launcher\.sh)|\$\{R\}hooks/')
+
+
 def _is_token_optimizer_group(group: Any) -> bool:
     # The path marker misses generated Windows commands: on versioned
     # marketplace installs the baked paths use backslashes
@@ -452,6 +475,12 @@ def _is_token_optimizer_group(group: Any) -> bool:
     # or a POSIX-style VAR=x prefix) is never swept up by reinstall/uninstall.
     serialized = json.dumps(group, sort_keys=True)
     if TOKEN_OPTIMIZER_MARKER in serialized:
+        return True
+    if (
+        _RUNNER_SCRIPT_RE.search(serialized)
+        and _RUNNER_ENTRY_RE.search(serialized)
+        and _WIN_TO_DIR_RE.search(serialized)
+    ):
         return True
     if not _WIN_ROOT_SET_RE.search(serialized):
         return False
@@ -660,6 +689,49 @@ def install(
             details["status_line"] = codex_statusline.install(force=force_status_line)
         codex_io.atomic_write_json(path, updated)
     return path, "installed", details
+
+
+def heal_quoted_launcher_commands(paths=None) -> int:
+    """Repair Windows hook commands that start with a double quote.
+
+    Versions before 5.13.57 saved launcher commands that open with the quoted
+    python.exe path. cmd.exe strips that first quote and the last one, so the
+    hook fails before Python starts and can never repair itself (issue #276).
+    This rewrites only our own launcher commands, only that one way, and
+    returns how many it fixed. Never raises.
+    """
+    if paths is None:
+        paths = []
+        try:
+            paths.append(_global_hooks_path())
+        except Exception:
+            pass
+        paths.append(Path.cwd() / ".codex" / "hooks.json")
+    fixed = 0
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+            data = _load_hooks(path)
+            changed = 0
+            for groups in data.get("hooks", {}).values():
+                if not isinstance(groups, list):
+                    continue
+                for group in groups:
+                    if not _is_token_optimizer_group(group):
+                        continue
+                    for handler in group.get("hooks", []):
+                        command = handler.get("command") if isinstance(handler, dict) else None
+                        if (isinstance(command, str) and command.startswith('"')
+                                and _LAUNCHER_MARKER in command):
+                            handler["command"] = f"{_WIN_UNQUOTED_PREFIX} {command}"
+                            changed += 1
+            if changed:
+                codex_io.atomic_write_json(path, data)
+                fixed += changed
+        except Exception:
+            continue
+    return fixed
 
 
 def uninstall(project: Path, *, is_global: bool = False, dry_run: bool = False) -> tuple[Path, str, dict[str, Any]]:

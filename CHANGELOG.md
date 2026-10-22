@@ -1,5 +1,15 @@
 # Changelog
 
+## [5.13.57] - 2026-10-22
+
+- Codex on Windows: hooks run again instead of failing with "hook exited with code 1" after every tool call and reply. Re-run `codex-install` once to pick up the fix. Thanks @porkmagus for the detailed report (#276).
+- Codex: the compact prompt setting now lands at the top of `config.toml`, where Codex reads it. The same `codex-install` run moves one an older version put under a project table.
+- Codex: re-running `codex-install` on macOS and Linux replaces its hooks instead of adding a second copy, and uninstall removes them all.
+- `codex-doctor` recognizes the current hooks, reads Windows paths correctly, and shows when the Stop hook last ran and what it did.
+- Codex reports count each plugin's skills once and credit them to the right plugin, and use the Codex model's own context window.
+- The "Remove hardcoded model" tip stays away when a model-routing plugin already picks subagent models. Thanks @Tom0092 (#275).
+- New Codex setup guide with a PowerShell path for Windows.
+
 ## [5.13.56] - 2026-10-21
 
 - Your own status line stays put when it lives in a folder whose name includes "token-optimizer". Token Optimizer no longer mistakes it for its own, so it won't replace or remove it.

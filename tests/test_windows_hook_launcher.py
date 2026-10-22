@@ -459,7 +459,8 @@ def test_foreign_hook_referencing_runtime_root_is_never_touched(monkeypatch):
     # split the path at the & (shipped once, v5.13.15).
     "nospace&amp^caret(x)!",
 ])
-def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path, install_dir):
+@pytest.mark.parametrize("wrap", ['"{}"', "{}"], ids=["wrapped", "bare"])
+def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path, install_dir, wrap):
     """Windows execution proof: run the emitted raw /C command under the
     actual cmd.exe, with path/argv/env metacharacters and an upgrade."""
     module = _load_codex_install(monkeypatch, "win32")
@@ -480,7 +481,7 @@ def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path, 
     command = module._hook_command("hooks/test.py", argument,
                                    extra_env={"TO_TEST": argument})
     proc = subprocess.run(
-        f'{os.environ.get("COMSPEC", "cmd.exe")} /d /s /c "{command}"',
+        f'{os.environ.get("COMSPEC", "cmd.exe")} /d /s /c ' + wrap.format(command),
         input='{"test": true}', capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f"hook command failed: {proc.stderr}\n{command}"
     payload = json.loads((base / "5.11.76" / "hooks" / "invoked.json").read_text())
@@ -492,7 +493,8 @@ def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path, 
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe semantics are Windows-only")
-def test_windows_hook_executes_with_spaceless_metachar_path(monkeypatch, tmp_path):
+@pytest.mark.parametrize("wrap", ['"{}"', "{}"], ids=["wrapped", "bare"])
+def test_windows_hook_executes_with_spaceless_metachar_path(monkeypatch, tmp_path, wrap):
     """Regression: an install path carrying a cmd metacharacter (& ( ) ^) but NO
     space must still run. list2cmdline only wraps tokens that contain whitespace,
     so a space-free metachar path was emitted bare and cmd parsed the `&` as a
@@ -508,7 +510,7 @@ def test_windows_hook_executes_with_spaceless_metachar_path(monkeypatch, tmp_pat
     monkeypatch.setattr(module, "_repo_root", lambda: base / "5.11.75")
     command = module._hook_command("hooks/test.py", "--flag")
     proc = subprocess.run(
-        f'{os.environ.get("COMSPEC", "cmd.exe")} /d /s /c "{command}"',
+        f'{os.environ.get("COMSPEC", "cmd.exe")} /d /s /c ' + wrap.format(command),
         input='{"ok": true}', capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, f"hook command failed: {proc.stderr}\n{command}"
     payload = json.loads((base / "5.11.76" / "hooks" / "invoked.json").read_text())
@@ -772,3 +774,24 @@ def test_setup_all_hooks_containment_is_separator_normalized():
     # (Source contains two literal backslashes: replace("\\", "/").)
     assert r'plugin_root_str.replace("\\", "/")' in src
     assert r'existing_cmd.replace("\\", "/")' in src
+
+
+def test_windows_codex_command_never_starts_with_a_quote(monkeypatch, tmp_path):
+    """Issue #276: Codex passes the hook to cmd.exe /C as a raw string. When
+    its first character is a double quote, cmd strips that quote and the LAST
+    one on the line, unpairing every quoted path, so each hook exited 1. Any
+    leading quote is the bug, whatever follows."""
+    module = _load_codex_install(monkeypatch, "win32")
+    root = tmp_path / "Program Files" / "token-optimizer" / "5.13.56"
+    monkeypatch.setattr(module, "_repo_root", lambda: root)
+    for redirect in (False, True):
+        command = module._hook_command("hooks/stop_runner.py", redirect_quiet=redirect)
+        assert not command.lstrip().startswith('"'), command
+    # Quote-stripping simulation of cmd's /S rule: removing the first and last
+    # quote must be a no-op for a command that does not start with one.
+    hooks = module._managed_hooks(enable_prompt_hooks=True, enable_hot_path_hooks=True,
+                                  enable_subagent_hooks=True)
+    for groups in hooks.values():
+        for group in groups:
+            for handler in group["hooks"]:
+                assert not handler["command"].startswith('"'), handler["command"]

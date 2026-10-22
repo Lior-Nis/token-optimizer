@@ -93,7 +93,7 @@ import types
 import platform
 import posixpath
 import shutil
-from collections import deque
+from collections import Counter, deque
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
@@ -3566,6 +3566,7 @@ def _measure_codex_components():
         "count": len(plugin_skills),
         "tokens": sum(int(item.get("tokens", 0)) for item in plugin_skills),
         "names": [item["name"] for item in plugin_skills],
+        "per_plugin": dict(Counter(item.get("plugin") or "other" for item in plugin_skills)),
         "plugins": _collect_codex_plugin_inventory(cfg),
         "disabled_plugins": [p["name"] for p in _collect_codex_plugin_inventory(cfg) if not p.get("enabled", True)],
         "duplicate_skills": {},
@@ -4117,6 +4118,31 @@ def _resolve_compact_window(model, env=None, settings=None):
         env = {}
     if not isinstance(settings, dict):
         settings = {}
+
+    if detect_runtime() == "codex":
+        # Codex: the Claude table and Claude's autocompact settings do not
+        # apply. A GPT id fell through to the Claude 1M default, so a 475K
+        # model reported a 967K compaction point (issue #276). Use Codex's
+        # own catalog window, then the runtime's detected window.
+        window = None
+        try:
+            import codex_models
+            window = codex_models.effective_window(model) if model else None
+        except Exception:
+            window = None
+        if not window:
+            try:
+                window = detect_context_window()[0]
+            except Exception:
+                window = None
+        if window:
+            return {
+                "tokens": int(window),
+                "source": f"Codex model window ({model or 'configured model'})",
+                "user_override": False,
+                "model_window": int(window),
+                "default_tokens": int(window),
+            }
 
     model_window = _context_window_for_model_str(model)
     if not model_window:
@@ -5749,8 +5775,13 @@ def print_snapshot_summary(snapshot):
                 name = plugin.get("name")
                 if name:
                     plugins.append(str(name))
-        plugin_label = ", ".join(plugins) if plugins else "plugins"
-        print(f"    {'+ Plugin skills':<33s} {ps.get('tokens', 0):>6,} tokens  [{ps.get('count', 0)} from {plugin_label}{suffix}]")
+        per_plugin = ps.get("per_plugin") or {}
+        if per_plugin:
+            plugin_label = ", ".join(f"{n} {name}" for name, n in sorted(per_plugin.items()))
+            print(f"    {'+ Plugin skills':<33s} {ps.get('tokens', 0):>6,} tokens  [{ps.get('count', 0)}: {plugin_label}{suffix}]")
+        else:
+            plugin_label = ", ".join(plugins) if plugins else "plugins"
+            print(f"    {'+ Plugin skills':<33s} {ps.get('tokens', 0):>6,} tokens  [{ps.get('count', 0)} from {plugin_label}{suffix}]")
         dupes = ps.get("duplicate_skills", {})
         if dupes:
             dupe_count = sum(len(v) - 1 for v in dupes.values())
@@ -7462,11 +7493,40 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
             return f"{parts[1]}@{parts[0]}"
         return None
 
+    # The cache keeps old versions after an upgrade, but Codex loads one
+    # version per plugin. Counting every cached copy inflated the plugin
+    # skill total several times over (issue #276).
+    def _version_key(name: str):
+        nums = re.findall(r"\d+", name)
+        return tuple(int(n) for n in nums) if nums else (-1,)
+
+    newest_version: dict[tuple[str, str], str] = {}
+    for path, source in candidates:
+        if source != "plugin":
+            continue
+        try:
+            rel = path.relative_to(plugin_cache)
+        except ValueError:
+            continue
+        if len(rel.parts) >= 6 and rel.parts[-3] == "skills":
+            key = (rel.parts[0], rel.parts[1])
+            current = newest_version.get(key)
+            if current is None or _version_key(rel.parts[2]) > _version_key(current):
+                newest_version[key] = rel.parts[2]
+
     active = []
     disabled = []
     seen: set[str] = set()
     mp_cmd = _shell_script_path()
     for path, source in candidates:
+        if source == "plugin":
+            try:
+                rel = path.relative_to(plugin_cache)
+            except ValueError:
+                rel = None
+            if (rel is not None and len(rel.parts) >= 6 and rel.parts[-3] == "skills"
+                    and newest_version.get((rel.parts[0], rel.parts[1])) != rel.parts[2]):
+                continue
         resolved = str(path.expanduser().resolve(strict=False))
         if resolved in seen:
             continue
@@ -7483,6 +7543,8 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
             "enable_cmd": f"{_runtime_cli('codex')} codex-skill enable --path {shlex.quote(resolved)}",
         }
         _pkey = _plugin_key_for(resolved)
+        if _pkey is not None:
+            item["plugin"] = _pkey
         if resolved in disabled_paths or (_pkey is not None and _pkey in disabled_plugin_keys):
             disabled.append(item)
         else:
@@ -8672,6 +8734,32 @@ def _session_refresh_due(min_interval_seconds=120):
         return True
 
 
+HOOK_STATUS_FILE = RUNTIME_DIR / "token-optimizer" / "hook-status.json"
+
+
+def _record_hook_status(key, result):
+    """Remember the last outcome of a background hook job, for the doctor.
+
+    The Stop hook's output goes to NUL and its runner always exits 0, so
+    without this a user cannot tell "ran", "skipped on purpose" and "broke"
+    apart (issue #276). Best effort: never raises.
+    """
+    try:
+        try:
+            data = json.loads(HOOK_STATUS_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data[key] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": result}
+        HOOK_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HOOK_STATUS_FILE.with_name(HOOK_STATUS_FILE.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, HOOK_STATUS_FILE)
+    except Exception:
+        pass
+
+
 def _run_session_end_flush_worker(args, budget_seconds=20):
     """Run heavyweight Stop-hook work outside Codex's visible hook budget.
 
@@ -8680,11 +8768,17 @@ def _run_session_end_flush_worker(args, budget_seconds=20):
     the hook timeout."""
     lock_dir = _acquire_session_end_flush_lock()
     if lock_dir is None:
+        _record_hook_status("stop_flush", "skipped: another refresh was already running")
         return
     _lean = _remote_lean_profile()
     old_budget = _install_hook_budget(budget_seconds)
+    _flush_result = "error: stopped early"
     try:
-        if _session_refresh_due():
+        if not _session_refresh_due():
+            _flush_result = "skipped: last refresh and checkpoint were under 2 minutes ago"
+        else:
+            _flush_result = "ran"
+        if _flush_result.startswith("ran"):
             try:
                 # First-ever collection: DEEP backfill of all history still on disk
                 # (not just the rolling 90-day window), so a long-time user's baseline
@@ -8780,7 +8874,10 @@ def _run_session_end_flush_worker(args, budget_seconds=20):
             except Exception:
                 pass
     except _HookTimeout:
-        pass
+        _flush_result = "timed out: refresh hit its time budget and resumes next turn"
+    except Exception as exc:
+        _flush_result = f"error: {type(exc).__name__}"
+        raise
     else:
         # Flush work completed without a timeout. M-5: release the flush lock
         # BEFORE running post-flush extensions, so a slow/hung extension does
@@ -8808,6 +8905,7 @@ def _run_session_end_flush_worker(args, budget_seconds=20):
         if lock_dir is not None:
             _release_session_end_flush_lock(lock_dir)
         _clear_hook_budget(old_budget)
+        _record_hook_status("stop_flush", _flush_result)
 
 
 def _run_post_flush_extensions(time_left_fn=None, version="unknown"):
@@ -10048,7 +10146,8 @@ def generate_auto_recommendations(components, trends=None, days=30):
             haiku_pct = model_mix.get("haiku", 0) / total_tokens * 100
             if opus_pct > 50 and haiku_pct < 15:
                 # Root cause: hardcoded model in settings.json → split into Quick Win
-                if default_model and "opus" in str(default_model).lower():
+                if (default_model and "opus" in str(default_model).lower()
+                        and not _model_routing_handled_elsewhere()):
                     quick.append(
                         f"**Remove hardcoded model from settings.json (`\"model\": \"{default_model}\"`)**: "
                         f"This forces ALL operations to use {default_model}, overriding any CLAUDE.md routing. "
@@ -47627,6 +47726,28 @@ def _resolve_feature_env(env_var):
     return _settings_env_value(env_var)
 
 
+def _model_routing_handled_elsewhere():
+    """True when subagent models are already routed outside settings.json.
+
+    A model-routing plugin sets the model per Agent call, so a pinned main
+    model is a choice, not a leak, and "remove the model key" saves nothing
+    (issue #275). Matches any enabled plugin with "router" in its name, plus
+    an explicit opt-out for routing done some other way.
+    """
+    if os.environ.get("TOKEN_OPTIMIZER_SKIP_MODEL_PIN_HINT", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    try:
+        plugins = _resolve_settings_value("enabledPlugins", {}) or {}
+    except Exception:
+        return False
+    if not isinstance(plugins, dict):
+        return False
+    return any(
+        enabled and "router" in str(name).split("@", 1)[0].lower()
+        for name, enabled in plugins.items()
+    )
+
+
 def _resolve_settings_value(key, default=None):
     """Return a top-level settings.json key (e.g. includeGitInstructions, model)
     resolving project local/shared over global local/shared, first match wins.
@@ -57152,6 +57273,19 @@ if __name__ == "__main__":
             _filtered_args.append(args[i])
             i += 1
     args = _filtered_args
+
+    # Windows Codex: hooks saved by older versions start with a quote, which
+    # cmd.exe mangles, so they fail before reaching this script and cannot
+    # fix themselves (issue #276). Any Token Optimizer run on that machine
+    # repairs them in place. One small JSON read; never raises.
+    if sys.platform == "win32" and detect_runtime() == "codex":
+        try:
+            import codex_install as _ci
+            _healed = _ci.heal_quoted_launcher_commands()
+            if _healed:
+                print(f"[Token Optimizer] Repaired {_healed} Codex hook command(s) that Windows could not run. Restart Codex to load them.", file=sys.stderr)
+        except Exception:
+            pass
 
     # --- Foreign-runtime guardrail (cross-platform universality) -
     # OpenCode loads ~/.claude/skills by default, Copilot and Hermes can be
