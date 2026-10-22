@@ -24,29 +24,54 @@ Then in the Codex TUI: `/plugins` and install Token Optimizer.
 
 > Auto-update: Codex auto-upgrades Git-backed marketplaces on startup via `git ls-remote`. Manual upgrade: `codex plugin marketplace upgrade`.
 
-**After install, set up hooks globally (one-time):**
+**After install, turn on the automatic hooks (one-time).** Installing the plugin gives you the skills, but Codex plugins cannot ship hooks yet, so nothing runs automatically until you run `codex-install` once. Run it from the installed plugin folder:
+
+macOS / Linux:
 
 ```bash
-TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install
+TO="$(ls -d ~/.codex/plugins/cache/alexgreensh-token-optimizer/token-optimizer/*/ | sort -V | tail -n 1)"
+python3 "${TO}skills/token-optimizer/scripts/measure.py" --runtime codex codex-install
 ```
 
-This installs hooks to `~/.codex/hooks.json`, which Codex loads for all projects regardless of trust level. For per-project overrides, use `--project "$PWD"` instead.
+Windows (PowerShell, native, not WSL):
 
-The default profile is `balanced`. It installs:
+```powershell
+$to = Get-ChildItem "$env:USERPROFILE\.codex\plugins\cache\alexgreensh-token-optimizer\token-optimizer" -Directory |
+  Sort-Object { [version]$_.Name } | Select-Object -Last 1
+python "$($to.FullName)\skills\token-optimizer\scripts\measure.py" --runtime codex codex-install
+```
+
+The README's "Windows users: plugin install only, never `install.sh`" note is about Claude Code. On Codex, the plugin install plus this one command is the whole setup on every OS.
+
+This writes hooks to `~/.codex/hooks.json` (`%USERPROFILE%\.codex\hooks.json` on Windows), which Codex loads for all projects. For a per-project install, add `--project "$PWD"`.
+
+**Then restart Codex** so it loads the new hooks. If Codex asks you to review or trust them, approve the Token Optimizer entries.
+
+**Check that the hooks really run,** not just that they are registered:
+
+```bash
+python3 "${TO}skills/token-optimizer/scripts/measure.py" --runtime codex codex-doctor --project "$PWD"
+```
+
+(On Windows use the same `python "$($to.FullName)\..."` path as above, with `codex-doctor --project "$PWD"`.) Finish one Codex turn first. The `Stop hook last run` line shows when the Stop hook last ran and what it did. `skipped: last refresh and checkpoint were under 2 minutes ago` is normal: the dashboard refresh and checkpoint run at most once every 2 minutes.
+
+The default profile is `aggressive` (max savings). It installs:
 
 - `SessionStart` for session recovery context.
 - `UserPromptSubmit` for prompt-quality and loop nudges.
-- `Stop` for throttled dashboard refresh and continuity checkpointing.
+- `PostToolUse` (Bash) for tool-output archiving and context measurement.
+- `SubagentStart` / `SubagentStop` for subagent sprawl tracking.
+- `Stop` for the throttled dashboard refresh and continuity checkpoint.
 - Codex compact prompt guidance in `~/.codex/config.toml`.
 
 ### Hook profiles
 
 | Profile | What it installs | Noise level |
 |---------|-----------------|-------------|
-| `balanced` (default) | SessionStart + UserPromptSubmit + Stop + compact prompt | Low, 3 hook events |
+| `aggressive` (default) | All the hooks listed above; Bash compression stays opt-in | Full coverage |
+| `balanced` | SessionStart + UserPromptSubmit + Subagent + Stop + compact prompt | Low |
 | `quiet` | Stop only | Minimal, 1 hook event |
 | `telemetry` | Balanced + PostToolUse | Medium, visible rows in Desktop |
-| `aggressive` | All hooks including experimental Bash PreToolUse | High, full coverage |
 
 ```bash
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --profile quiet

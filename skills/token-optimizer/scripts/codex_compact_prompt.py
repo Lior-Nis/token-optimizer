@@ -93,13 +93,62 @@ def _comment_out_setting(pattern: re.Pattern[str], text: str) -> str:
     return pattern.sub(r"\1# replaced by Token Optimizer: \2\3", text)
 
 
+# A TOML table header line: [name] or [[name]], optionally followed by a
+# comment. Candidates only: a line inside a multi-line array can look the same,
+# so _insert_at_root confirms the placement with a real TOML parser when one
+# is available.
+_TABLE_HEADER_RE = re.compile(r"(?m)^[ \t]*\[\[?[^\[\]\n]+\]\]?[ \t]*(?:#.*)?$")
+
+
+def _toml_root_value(config_text: str):
+    """Return (state, root value of the setting). state is "ok", "invalid"
+    (the text does not parse) or "unavailable" (no TOML parser, Python < 3.11)."""
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        return "unavailable", None
+    try:
+        data = tomllib.loads(config_text)
+    except Exception:
+        return "invalid", None
+    return "ok", data.get("experimental_compact_prompt_file")
+
+
+def _insert_at_root(config_text: str, block: str, prompt_path: Path) -> str:
+    """Place the managed block at the TOML root, before the first table.
+
+    Appending at end of file put the key inside whatever table came last
+    (issue #276: it landed in a [projects.'...'] table and Codex never saw
+    it). The blank-line separator mirrors _MANAGED_BLOCK_RE so uninstall
+    stays byte-faithful.
+    """
+    # Without a parser, or when the user's file does not parse to begin with,
+    # trust the first header-looking line. Otherwise keep only a placement the
+    # parser confirms puts the key at the root.
+    verify = _toml_root_value(config_text)[0] == "ok"
+    candidates = [m.start() for m in _TABLE_HEADER_RE.finditer(config_text)]
+    for pos in candidates:
+        if pos == 0:
+            updated = block + config_text
+        else:
+            updated = config_text[:pos] + block + "\n" + config_text[pos:]
+        if not verify:
+            return updated
+        state, value = _toml_root_value(updated)
+        if state == "ok" and value == str(prompt_path):
+            return updated
+    suffix = "" if not config_text or config_text.endswith("\n") else "\n"
+    return config_text + suffix + "\n" + block
+
+
 def _replace_or_append_config(config_text: str, prompt_path: Path, *, force: bool) -> tuple[str, str]:
     block = _managed_block(prompt_path)
-    managed_re = re.compile(
-        rf"(?ms)^{re.escape(MANAGED_BEGIN)}.*?^{re.escape(MANAGED_END)}\n?"
-    )
-    if managed_re.search(config_text):
-        return managed_re.sub(block, config_text), "updated"
+    stripped, had_block = _strip_managed_block(config_text)
+    if had_block:
+        # Re-insert rather than replace in place, so a block an older version
+        # appended under a table moves back to the root. A block already at
+        # the root lands in the same spot, so this is a no-op for it.
+        return _insert_at_root(stripped, block, prompt_path), "updated"
 
     if COMPACT_FILE_RE.search(config_text) and not force:
         raise ValueError("config.toml already has experimental_compact_prompt_file; rerun with --force to replace")
@@ -110,8 +159,40 @@ def _replace_or_append_config(config_text: str, prompt_path: Path, *, force: boo
     if INLINE_COMPACT_RE.search(config_text):
         config_text = _comment_out_setting(INLINE_COMPACT_LINE_RE, config_text)
 
-    suffix = "" if not config_text or config_text.endswith("\n") else "\n"
-    return config_text + suffix + "\n" + block, "installed"
+    return _insert_at_root(config_text, block, prompt_path), "installed"
+
+
+def configured_prompt_state(config_text: str, prompt_path: Path) -> str:
+    """Classify the compact-prompt setting: "ours", "misplaced", "custom", or "none".
+
+    Compares the decoded path, not raw text: TOML stores Windows backslashes
+    escaped, so str(prompt_path) never appears verbatim in the file there.
+    """
+    state, value = _toml_root_value(config_text)
+    has_block = bool(_MANAGED_BLOCK_RE.search(config_text))
+    if state == "ok":
+        if value is not None:
+            return "ours" if str(value) == str(prompt_path) else "custom"
+        if has_block:
+            return "misplaced"
+    else:
+        match = re.search(
+            rf"(?ms)^{re.escape(MANAGED_BEGIN)}\s*^\s*experimental_compact_prompt_file\s*=\s*(\"(?:[^\"\\\\]|\\\\.)*\")",
+            config_text,
+        )
+        if match:
+            try:
+                decoded = json.loads(match.group(1))
+            except ValueError:
+                decoded = None
+            if decoded == str(prompt_path):
+                header = _TABLE_HEADER_RE.search(config_text)
+                if header is not None and header.start() < match.start():
+                    return "misplaced"
+                return "ours"
+    if "compact_prompt" in config_text or "experimental_compact_prompt_file" in config_text:
+        return "custom"
+    return "none"
 
 
 def plan_install(force: bool = False) -> dict[str, str | bool]:
@@ -237,9 +318,12 @@ def status() -> str:
         text = config_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return f"not configured: {config_path} unreadable"
-    if str(prompt_path) in text and prompt_path.exists():
+    state = configured_prompt_state(text, prompt_path)
+    if state == "ours" and prompt_path.exists():
         return f"configured: {prompt_path}"
-    if "compact_prompt" in text or "experimental_compact_prompt_file" in text:
+    if state == "misplaced":
+        return "misplaced: setting is inside a table; rerun measure.py codex-compact-prompt --install"
+    if state in ("ours", "custom"):
         return "configured: custom compact prompt present"
     return "not configured"
 
